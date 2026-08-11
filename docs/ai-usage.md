@@ -42,8 +42,8 @@ Flags de a11y (opt-in, adicionam facetas medidas):
 
 | Flag | Facet emitido |
 |---|---|
-| `--contrast` | `contrast` por nó: ratio WCAG medido + AA/AAA (normal vs. texto grande); `unknown` para fundo transparente/gradiente/imagem. |
-| `--ax` | `ax` por nó: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`...). |
+| `--contrast` | `contrast` por nó: ratio WCAG **medido** + AA/AAA (normal vs. texto grande). O fundo efetivo é resolvido **na página** — o JS compõe camadas transparentes/semi-transparentes subindo até o canvas do `html`/`body`, independente da profundidade da captura. `unknown` apenas quando há **fundo-imagem** na cadeia (revisão manual). |
+| `--ax` | `ax` por nó: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`/`level`...). |
 | `--ax-tree` | Linha `__ax_tree` com a subárvore AX completa dos elementos casados (implica `--ax`). |
 
 Saída (padrão `jsonl`, árvore aninhada):
@@ -222,7 +222,75 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'
 ```
 
-## 5. Boas práticas / armadilhas
+## 5. Auditoria de acessibilidade (workflow validado em produção)
+
+Receita completa para auditar uma página, validada contra páginas reais
+(portais .gov.br). O contraste, os grades de perceptibilidade e as regras
+`sniff-check` tornam a análise **determinística** — a IA não precisa chutar
+cores nem "adivinhar" se algo está invisível.
+
+### Passo 1 — captura estruturada
+
+Uma captura `body` ampla + capturas focadas nas regiões-chave. Como o contraste
+é resolvido in-page (o JS sobe até o canvas), **a profundidade da captura não
+afeta o contraste** — use `depth` para controlar o tamanho do output, não a
+precisão.
+
+```bash
+# Visão estrutural (landmarks, headings, links, imgs) + contraste medido
+sniff-computed-style -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree \
+  > body.jsonl
+
+# Regiões profundas demais para o body (menu, rodapé, formulários, carrossel)
+sniff-computed-style -u "$URL" -s "nav"      --depth 4 --compact --contrast > nav.jsonl
+sniff-computed-style -u "$URL" -s "footer"   --depth 6 --compact --contrast > footer.jsonl
+sniff-computed-style -u "$URL" -s "main"     --depth 5 --compact --contrast > main.jsonl
+sniff-computed-style -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 --compact --contrast > forms.jsonl
+```
+
+### Passo 2 — regras determinísticas (sem IA)
+
+```bash
+sniff-check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
+sniff-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
+```
+
+O `--rules` usa o **facet `contrast` medido pela engine** (com o fundo efetivo
+resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
+
+### Passo 3 — leia os facets, não inferencie
+
+| Facet | O que responde |
+|---|---|
+| `aria.role` / `ax.role` | Semântica real (landmark, heading, link...) e estrutura (H1→H6). |
+| `is_user_noticeable.display_visible` | Está **renderizado** (fora da dobra continua `true`). |
+| `is_user_noticeable.accessibility_grade` | `NONE`=não exposto à AT · `AA`=exposto mas fora da tela/transparente/sem nome exigido · `AAA`=tudo ok. |
+| `contrast.ratio` + `contrast.aa/aaa` | Contraste **medido** com o fundo efetivo. |
+| `aria.name == ""` | Link/botão/img sem nome acessível (1.1.1/2.4.4). |
+| `rect.width/height` | Alvo de toque (2.5.8: `< 24px`). |
+
+### Passo 4 — checklist de julgamento IA
+
+- [ ] Existe `<h1>`? Hierarquia não pula níveis (sem H1 ou H2→H4 é falha 1.3.1).
+- [ ] Landmarks: `banner`/`navigation`/`main`/`contentinfo` presentes; skip-links.
+- [ ] Links/botões/imgs **sem nome** (`aria.name` vazio) → 1.1.1 / 2.4.4 / 4.1.2.
+- [ ] `contrast.aa == fail` → 1.4.3; `unknown` (fundo-imagem) → carrosséis/cards, revisar.
+- [ ] Alvos `< 24px` (topbars, A+/A-, ícones) → 2.5.8.
+- [ ] `accessibility_grade == NONE` em conteúdo de texto → verificar `aria-hidden`/`display:none` indevidos.
+- [ ] Conteúdo "fora da dobra" não é falha de visibilidade — é `display_visible:true` + grade `AA`.
+
+### Limitações conhecidas da ferramenta
+
+- **Nome de link via `alt` de imagem interna**: um `<a>` que envolve
+  `<img alt="...">` tem nome acessível real (o `alt`), mas o facet `aria.name`
+  do link ainda sai vazio. Ao achar links "sem nome", verifique antes se há
+  `img` filha com `alt` — só reporte falha se não houver.
+- **Contraste sobre imagem de fundo**: qualquer fundo-imagem na cadeia vira
+  `unknown` (honesto — não dá para medir sem a imagem). Avalie manualmente.
+- **Carrosséis/abas**: conteúdo em painel oculto ainda está na AX tree (grade
+  `AA`, `display_visible:true`) — não é "invisível", apenas fora da tela.
+
+## 6. Boas práticas / armadilhas
 
 1. **Mesma viewport** entre runs (default `1366x768`). Mudou o viewport? Media
    queries e valores `%`/`vh` mudam e o diff acusa falso-positivo.
@@ -254,6 +322,7 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
 | Achatado | `--output jsonl-flat` |
 | Estabilizar animações | `--stabilize` |
 | A11y medida | `--contrast --ax` ou `--ax-tree` |
+| Auditoria a11y completa | `docs/accessibility.md` |
 | Resumo de mudanças | `sniff-diff base.jsonl head.jsonl --stats-only` |
 | Ignorar props voláteis | `sniff-diff ... --ignore-props transform,opacity` |
 | Listas de contagem variável | `sniff-diff ... --no-structural` |

@@ -1,0 +1,198 @@
+# sniff-computed-style
+
+> sniff-computed-style is a high-performance Rust CLI that captures the **real computed CSS styles** of DOM elements from a live page (especially localhost) via the raw Chrome DevTools Protocol (CDP) over WebSocket — no puppeteer/chromiumoxide — and emits structured, compact JSONL optimized for consumption by AI agents. It also ships deterministic diffing (`sniff-diff`), deterministic a11y/consistency checks (`sniff-check`), and an MCP server (`sniff-mcp`) so a model gets only a minimal delta to interpret instead of raw snapshots.
+
+Things to remember when using sniff-computed-style:
+
+- Talks to the browser over raw CDP (WebSocket); needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`). It can also attach to an already-running browser via `--connect ws://...`.
+- Captures ~250 curated CSS properties (not the ~400 the browser exposes), grouped into 8 categories: `box-model`, `layout`, `typography`, `visual`, `transform`, `animation`, `interaction`, `accessibility`, `all`.
+- Default output is JSONL: one JSON document per matched root with nested `children`; `--output jsonl-flat` emits one node per line with `id`/`parent_id`; `--output json` emits a single array.
+- `--compact` mode cuts tokens ~55%: drops logical/physical duplicates, suppresses default noise values, and scopes `css_variables` to one global `__meta` line plus per-node overrides.
+- For deterministic diffs use the SAME flags on both runs (same viewport, same mode `--compact`/full); the `computed_style_hash` (xxHash64) only matches across identical modes.
+- Accessibility is measured, not guessed: `--contrast` resolves the effective background in-page (JS composites transparent/semi-transparent layers up to the html/body canvas, so it works at any capture depth) and only reports `unknown` for background images; `--ax`/`--ax-tree` pull the browser's accessibility tree via CDP.
+- `is_user_noticeable` (per node) replaces the old `is_visible` boolean with two axes: `display_visible` (rendered: display≠none, visibility≠hidden, opacity>0, size>0 — independent of the viewport, so below-the-fold content stays `true`) and `accessibility_grade` (`NONE` = hidden from assistive tech, `AA` = exposed but off-screen/transparent/missing a required name, `AAA` = on screen + exposed + named).
+- `sniff-check` is fully offline and LLM-free: `--uniform` finds the "odd card" among sibling instances; `--rules` emits PASS/WARN/FAIL for contrast AA/AAA, target size ≥24×24px (WCAG 2.2), visible focus indicator, hidden-but-focusable, and empty-alt-on-large-image.
+- `sniff-diff` matches nodes by stable `selector` (fallback to sibling position), compares per-property with numeric tolerance, never treats different units as equal, and supports `--ignore-props`, `--no-structural`, and `--stats-only`.
+- `--stabilize` freezes animations/transitions (emulates prefers-reduced-motion + cancels running animations) for deterministic snapshots of dynamic pages.
+- `--stable-key data-testid` makes selectors stable across deploys that regenerate ids (e.g. `button[data-testid="submit"]` instead of `button#react-aria-123`).
+- Wait strategies are composable: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default pipeline: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
+
+## Docs
+
+### Capturing (sniff-computed-style)
+
+Core flags:
+
+- `-u, --url <URL>` and `-s, --selector <CSS>`: required. Sniffs every element matching the selector.
+- `--depth N`: how many levels of children to capture (0 = the element only).
+- `-c, --categories <list>`: comma-separated category subset, default `all`.
+- `--props a,b`: extra CSS properties beyond the catalog.
+- `--pseudo ::before,::after`: capture pseudo-element styles.
+- `--wait <spec>`: repeatable wait strategy (`delay:ms`, `network-idle:idle[:timeout]`, `fonts-loaded[:timeout]`, `selector:sel[:timeout]`, `element-ready:sel:cond1,cond2[:timeout]`, `app-flag:flag[:timeout]`).
+- Element filters: `--no-visible` (include invisible), `--min-width`, `--min-height`, `--exclude sel`.
+- Output: `--output jsonl|jsonl-flat|json`, `--pretty`, `--no-rect/--no-path/--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`.
+- Browser: `--chrome PATH`, `--connect ws://...`, `--viewport WxH` (default `1366x768`).
+- Extras: `--custom-props` (all CSS variables), `--stable-key attr`, `--stabilize`, `--contrast`, `--ax`, `--ax-tree`.
+
+JSONL node shape (one line per root, `children` nested):
+
+```json
+{
+  "id": 1, "parent_id": null,
+  "tag": "DIV",
+  "selector": "div#primary",
+  "path": "body > main > div.card",
+  "depth": 0,
+  "rect": {"x": 8.0, "y": 8.0, "width": 300.0, "height": 56.0},
+  "metrics": {"z_index": "auto", "stacking_context": false},
+  "is_user_noticeable": {"display_visible": true, "accessibility_grade": "AAA"},
+  "computed_style_hash": "afbd33ba764bb8d4",
+  "aria": {"role": "button", "name": "Salvar", "focusable": true, "has_text": true},
+  "contrast": {"ratio": 5.17, "foreground": "#2563eb", "background": "#ffffff", "large": false, "aa": "pass", "aaa": "fail", "unknown_reason": null},
+  "ax": {"role": "button", "name": "Salvar", "focusable": true, "ignored": false},
+  "styles": {"box_model": {"width": "300px"}, "typography": {"font-size": "16px"}, "visual": {"background-color": "#2563eb"}},
+  "children": []
+}
+```
+
+Facts about the node fields:
+
+- `id`/`parent_id` are pre-order; use `jsonl-flat` to reference nodes across lines.
+- `selector`/`path` prefer `--stable-key` when given, otherwise the DOM id.
+- `aria` is computed in-page deterministically: role (explicit or implied by tag per HTML-ARIA), accessible name (`aria-labelledby` → `aria-label` → `alt` → `title` → `placeholder` → text content for named roles), `focusable`, `aria-*` attributes, `lang`, `alt`, `title`, `html_hidden`, `disabled`, `has_text`.
+- `contrast` is derived in Rust from captured colors + the in-page resolved effective background; AA/AAA uses large-text thresholds (≥24px, or ≥18.66px bold → 3.0/4.5, else 4.5/7.0). `unknown_reason` is `background image` when any layer paints an image.
+- `is_user_noticeable`: `display_visible` (rendered; viewport-independent) + `accessibility_grade` (`NONE` for aria-hidden/hidden/inert/display:none/visibility:hidden/zero-size; `AA` when off-screen, opacity 0, or a name-requiring role has no accessible name; `AAA` otherwise).
+- Known limitation: the accessible name of an `<a>` that wraps an `<img alt="...">` is not yet derived from the image's alt (the link's `aria.name` comes out empty even though the browser names it).
+
+### Deterministic diff (sniff-diff)
+
+`sniff-diff base.jsonl head.jsonl [--tolerance 0.5] [--ignore-props a,b] [--no-structural] [--stats-only]`
+
+- Matches by stable selector, falls back to sibling position.
+- Per-property before/after with numeric tolerance; `16px` vs `16.2px` are equal within `0.5`, `16px` vs `16rem` never.
+- Emits `CHANGED` (with `changes` before/after per property incl. `styles`, `pseudo`, `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_user_noticeable`), `ADDED`/`REMOVED` (full snapshot), and a final `__diff_summary`.
+- `--no-structural` suppresses ADDED/REMOVED (for variable-count lists); `--stats-only` prints just `nodes: N -> M | changed/added/removed`.
+
+### Deterministic checks (sniff-check)
+
+`sniff-check --input snap.jsonl [--uniform] [--rules] [--tolerance 0.5]`
+
+- `--uniform`: among sibling instances of the same selector, computes the group norm (median for numbers, mode otherwise) and reports outliers with the deviating properties and magnitudes.
+- `--rules`: uses the measured `contrast` facet (real fail/warn, `warn` for background-image), `target-size` (<24×24px), `focus-indicator` (focusable with suppressed outline and no box-shadow), `hidden-focusable` (focusable with `accessibility_grade == NONE`), `empty-alt-image` (large image with empty alt).
+- Output is JSONL with `{"check","selector","tag","status","evidence"}` lines plus `{"__check_summary":{...}}`.
+
+### Accessibility audit workflow
+
+1. Capture broadly + focused regions (contrast works at any depth):
+
+```bash
+sniff-computed-style -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree > body.jsonl
+sniff-computed-style -u "$URL" -s "nav"    --depth 4 --compact --contrast > nav.jsonl
+sniff-computed-style -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
+sniff-computed-style -u "$URL" -s "main"   --depth 5 --compact --contrast > main.jsonl
+```
+
+2. Run the deterministic rules and read the facets:
+
+```bash
+sniff-check --input main.jsonl --rules
+jq -r '.. | objects | select(.tag=="A" or .tag=="BUTTON" or .tag=="IMG")
+  | select(.aria.name==null or .aria.name=="") | select(.is_user_noticeable.accessibility_grade!="NONE")
+  | [.tag,.selector] | @tsv' body.jsonl
+jq -r '.. | objects | select(.tag|test("^H[1-6]$")) | [.tag,(.aria.name//"-")] | @tsv' body.jsonl
+```
+
+3. Judge from measured evidence only: no `<h1>` or skipped heading levels is a 1.3.1/2.4.6 failure; `contrast.aa == "fail"` is 1.4.3; empty `aria.name` on a link/button/image is 1.1.1/2.4.4/4.1.2; rect < 24px on interactive elements is 2.5.8. Below-the-fold content with `display_visible:true` + grade `AA` is present in the accessibility tree — not a visibility failure.
+
+## API
+
+### CLI flags (sniff-computed-style)
+
+Full list with defaults:
+
+- `--url` (required), `--selector` (required)
+- `--depth` (default 0), `--categories` (default `all`), `--props`, `--pseudo`
+- `--wait` (repeatable), `--min-width`, `--min-height`, `--exclude`, `--no-visible`
+- `--output` (default `jsonl`), `--pretty`, `--compact`
+- `--no-rect`, `--no-path`, `--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`
+- `--chrome`, `--connect`, `--viewport` (default `1366x768`)
+- `--custom-props`, `--stable-key`, `--stabilize`, `--contrast`, `--ax`, `--ax-tree`
+
+### Categories
+
+`box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`
+
+### Wait strategies
+
+`selector:sel[:t]`, `network-idle:idle[:t]`, `element-ready:sel:cond1,cond2[:t]`, `fonts-loaded[:t]`, `app-flag:flag[:t]`, `delay:ms`. Defaults: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
+
+### MCP server (sniff-mcp)
+
+Four tools over stdio:
+
+- `sniff_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree) → JSONL; emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
+- `diff_snapshots` — deterministic diff of two inline JSONL (base_jsonl, head_jsonl, tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
+- `run_checks` — deterministic checks over inline JSONL (jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
+- `list_categories` — accepted categories.
+
+Embedded resources: `sniff://prompts/eval`, `sniff://schemas/eval`, `sniff://guides/golden`.
+
+### Output schema of the AI evaluation
+
+`docs/sniff-eval.schema.json` expects `{ "page_url", "status" ("IMPROVEMENT"|"NEUTRAL"|"REGRESSION_DETECTED"), "score_change" (-100..100), "summary", "changes_evaluated": [{ "node_selector", "impact" ("POSITIVE"|"NEGATIVE"), "category", "reason" }] }`.
+
+## Examples
+
+- Capture a button's computed styles and extract one property:
+
+```bash
+sniff-computed-style --url http://localhost:3000 --selector ".btn-primary" \
+  | jq '.styles.box_model.width'
+```
+
+- Sniff a subtree with depth and stable keys, in compact mode:
+
+```bash
+sniff-computed-style --url http://localhost:3000 --selector ".card" \
+  --depth 2 --categories all --compact --stable-key data-testid
+```
+
+- Deterministic regression diff in CI:
+
+```bash
+sniff-computed-style -u "$URL" -s "$SEL" --stable-key data-testid --compact > snapshots/base.jsonl
+sniff-computed-style -u "$URL" -s "$SEL" --stable-key data-testid --compact > snapshots/head.jsonl
+sniff-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
+# fail the job if changed/added/removed exceed the threshold
+```
+
+- Find the "odd card" and real AA contrast failures in a captured section:
+
+```bash
+sniff-computed-style -u "$URL" -s "main" --depth 5 --compact --contrast > main.jsonl
+sniff-check --input main.jsonl --uniform --rules
+```
+
+- Stabilize animated pages (carousels) before diffing:
+
+```bash
+sniff-computed-style -u "$URL" -s "body" --depth 4 --compact --stabilize \
+  --wait network-idle:800:60000 > snap.jsonl
+```
+
+- Accessibility audit summary: contrast fails, missing names, heading structure:
+
+```bash
+sniff-check --input main.jsonl --rules | jq -r 'select(.check=="contrast-aa" and .status=="fail") | [.tag,.selector,.evidence] | @tsv'
+jq -r '.. | objects | select(.tag|test("^H[1-6]$")) | [.tag,(.aria.name//"-")] | @tsv' body.jsonl
+```
+
+- Serve as MCP for AI agents (Claude Desktop / Copilot):
+
+```bash
+sniff-mcp   # stdio MCP server sharing one headless Chrome
+```
+
+## Optional
+
+- The workspace also ships `docs/eval-prompt.md` (the evaluation prompt template that takes only the delta), `docs/sniff-eval.schema.json` (the response contract), `docs/golden-run.md` (the determinism contract: same viewport, same flags, same mode on both diff sides), and an accessibility guide at `docs/accessibility.md`.
