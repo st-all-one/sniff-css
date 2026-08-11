@@ -106,6 +106,12 @@ fn build_forest(flat: &[(u64, Option<u64>, DiffNode)]) -> Vec<DiffNode> {
 /// lines or all flat lines).
 pub fn load_file(path: &Path) -> DiffResult<Vec<DiffNode>> {
     let content = std::fs::read_to_string(path)?;
+    load_str(&content)
+}
+
+/// Parse snapshot JSONL from an in-memory string (same rules as
+/// [`load_file`], without touching disk).
+pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
     let mut roots: Vec<DiffNode> = Vec::new();
     let mut flat: Vec<(u64, Option<u64>, DiffNode)> = Vec::new();
     let mut mode: Option<bool> = None;
@@ -207,5 +213,55 @@ mod tests {
         assert_eq!(forest.len(), 1);
         assert_eq!(forest[0].id, 7);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_str_parses_inline_without_disk() {
+        let nested: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.a",
+            "styles": {"layout": {"display": "block"}},
+            "children": [
+                {"id": 2, "tag": "SPAN", "selector": "div.a > span",
+                 "styles": {}, "children": []}
+            ]
+        });
+        let flat_root: Value = serde_json::json!({
+            "id": 10, "tag": "DIV", "selector": "div.b",
+            "styles": {}, "children": []
+        });
+        let content = format!("{}\n{}\n", line(&nested), line(&flat_root));
+        let forest = load_str(&content).unwrap();
+        assert_eq!(forest.len(), 2);
+        assert_eq!(forest[0].children.len(), 1);
+        assert_eq!(forest[0].children[0].selector, "div.a > span");
+    }
+
+    #[test]
+    fn load_str_flat_builds_forest() {
+        let root: Value = serde_json::json!({
+            "id": 1, "parent_id": null, "tag": "DIV", "selector": "div.a",
+            "styles": {"layout": {"display": "block"}}
+        });
+        let child: Value = serde_json::json!({
+            "id": 2, "parent_id": 1, "tag": "SPAN", "selector": "div.a > span",
+            "styles": {}
+        });
+        let content = format!("{}\n{}\n", line(&root), line(&child));
+        let forest = load_str(&content).unwrap();
+        assert_eq!(forest.len(), 1);
+        assert_eq!(forest[0].children.len(), 1);
+        assert_eq!(forest[0].children[0].id, 2);
+    }
+
+    #[test]
+    fn load_str_rejects_mixed_layout() {
+        let tree: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.a", "children": []
+        });
+        let flat: Value = serde_json::json!({
+            "id": 2, "parent_id": 1, "tag": "SPAN", "selector": "span"
+        });
+        let content = format!("{}\n{}\n", line(&tree), line(&flat));
+        assert!(matches!(load_str(&content), Err(DiffError::MixedLayout)));
     }
 }

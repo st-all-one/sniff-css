@@ -31,6 +31,8 @@ scripts/install.sh
 scripts/install.sh --no-build
 ```
 
+Instala três binários: `sniff-computed-style`, `sniff-diff` e `sniff-mcp`.
+
 Requisito: Chrome/Chromium disponível no sistema (ou defina `SNIFF_CHROME_PATH` / use `--chrome`).
 
 > Guia de uso **otimizado para IA**: [`docs/ai-usage.md`](docs/ai-usage.md) —
@@ -192,6 +194,46 @@ Como funciona:
 > Consulte [`docs/ai-usage.md`](docs/ai-usage.md) para o passo a passo completo
 > de uso orientado a IA (flags recomendadas, padrões de agente/MCP, CI e armadilhas).
 
+## Servidor MCP (sniff-mcp)
+
+Exponha a captura e o diff como **ferramentas MCP** para agentes de IA (Claude
+Desktop, VS Code Copilot, etc.), sem shell:
+
+```bash
+sniff-mcp   # serve MCP sobre stdio (um Chrome headless compartilhado)
+```
+
+Ferramentas:
+
+| Tool | O que faz |
+|---|---|
+| `sniff_page` | Captura computed styles de uma página → JSONL (compact, stable-key, wait, viewport, format) |
+| `diff_snapshots` | Diff determinístico de dois JSONL inline → delta (`CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`) |
+| `list_categories` | Categorias de propriedades disponíveis |
+
+Recursos: `sniff://prompts/eval` e `sniff://schemas/eval`.
+
+**Streaming assíncrono**: durante `sniff_page`, o servidor emite
+`notifications/progress` por fase (`navigating` → `waiting` → `extracting` →
+`formatting N nodes`), para a IA acompanhar o pipeline sem bloquear. O browser é
+reutilizado (sem cold-start) e a concorrência é limitada por semáforo; se o Chrome
+morrer, ele é relançado transparentemente.
+
+Exemplo de config para o Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "sniff": {
+      "command": "sniff-mcp"
+    }
+  }
+}
+```
+
+> Para um guia completo de uso via IA (fluxo captura → diff → avaliação), veja
+> [`docs/ai-usage.md`](docs/ai-usage.md).
+
 ## Integração com IA
 
 ```bash
@@ -211,7 +253,8 @@ crates/
 ├── sniff-cdp/      # cliente CDP raw (WebSocket), protocolo, gestão do processo Chrome
 ├── sniff-engine/   # orquestração: espera, filtro, extração (1 chamada Runtime.evaluate), saída
 ├── sniff-cli/      # binário clap (sniff-computed-style)
-└── sniff-diff/     # diff determinístico JSONL (binário sniff-diff) + delta p/ IA
+├── sniff-diff/     # diff determinístico JSONL (binário sniff-diff) + delta p/ IA
+└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, list_categories
 ```
 
 ## Testes

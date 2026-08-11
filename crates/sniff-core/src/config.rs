@@ -238,6 +238,114 @@ impl OutputFormat {
     }
 }
 
+/// Parse a `name:arg:arg` wait strategy spec.
+pub fn parse_wait_strategy(spec: &str) -> Result<WaitStrategy, SniffError> {
+    let mut parts = spec.split(':');
+    let name = parts.next().unwrap_or("").trim();
+    let mut args: Vec<&str> = parts.map(str::trim).collect();
+
+    let err = |e: String| SniffError::InvalidWaitStrategy(e);
+    let take_arg = |args: &mut Vec<&str>, what: &str| -> Result<String, SniffError> {
+        if args.is_empty() {
+            Err(err(format!("missing {what} for `{name}` strategy")))
+        } else {
+            Ok(args.remove(0).to_string())
+        }
+    };
+    let take_ms = |args: &mut Vec<&str>, what: &str| -> Result<u64, SniffError> {
+        take_arg(args, what)?.parse().map_err(|_| {
+            err(format!(
+                "invalid {what} (expected milliseconds) for `{name}`"
+            ))
+        })
+    };
+
+    match name {
+        "delay" => {
+            let ms = take_ms(&mut args, "delay")?;
+            Ok(WaitStrategy::Delay { ms })
+        }
+        "network-idle" => {
+            let idle_ms = take_ms(&mut args, "idle_ms")?;
+            let timeout_ms = if args.is_empty() {
+                30_000
+            } else {
+                take_ms(&mut args, "timeout_ms")?
+            };
+            Ok(WaitStrategy::NetworkIdle {
+                idle_ms,
+                timeout_ms,
+            })
+        }
+        "fonts-loaded" => {
+            let timeout_ms = if args.is_empty() {
+                15_000
+            } else {
+                take_ms(&mut args, "timeout_ms")?
+            };
+            Ok(WaitStrategy::FontsLoaded { timeout_ms })
+        }
+        "selector" => {
+            let selector = take_arg(&mut args, "selector")?;
+            let timeout_ms = if args.is_empty() {
+                30_000
+            } else {
+                take_ms(&mut args, "timeout_ms")?
+            };
+            Ok(WaitStrategy::Selector {
+                selector,
+                timeout_ms,
+            })
+        }
+        "element-ready" => {
+            let selector = take_arg(&mut args, "selector")?;
+            let conditions_spec = take_arg(&mut args, "conditions")?;
+            let conditions = conditions_spec
+                .split(',')
+                .filter(|c| !c.is_empty())
+                .map(parse_ready_condition)
+                .collect::<Result<Vec<_>, _>>()?;
+            if conditions.is_empty() {
+                return Err(err("element-ready requires at least one condition".into()));
+            }
+            let timeout_ms = if args.is_empty() {
+                30_000
+            } else {
+                take_ms(&mut args, "timeout_ms")?
+            };
+            Ok(WaitStrategy::ElementReady {
+                selector,
+                conditions,
+                timeout_ms,
+            })
+        }
+        "app-flag" => {
+            let flag = take_arg(&mut args, "flag")?;
+            let timeout_ms = if args.is_empty() {
+                15_000
+            } else {
+                take_ms(&mut args, "timeout_ms")?
+            };
+            Ok(WaitStrategy::AppFlag { flag, timeout_ms })
+        }
+        other => Err(err(format!("unknown strategy `{other}`"))),
+    }
+}
+
+fn parse_ready_condition(input: &str) -> Result<ReadyCondition, SniffError> {
+    let trimmed = input.trim();
+    match trimmed {
+        "visible" => Ok(ReadyCondition::Visible),
+        "has-size" | "size" => Ok(ReadyCondition::HasSize),
+        "opacity=1" => Ok(ReadyCondition::Opacity(1.0)),
+        s if s.starts_with("opacity=") => s["opacity=".len()..]
+            .parse::<f64>()
+            .map(ReadyCondition::Opacity)
+            .map_err(|_| SniffError::InvalidReadyCondition(s.to_string())),
+        other => Err(SniffError::InvalidReadyCondition(other.to_string())),
+    }
+}
+
 /// Parse a comma-separated list of categories.
 pub fn parse_categories(input: &str) -> Result<Vec<StyleCategory>, SniffError> {
     let mut out = Vec::new();

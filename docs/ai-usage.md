@@ -119,17 +119,28 @@ jq -e 'has("status") and has("score_change") and (.changes_evaluated|length)>0' 
 
 ## 4. Padrões de uso por cenário
 
-### Agente/MCP (função de ferramenta)
+### Agente/MCP (servidor `sniff-mcp`)
 
-Exponha os dois binários como ferramentas `execute`/`bash`:
+Preferencial para agentes: exponha `sniff-mcp` como servidor MCP (stdio) em vez
+de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece:
 
-1. **sniff** → captura o estado real de um seletor (args: url, selector, depth,
-   stable-key, compact).
-2. **diff** → compara dois estados e retorna o delta (args: base, head, tolerance).
-3. **eval** → (opcional) o próprio modelo lê o delta e responde o schema.
+1. **`sniff_page`** — captura (args: url, selector, depth, categories, compact,
+   custom_props, stable_key, pseudo, wait, viewport, format) e retorna JSONL.
+   Durante a execução envia `notifications/progress` por fase:
+   `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
+   `formatting N nodes` (streaming assíncrono, o pipeline não bloqueia).
+2. **`diff_snapshots`** — diff determinístico de dois JSONL inline
+   (args: base_jsonl, head_jsonl, tolerance) → delta + `__diff_summary`.
+3. **`list_categories`** — categorias aceitas.
 
-Use `--output jsonl-flat` quando o agente preferir iterar um nó por linha com
-`id`/`parent_id` em vez de árvore aninhada.
+Recursos embutidos: `sniff://prompts/eval` (prompt) e `sniff://schemas/eval`
+(schema) — leia-os em vez de copiar arquivos.
+
+Config do Claude Desktop:
+
+```json
+{ "mcpServers": { "sniff": { "command": "sniff-mcp" } } }
+```
 
 ### Monitor de regressão (CI)
 

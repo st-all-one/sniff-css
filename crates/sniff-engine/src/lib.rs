@@ -12,4 +12,4 @@ pub mod sniffer;
 pub mod waiter;
 
 pub use output::write_output;
-pub use sniffer::{Sniffer, sniff_session};
+pub use sniffer::{Phase, Sniffer, sniff_session, sniff_session_with_progress};

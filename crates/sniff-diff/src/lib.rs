@@ -14,5 +14,5 @@ pub mod output;
 
 pub use diff::{DeltaLine, DiffOptions, DiffStats, diff_trees};
 pub use error::{DiffError, DiffResult};
-pub use model::{DiffNode, load_file};
+pub use model::{DiffNode, load_file, load_str};
 pub use output::write_delta;

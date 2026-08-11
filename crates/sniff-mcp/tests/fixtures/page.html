@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  .widget[data-testid="widget"] { width: 300px; padding: 16px; background-color: rgb(37, 99, 235); display: inline-flex; gap: 8px; align-items: center; }
+  .widget button[data-testid="submit"] { background-color: rgb(255, 255, 255); color: rgb(37, 99, 235); border-radius: 4px; }
+  .widget span[data-testid="title"] { font-size: 16px; color: rgb(255, 255, 255); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <main>
+    <div class="widget" data-testid="widget">
+      <span data-testid="title">Salvar alterações</span>
+      <button data-testid="submit">Confirmar</button>
+      <span class="hidden" data-testid="ghost">ghost</span>
+    </div>
+  </main>
+</body>
+</html>

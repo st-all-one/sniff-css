@@ -142,6 +142,30 @@ head.jsonl ─┘
 A avaliação semântica (positiva/negativa) é responsabilidade do LLM: contrato em
 `docs/sniff-eval.schema.json`, template em `docs/eval-prompt.md`.
 
+## Servidor MCP (sniff-mcp)
+
+`crates/sniff-mcp` envolve engine + diff como tools MCP sobre stdio (`rmcp`):
+
+- **`sniff_page`** — um `ChromePool` (um Chrome headless + `Semaphore(3)`)
+  executa o pipeline via `Sniffer::new_session` +
+  `sniff_session_with_progress`; cada fase emite `notifications/progress`
+  (`ProgressReporter` → `Peer::notify_progress`) e o JSONL final volta como
+  resultado da tool. Sem block do pipeline: as notificações são enviadas
+  assincronamente entre as fases.
+- **`diff_snapshots`** — `sniff_diff::load_str` (JSONL inline) + `diff_trees`
+  + `write_delta`, com linha `__diff_summary` ao final.
+- **Recursos** — `sniff://prompts/eval`, `sniff://schemas/eval`
+  (`include_str!` das docs).
+- Transporte: `stdio()` (todos os clientes). Um browser morto é relançado
+  transparentemente (detecção de erro de transporte no `ChromePool`).
+
+### Cuidados de concorrência
+
+- `Sniffer::sniff`/`new_session` são `&self`; o `CdpClient` multiplexa
+  sessões por `sessionId`, então chamadas concorrentes usam uma única conexão WS.
+- O `semaphore` limita a carga no Chrome; o pool não precisa de `Mutex` global —
+  apenas um `RwLock` para trocar o `Sniffer` no relaunch.
+
 ## Performance
 
 | Técnica | Onde | Efeito |
