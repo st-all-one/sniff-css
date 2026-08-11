@@ -10,16 +10,26 @@ use serde_json::{Map, Value};
 use crate::model::DiffNode;
 
 /// Diffing behaviour.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiffOptions {
     /// Values closer than this (in their unit) are considered unchanged,
     /// e.g. `0.5` absorbs `16px` -> `16.2px`. `0` disables tolerance.
     pub tolerance: f64,
+    /// Property names (e.g. `transform`, `opacity`) whose changes never
+    /// mark a node as changed — for volatile props animated on purpose.
+    pub ignore_props: Vec<String>,
+    /// Suppress ADDED/REMOVED delta lines (report only CHANGED). Useful
+    /// for lists whose item count varies by design.
+    pub ignore_structural: bool,
 }
 
 impl Default for DiffOptions {
     fn default() -> Self {
-        Self { tolerance: 0.5 }
+        Self {
+            tolerance: 0.5,
+            ignore_props: Vec::new(),
+            ignore_structural: false,
+        }
     }
 }
 
@@ -109,13 +119,15 @@ fn diff_children(
         match match_h[bi] {
             Some(hi) => diff_node(b, &head[hi], opts, out, stats),
             None => {
-                out.push(removed_line(b));
-                stats.removed += 1;
+                if !opts.ignore_structural {
+                    out.push(removed_line(b));
+                    stats.removed += 1;
+                }
             }
         }
     }
     for (hi, h) in head.iter().enumerate() {
-        if !used_h[hi] {
+        if !used_h[hi] && !opts.ignore_structural {
             out.push(added_line(h));
             stats.added += 1;
         }
@@ -173,11 +185,52 @@ fn compute_changes(base: &DiffNode, head: &DiffNode, opts: &DiffOptions) -> Opti
             ),
         );
     }
+    if let Some(aria) = object_diff(base.aria.as_ref(), head.aria.as_ref()) {
+        changes.insert("aria".into(), aria);
+    }
+    if let Some(contrast) = object_diff(base.contrast.as_ref(), head.contrast.as_ref()) {
+        changes.insert("contrast".into(), contrast);
+    }
+    if let Some(ax) = object_diff(base.ax.as_ref(), head.ax.as_ref()) {
+        changes.insert("ax".into(), ax);
+    }
 
     if changes.is_empty() {
         None
     } else {
         Some(Value::Object(changes))
+    }
+}
+
+/// Diff two arbitrary JSON values. Objects are diffed per key (before/after
+/// per differing leaf); scalars/arrays fall back to a whole-value
+/// before/after pair.
+fn object_diff(base: Option<&Value>, head: Option<&Value>) -> Option<Value> {
+    match (base, head) {
+        (None, None) => None,
+        (Some(a), Some(b)) if a == b => None,
+        (Some(a), Some(b)) => {
+            if let (Some(am), Some(bm)) = (a.as_object(), b.as_object()) {
+                let mut result = Map::new();
+                let mut keys: Vec<&String> = am.keys().chain(bm.keys()).collect();
+                keys.sort_unstable();
+                keys.dedup();
+                for k in keys {
+                    if let Some(d) = object_diff(am.get(k), bm.get(k)) {
+                        result.insert(k.clone(), d);
+                    }
+                }
+                if result.is_empty() {
+                    None
+                } else {
+                    Some(Value::Object(result))
+                }
+            } else {
+                Some(json_before_after(Some(a), Some(b)))
+            }
+        }
+        (Some(a), None) => Some(json_before_after(Some(a), None)),
+        (None, Some(b)) => Some(json_before_after(None, Some(b))),
     }
 }
 
@@ -213,6 +266,7 @@ fn style_diff(
 /// Diff the properties within a single category.
 fn prop_diff(base: Option<&Value>, head: Option<&Value>, opts: &DiffOptions) -> Map<String, Value> {
     let mut props = Map::new();
+    let ignored = |k: &str| opts.ignore_props.iter().any(|p| p == k);
     match (base, head) {
         (Some(b), Some(h)) => match (b.as_object(), h.as_object()) {
             (Some(bm), Some(hm)) => {
@@ -220,6 +274,9 @@ fn prop_diff(base: Option<&Value>, head: Option<&Value>, opts: &DiffOptions) -> 
                 keys.sort_unstable();
                 keys.dedup();
                 for k in keys {
+                    if ignored(k) {
+                        continue;
+                    }
                     let bv = bm.get(k);
                     let hv = hm.get(k);
                     if !value_equal(bv, hv, opts) {
@@ -236,6 +293,9 @@ fn prop_diff(base: Option<&Value>, head: Option<&Value>, opts: &DiffOptions) -> 
         (Some(b), None) => match b.as_object() {
             Some(bm) => {
                 for (k, v) in bm {
+                    if ignored(k) {
+                        continue;
+                    }
                     props.insert(k.clone(), json_before_after(Some(v), None));
                 }
             }
@@ -246,6 +306,9 @@ fn prop_diff(base: Option<&Value>, head: Option<&Value>, opts: &DiffOptions) -> 
         (None, Some(h)) => match h.as_object() {
             Some(hm) => {
                 for (k, v) in hm {
+                    if ignored(k) {
+                        continue;
+                    }
                     props.insert(k.clone(), json_before_after(None, Some(v)));
                 }
             }
@@ -447,6 +510,9 @@ mod tests {
             hash: None,
             styles,
             pseudo: None,
+            aria: None,
+            contrast: None,
+            ax: None,
             children: vec![],
         }
     }
@@ -483,7 +549,14 @@ mod tests {
     fn subpixel_change_within_tolerance_is_ignored() {
         let a = node("div.card", box_width("44px"));
         let b = node("div.card", box_width("44.2px"));
-        let (deltas, stats) = diff_trees(&[a], &[b], &DiffOptions { tolerance: 0.5 });
+        let (deltas, stats) = diff_trees(
+            &[a],
+            &[b],
+            &DiffOptions {
+                tolerance: 0.5,
+                ..DiffOptions::default()
+            },
+        );
         assert!(deltas.is_empty());
         assert_eq!(stats.changed, 0);
     }
@@ -492,7 +565,14 @@ mod tests {
     fn unit_mismatch_is_not_tolerated() {
         let a = node("div.card", box_width("44px"));
         let b = node("div.card", box_width("44rem"));
-        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions { tolerance: 0.5 });
+        let (deltas, _) = diff_trees(
+            &[a],
+            &[b],
+            &DiffOptions {
+                tolerance: 0.5,
+                ..DiffOptions::default()
+            },
+        );
         assert_eq!(deltas.len(), 1);
     }
 
@@ -500,7 +580,14 @@ mod tests {
     fn beyond_tolerance_is_changed() {
         let a = node("div.card", box_width("44px"));
         let b = node("div.card", box_width("46px"));
-        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions { tolerance: 0.5 });
+        let (deltas, _) = diff_trees(
+            &[a],
+            &[b],
+            &DiffOptions {
+                tolerance: 0.5,
+                ..DiffOptions::default()
+            },
+        );
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].status, "CHANGED");
     }
@@ -589,5 +676,99 @@ mod tests {
         );
         assert_eq!(stats.base_nodes, 2);
         assert_eq!(stats.head_nodes, 1);
+    }
+
+    #[test]
+    fn aria_change_is_reported_per_key() {
+        let mut a = node("button", box_width("44px"));
+        let mut b = node("button", box_width("44px"));
+        a.aria = Some(serde_json::json!({"role": "button", "name": "Salvar", "focusable": true}));
+        b.aria = Some(serde_json::json!({"role": "button", "name": "Cancelar", "focusable": true}));
+        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions::default());
+        assert_eq!(deltas.len(), 1);
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert_eq!(changes["aria"]["name"]["before"], "Salvar");
+        assert_eq!(changes["aria"]["name"]["after"], "Cancelar");
+        assert!(changes["aria"].get("role").is_none(), "role unchanged");
+    }
+
+    #[test]
+    fn contrast_change_is_reported() {
+        let mut a = node("div", box_width("44px"));
+        let mut b = node("div", box_width("44px"));
+        a.contrast = Some(serde_json::json!({"ratio": 4.5, "aa": "pass", "aaa": "fail"}));
+        b.contrast = Some(serde_json::json!({"ratio": 2.1, "aa": "fail", "aaa": "fail"}));
+        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions::default());
+        assert_eq!(deltas.len(), 1);
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert_eq!(changes["contrast"]["ratio"]["after"], 2.1);
+        assert_eq!(changes["contrast"]["aa"]["after"], "fail");
+    }
+
+    #[test]
+    fn ax_removal_is_reported() {
+        let mut a = node("div", box_width("44px"));
+        let b = node("div", box_width("44px"));
+        a.ax = Some(serde_json::json!({"role": "banner", "ignored": false}));
+        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions::default());
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert_eq!(changes["ax"]["before"]["role"], "banner");
+        assert_eq!(changes["ax"]["after"], Value::Null);
+    }
+
+    #[test]
+    fn ignore_props_hides_volatile_properties() {
+        let a = node(
+            "div.card",
+            Some(
+                serde_json::json!({
+                    "box_model": {"width": "44px"},
+                    "transform": {"transform": "translateX(0px)"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        );
+        let b = node(
+            "div.card",
+            Some(
+                serde_json::json!({
+                    "box_model": {"width": "44px"},
+                    "transform": {"transform": "translateX(-22px)"}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        );
+        let opts = DiffOptions {
+            tolerance: 0.5,
+            ignore_props: vec!["transform".into()],
+            ignore_structural: false,
+        };
+        let (deltas, stats) = diff_trees(&[a], &[b], &opts);
+        assert!(deltas.is_empty(), "transform-only change must be ignored");
+        assert_eq!(stats.changed, 0);
+    }
+
+    #[test]
+    fn ignore_structural_suppresses_added_removed() {
+        let base = vec![node("div.a", box_width("10px"))];
+        let head = vec![
+            node("div.a", box_width("10px")),
+            node("div.b", box_width("20px")),
+        ];
+        let opts = DiffOptions {
+            tolerance: 0.5,
+            ignore_props: Vec::new(),
+            ignore_structural: true,
+        };
+        let (deltas, stats) = diff_trees(&base, &head, &opts);
+        assert!(deltas.is_empty(), "ADDED must be suppressed: {deltas:?}");
+        assert_eq!(stats.added, 0);
+        assert_eq!(stats.removed, 0);
+        assert_eq!(stats.base_nodes, 1);
+        assert_eq!(stats.head_nodes, 2);
     }
 }

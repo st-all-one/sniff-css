@@ -31,6 +31,7 @@ use crate::progress::ProgressReporter;
 
 const EVAL_PROMPT: &str = include_str!("../../../docs/eval-prompt.md");
 const EVAL_SCHEMA: &str = include_str!("../../../docs/sniff-eval.schema.json");
+const GOLDEN_RUN: &str = include_str!("../../../docs/golden-run.md");
 
 /// The MCP service: holds the shared browser pool and the tool router.
 #[derive(Debug, Clone)]
@@ -91,6 +92,22 @@ pub struct SniffPageRequest {
     /// Output format: `jsonl` (tree), `jsonl-flat`, or `json`.
     #[serde(default = "default_format")]
     pub format: String,
+    /// Freeze animations/transitions before capture for deterministic
+    /// snapshots of dynamic pages (prefers-reduced-motion + cancel
+    /// animations + `animation/transition: none !important`).
+    #[serde(default)]
+    pub stabilize: bool,
+    /// Derive and emit a measured WCAG `contrast` facet per node.
+    #[serde(default)]
+    pub contrast: bool,
+    /// Capture the browser-computed accessibility-tree node (`ax`) per
+    /// element via the CDP `Accessibility` domain.
+    #[serde(default)]
+    pub include_ax: bool,
+    /// Capture the full accessibility subtree for the matched elements and
+    /// emit it as a `__ax_tree` document (implies `include_ax`).
+    #[serde(default)]
+    pub ax_tree: bool,
 }
 
 /// Parameters for the `diff_snapshots` tool.
@@ -102,6 +119,30 @@ pub struct DiffRequest {
     pub head_jsonl: String,
     /// Ignore value changes smaller than this in the same unit
     /// (e.g. 0.5 absorbs 16px -> 16.2px). 0 disables tolerance.
+    #[serde(default = "default_tolerance")]
+    pub tolerance: f64,
+    /// Property names whose changes never mark a node as changed
+    /// (volatile/animated props), e.g. `["transform", "opacity"]`.
+    #[serde(default)]
+    pub ignore_props: Vec<String>,
+    /// Suppress ADDED/REMOVED lines (report only CHANGED) — for lists
+    /// whose item count varies by design.
+    #[serde(default)]
+    pub ignore_structural: bool,
+}
+
+/// Parameters for the `run_checks` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CheckRequest {
+    /// Snapshot JSONL (output of `sniff_page`) to evaluate offline.
+    pub jsonl: String,
+    /// Run the uniformity check (odd card out among sibling instances).
+    #[serde(default = "default_true")]
+    pub uniform: bool,
+    /// Run the derived rule checks (contrast, target size, focus, alt).
+    #[serde(default = "default_true")]
+    pub rules: bool,
+    /// Tolerance for numeric uniformity deviations (same unit).
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
 }
@@ -177,9 +218,11 @@ impl SniffMcpServer {
         name = "diff_snapshots",
         description = "Deterministically diff two sniff_page JSONL snapshots (passed inline as \
                        strings) and return only what changed: CHANGED nodes with before/after values \
-                       per property (styles, pseudo, rect, metrics, is_visible), ADDED/REMOVED nodes \
-                       with their full snapshot, plus a final __diff_summary line. tolerance ignores \
-                       subpixel jitter in the same unit. Use this delta as the input to your \
+                       per property (styles, pseudo, aria, contrast, ax, rect, metrics, is_visible), \
+                       ADDED/REMOVED nodes with their full snapshot, plus a final __diff_summary \
+                       line. tolerance ignores subpixel jitter in the same unit; ignore_props \
+                       skips volatile props (e.g. transform); ignore_structural suppresses \
+                       ADDED/REMOVED for variable-count lists. Use this delta as the input to your \
                        evaluation prompt instead of the full snapshots."
     )]
     pub async fn diff_snapshots(
@@ -194,6 +237,8 @@ impl SniffMcpServer {
 
         let opts = sniff_diff::DiffOptions {
             tolerance: request.tolerance,
+            ignore_props: request.ignore_props,
+            ignore_structural: request.ignore_structural,
         };
         let (deltas, stats) = sniff_diff::diff_trees(&base, &head, &opts);
 
@@ -207,6 +252,80 @@ impl SniffMcpServer {
                 "changed": stats.changed,
                 "added": stats.added,
                 "removed": stats.removed,
+            }
+        });
+        serde_json::to_writer(&mut buf, &summary)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        buf.push(b'\n');
+
+        String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    /// Run deterministic offline checks over an inline snapshot.
+    #[tool(
+        name = "run_checks",
+        description = "Deterministic offline UI checks over a sniff_page JSONL snapshot: \
+                       uniformity (finds the odd sibling instance against the group norm — the \
+                       'odd card out') and derived rules (measured WCAG contrast, 24x24 target \
+                       size, visible focus indicator, hidden focusables, empty alt on large \
+                       images). No LLM involved: use the results as evidence in the eval prompt."
+    )]
+    pub async fn run_checks(&self, params: Parameters<CheckRequest>) -> Result<String, ErrorData> {
+        let request = params.0;
+        let nodes = sniff_diff::load_str(&request.jsonl)
+            .map_err(|e| ErrorData::invalid_params(format!("invalid JSONL: {e}"), None))?;
+
+        let mut buf = Vec::new();
+        let mut rule_count = 0usize;
+        let mut uniformity_instances = 0usize;
+        let mut uniformity_outliers = 0usize;
+
+        if request.rules {
+            let lines = sniff_check::rules::run_rules(&nodes);
+            rule_count = lines.len();
+            let (pass, warn, fail) = sniff_check::rules::summarize(&lines);
+            sniff_check::rules::write_checks(&mut buf, &lines)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            tracing::info!("run_checks: {pass} pass | {warn} warn | {fail} fail");
+        }
+
+        if request.uniform {
+            let report = sniff_check::uniformity::check_uniformity(&nodes, request.tolerance);
+            uniformity_instances = report.instances;
+            uniformity_outliers = report.outliers.len();
+            for outlier in &report.outliers {
+                let evidence = outlier
+                    .deviations
+                    .iter()
+                    .map(|d| match (d.norm.as_deref(), d.magnitude) {
+                        (Some(norm), Some(mag)) => {
+                            format!("{}: {} (norm {norm} ±{mag:0.2})", d.property, d.value)
+                        }
+                        (Some(norm), None) => format!("{}: {} (norm {norm})", d.property, d.value),
+                        (None, _) => format!("{}: {}", d.property, d.value),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let line = serde_json::json!({
+                    "check": "uniformity",
+                    "selector": outlier.selector,
+                    "status": "fail",
+                    "evidence": format!(
+                        "deviates from the {}/{} group norm: {evidence}",
+                        report.instances, report.instances
+                    ),
+                });
+                serde_json::to_writer(&mut buf, &line)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                buf.push(b'\n');
+            }
+        }
+
+        let summary = serde_json::json!({
+            "__check_summary": {
+                "uniformity_instances": uniformity_instances,
+                "uniformity_outliers": uniformity_outliers,
+                "rules": rule_count,
             }
         });
         serde_json::to_writer(&mut buf, &summary)
@@ -245,6 +364,12 @@ impl ServerHandler for SniffMcpServer {
                 .with_title("AI evaluation JSON schema")
                 .with_description("Rigid JSON Schema the AI answer must validate against")
                 .with_mime_type("application/json"),
+            Resource::new("sniff://guides/golden", "Golden runbook")
+                .with_title("Padrão ouro de execução")
+                .with_description(
+                    "The deterministic capture/diff/check/eval recipe the tools are optimized for",
+                )
+                .with_mime_type("text/markdown"),
         ]))
     }
 
@@ -256,6 +381,7 @@ impl ServerHandler for SniffMcpServer {
         let contents = match request.uri.as_str() {
             "sniff://prompts/eval" => ResourceContents::text(EVAL_PROMPT, "sniff://prompts/eval"),
             "sniff://schemas/eval" => ResourceContents::text(EVAL_SCHEMA, "sniff://schemas/eval"),
+            "sniff://guides/golden" => ResourceContents::text(GOLDEN_RUN, "sniff://guides/golden"),
             other => {
                 return Err(ErrorData::resource_not_found(
                     format!("unknown resource `{other}`"),
@@ -307,10 +433,15 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
             compact: request.compact,
             include_visibility: true,
             include_style_hash: true,
+            include_aria: true,
+            include_contrast: request.contrast,
+            include_ax: request.include_ax || request.ax_tree,
         },
         viewport: Some(viewport),
         include_custom_properties: request.custom_props,
         stable_key: request.stable_key.clone(),
+        stabilize: request.stabilize,
+        ax_tree: request.ax_tree,
     })
 }
 
@@ -320,6 +451,7 @@ fn phase_message(phase: &sniff_engine::Phase) -> String {
         sniff_engine::Phase::Navigating => "navigating to page".to_string(),
         sniff_engine::Phase::Waiting => "waiting for page readiness".to_string(),
         sniff_engine::Phase::Extracting => "extracting computed styles".to_string(),
+        sniff_engine::Phase::Accessibility => "capturing accessibility tree".to_string(),
         sniff_engine::Phase::Formatting { nodes } => format!("formatting {nodes} nodes"),
     }
 }
@@ -354,6 +486,10 @@ mod tests {
             wait: vec![],
             viewport: "1366x768".into(),
             format: "jsonl".into(),
+            stabilize: false,
+            contrast: false,
+            include_ax: false,
+            ax_tree: false,
         }
     }
 
@@ -367,8 +503,26 @@ mod tests {
         assert!(cfg.output.compact);
         assert!(cfg.output.include_visibility);
         assert!(cfg.output.include_style_hash);
+        assert!(cfg.output.include_aria);
+        assert!(!cfg.output.include_contrast);
+        assert!(!cfg.output.include_ax);
+        assert!(!cfg.stabilize);
+        assert!(!cfg.ax_tree);
         assert_eq!(cfg.output.format, OutputFormat::JsonLines);
         assert_eq!(cfg.wait.len(), 3); // default pipeline
+    }
+
+    #[test]
+    fn build_config_wires_new_flags() {
+        let mut req = request();
+        req.stabilize = true;
+        req.contrast = true;
+        req.ax_tree = true;
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(cfg.stabilize);
+        assert!(cfg.ax_tree);
+        assert!(cfg.output.include_contrast);
+        assert!(cfg.output.include_ax, "ax_tree implies include_ax");
     }
 
     #[test]
@@ -403,6 +557,10 @@ mod tests {
             phase_message(&sniff_engine::Phase::Formatting { nodes: 7 }),
             "formatting 7 nodes"
         );
+        assert_eq!(
+            phase_message(&sniff_engine::Phase::Accessibility),
+            "capturing accessibility tree"
+        );
         assert_eq!(sniff_engine::Phase::Extracting.progress(), 0.7);
     }
 
@@ -414,11 +572,14 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(v.tolerance, 0.5);
+        assert!(v.ignore_props.is_empty());
+        assert!(!v.ignore_structural);
     }
 
     #[test]
     fn resources_embedded_from_docs() {
         assert!(EVAL_PROMPT.contains("sniff-diff"));
         assert!(EVAL_SCHEMA.contains("SniffEvalResponse"));
+        assert!(GOLDEN_RUN.contains("sniff-computed-style"));
     }
 }

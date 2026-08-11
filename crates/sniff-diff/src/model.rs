@@ -27,6 +27,9 @@ pub struct DiffNode {
     pub hash: Option<String>,
     pub styles: Option<Map<String, Value>>,
     pub pseudo: Option<Map<String, Value>>,
+    pub aria: Option<Value>,
+    pub contrast: Option<Value>,
+    pub ax: Option<Value>,
     pub children: Vec<DiffNode>,
 }
 
@@ -57,6 +60,9 @@ impl DiffNode {
                 .map(String::from),
             styles: v.get("styles").and_then(Value::as_object).cloned(),
             pseudo: v.get("pseudo").and_then(Value::as_object).cloned(),
+            aria: v.get("aria").cloned(),
+            contrast: v.get("contrast").cloned(),
+            ax: v.get("ax").cloned(),
             children,
         }
     }
@@ -122,7 +128,7 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             continue;
         }
         let v: Value = serde_json::from_str(line)?;
-        if v.get("__meta").is_some() {
+        if v.get("__meta").is_some() || v.get("__ax_tree").is_some() {
             continue;
         }
         let tree = v.get("children").is_some();

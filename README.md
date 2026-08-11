@@ -13,6 +13,8 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 - **Filtros de elemento** — visibilidade, tamanho mínimo, seletores de exclusão.
 - **Pseudo-elementos** — `::before`, `::after`, etc.
 - **Saída JSONL** (padrão) ou JSON, com normalização de cores para hex e agrupamento por categoria.
+- **Facetas medidas de acessibilidade** — `--contrast` (WCAG AA/AAA calculado em Rust), `--ax`/`--ax-tree` (árvore de acessibilidade real via CDP `Accessibility`), `aria` (role/nome/focusable por nó).
+- **`--stabilize`** — congela animações/transições para snapshots determinísticos de páginas dinâmicas.
 - **Reuso de browser** — uma instância Chrome serve múltiplas consultas (watch/serve/loops).
 - **Conecta em browser existente** (`--connect`) — use seu dev-server com remote debugging ativo.
 
@@ -31,12 +33,13 @@ scripts/install.sh
 scripts/install.sh --no-build
 ```
 
-Instala três binários: `sniff-computed-style`, `sniff-diff` e `sniff-mcp`.
+Instala quatro binários: `sniff-computed-style`, `sniff-diff`, `sniff-check` e `sniff-mcp`.
 
 Requisito: Chrome/Chromium disponível no sistema (ou defina `SNIFF_CHROME_PATH` / use `--chrome`).
 
 > Guia de uso **otimizado para IA**: [`docs/ai-usage.md`](docs/ai-usage.md) —
 > combinação de flags, pipeline de diff e avaliação semântica passo a passo.
+> O **padrão ouro de execução**: [`docs/golden-run.md`](docs/golden-run.md).
 
 ## Uso rápido
 
@@ -84,6 +87,11 @@ sniff-computed-style --url http://localhost:3000 --selector "header" \
 | `--viewport WxH` | Viewport emulado (afeta `%`, `vh`, media queries) | `1366x768` |
 | `--custom-props` | Capturar todas as variáveis CSS (`--*`) | — |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
+| `--stabilize` | Congelar animações/transições antes da captura (snapshot determinístico) | — |
+| `--contrast` | Emitir facet `contrast` medido por nó (WCAG AA/AAA) | — |
+| `--ax` | Emitir facet `ax` por nó (árvore de acessibilidade do Chrome) | — |
+| `--ax-tree` | Emitir a subárvore AX completa como `__ax_tree` (implica `--ax`) | — |
+| `--no-aria` | Omitir o facet `aria` por nó (role/nome/focusable) | — |
 
 ### Categorias disponíveis
 
@@ -102,7 +110,19 @@ Formato: `nome:arg1:arg2[:timeout_ms]`
 | `app-flag` | `app-flag:__APP_READY__:15000` |
 | `delay` | `delay:2000` |
 
-Pipeline padrão: `selector` → `network-idle` → `element-ready` (visible + has-size).
+Pipeline padrão: `selector` (10s) → `network-idle` (30s) → `element-ready` (10s,
+visible + has-size). Erros são claros:
+
+- Seletor que nunca aparece → `no elements matched selector \`X\`` (falha rápida).
+- Elemento presente mas sem satisfazer as condições (ex.: primeiro slide de um
+  carrossel oculto) → timeout com dica (`try a delay:N wait or a longer
+  element-ready timeout`).
+- Spec de wait malformado → mensagem com o formato esperado
+  (`element-ready:<selector>:<cond1,cond2>[:<timeout_ms>]`).
+
+> Em páginas dinâmicas (carrosséis, lazy-load), capture a subárvore estável
+> (ex.: `selector=footer --depth 2`) ou use `--wait delay:N` em vez de depender
+> do `element-ready` sobre elementos que aparecem e somem.
 
 ## Formato de saída (JSONL)
 
@@ -130,7 +150,10 @@ Uma linha JSON por elemento raiz, com filhos aninhados. Nomes legíveis e compac
 - `pseudo`: mapa de pseudo-elementos → mesmos grupos de estilos.
 - `css_variables`: grupo extra com todas as variáveis CSS (`--*`) quando `--custom-props` é usado.
 - `id` / `parent_id`: todos os nós recebem identificadores (pre-order), permitindo achatamento/referência.
-- `is_visible`: booleano derivado na página a partir de `display`, `visibility`, `opacity` e `rect` — a IA não precisa inferir visibilidade.
+- `is_visible`: booleano derivado na página a partir de `display`, `visibility`, `opacity` e do rect **interseccionando o viewport** (elementos sr-only/off-viewport como skip-links de 1×1px fora da tela são marcados como invisíveis) — a IA não precisa inferir visibilidade.
+- `aria`: role (explícita ou inferida do tag), accessible name, `focusable`, `aria-*`, `has_text` — calculados na página.
+- `contrast`: ratio WCAG **medido** + AA/AAA (normal vs. texto grande); `unknown` para fundo transparente/gradiente/imagem.
+- `ax`: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`/`level`...).
 - `computed_style_hash`: checksum **xxHash64** (não criptográfico, ~40× mais rápido que SHA-1) dos estilos efetivos de cada nó (inclui pseudo-elementos). Permite **detectar mudanças entre execuções** comparando apenas o hash; determinístico entre runs no mesmo modo.
 - Cores `rgb(...)`/`rgba(...)` são normalizadas para `#rrggbb`/`#rrggbbaa`.
 - Use `--no-group` para um mapa plano de propriedades.
@@ -171,6 +194,11 @@ sniff-computed-style -u URL -s ".widget" --stable-key data-testid > head.jsonl
 
 # 2. Diff determinístico
 sniff-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
+#   --ignore-props transform,opacity   # props voláteis não marcam o nó
+#   --no-structural                    # suprime ADDED/REMOVED (listas variáveis)
+
+# 2b. Descoberta determinística (sem IA)
+sniff-check --input head.jsonl --uniform --rules
 
 # 3. Avaliação semântica por IA (opcional): mande SÓ o delta + prompt
 #    docs/eval-prompt.md; resposta valida contra docs/sniff-eval.schema.json
@@ -183,13 +211,33 @@ Como funciona:
   absorver jitter de subpixel (`16px` → `16.2px`); unidades diferentes nunca
   são tratadas como iguais.
 - **Saída JSONL** com `CHANGED` (deltas `before`/`after` por propriedade, incluindo
-  `styles`, `pseudo`, `rect`, `metrics`, `is_visible`) e `ADDED`/`REMOVED`
-  (snapshot completo do nó).
+  `styles`, `pseudo`, `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_visible`)
+  e `ADDED`/`REMOVED` (snapshot completo do nó).
+- `--ignore-props a,b` — mudanças nessas props nunca marcam o nó como changed.
+- `--no-structural` — suprime `ADDED`/`REMOVED` (reporta só `CHANGED`).
 - `--stats-only` imprime apenas o resumo (`nodes: N -> M | changed/added/removed`),
   ideal para varrer centenas de páginas sem gastar tokens.
 - A avaliação positiva/negativa (contraste WCAG, CLS, design system) fica na
   camada de IA; o contrato está em `docs/sniff-eval.schema.json` e o template de
   prompt em `docs/eval-prompt.md`.
+
+## Checks determinísticos (sniff-check)
+
+`sniff-check` avalia um snapshot **sem IA** e offline:
+
+```bash
+sniff-check --input snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
+sniff-check --input snap.jsonl --rules                     # PASS/WARN/FAIL
+```
+
+- `--uniform`: entre instâncias irmãs do mesmo selector, computa a norma do
+  grupo (mediana para números, moda caso contrário) e reporta os **outliers**
+  com as propriedades e magnitudes que desviam.
+- `--rules`: contraste **medido** (AA/AAA), alvo clicável ≥ 24×24px (WCAG 2.2),
+  indicador de foco visível, focusables ocultos, `alt` vazio em imagens grandes.
+
+Saída JSONL com evidência + `__check_summary`. O resultado vira **evidência**
+para o `reason` da avaliação IA.
 
 > Consulte [`docs/ai-usage.md`](docs/ai-usage.md) para o passo a passo completo
 > de uso orientado a IA (flags recomendadas, padrões de agente/MCP, CI e armadilhas).
@@ -207,17 +255,19 @@ Ferramentas:
 
 | Tool | O que faz |
 |---|---|
-| `sniff_page` | Captura computed styles de uma página → JSONL (compact, stable-key, wait, viewport, format) |
-| `diff_snapshots` | Diff determinístico de dois JSONL inline → delta (`CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`) |
+| `sniff_page` | Captura computed styles de uma página → JSONL (compact, stable-key, wait, viewport, format, stabilize, contrast, include_ax, ax_tree) |
+| `diff_snapshots` | Diff determinístico de dois JSONL inline → delta (`CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`; tolerance/ignore_props/ignore_structural) |
+| `run_checks` | Checks determinísticos offline sobre um JSONL inline (`--uniform`/`--rules`) → PASS/WARN/FAIL + outliers |
 | `list_categories` | Categorias de propriedades disponíveis |
 
-Recursos: `sniff://prompts/eval` e `sniff://schemas/eval`.
+Recursos: `sniff://prompts/eval`, `sniff://schemas/eval` e `sniff://guides/golden`.
 
 **Streaming assíncrono**: durante `sniff_page`, o servidor emite
 `notifications/progress` por fase (`navigating` → `waiting` → `extracting` →
-`formatting N nodes`), para a IA acompanhar o pipeline sem bloquear. O browser é
-reutilizado (sem cold-start) e a concorrência é limitada por semáforo; se o Chrome
-morrer, ele é relançado transparentemente.
+`capturing accessibility tree` (se `ax`) → `formatting N nodes`), para a IA
+acompanhar o pipeline sem bloquear. O browser é reutilizado (sem cold-start) e a
+concorrência é limitada por semáforo; se o Chrome morrer, ele é relançado
+transparentemente.
 
 Exemplo de config para o Claude Desktop (`claude_desktop_config.json`):
 
@@ -249,12 +299,13 @@ Qualquer ferramenta pode chamar o binário e consumir o stdout. Para agentes via
 
 ```
 crates/
-├── sniff-core/     # tipos, config, catálogo de ~250 propriedades CSS
+├── sniff-core/     # tipos, config, catálogo de ~250 propriedades CSS, contraste WCAG
 ├── sniff-cdp/      # cliente CDP raw (WebSocket), protocolo, gestão do processo Chrome
-├── sniff-engine/   # orquestração: espera, filtro, extração (1 chamada Runtime.evaluate), saída
+├── sniff-engine/   # orquestração: espera, filtro, extração (1 chamada Runtime.evaluate), AX via CDP, saída
 ├── sniff-cli/      # binário clap (sniff-computed-style)
 ├── sniff-diff/     # diff determinístico JSONL (binário sniff-diff) + delta p/ IA
-└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, list_categories
+├── sniff-check/    # checks determinísticos (binário sniff-check): uniformidade + regras
+└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, run_checks, list_categories
 ```
 
 ## Testes

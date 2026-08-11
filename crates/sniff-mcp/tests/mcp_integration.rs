@@ -135,6 +135,7 @@ async fn list_tools_exposes_sniff_page_and_diff() {
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(names.contains(&"sniff_page"));
     assert!(names.contains(&"diff_snapshots"));
+    assert!(names.contains(&"run_checks"));
     assert!(names.contains(&"list_categories"));
 
     let sniff = tools.iter().find(|t| t.name == "sniff_page").unwrap();
@@ -155,6 +156,7 @@ async fn resources_expose_eval_prompt_and_schema() {
     let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
     assert!(uris.contains(&"sniff://prompts/eval"));
     assert!(uris.contains(&"sniff://schemas/eval"));
+    assert!(uris.contains(&"sniff://guides/golden"));
 
     let prompt = running
         .read_resource(ReadResourceRequestParams::new("sniff://prompts/eval"))
@@ -308,5 +310,55 @@ async fn diff_snapshots_returns_delta_and_summary() {
     assert_eq!(summary["__diff_summary"]["changed"], 0);
     assert_eq!(summary["__diff_summary"]["added"], 0);
     assert_eq!(summary["__diff_summary"]["removed"], 0);
+    running.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn run_checks_finds_odd_card_and_contrast_failure() {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return;
+    };
+    let pool = launch_pool_with_retry(&opts).await;
+    let (_client, running) = setup(pool).await;
+
+    // Three sibling cards; the third is short (uniformity outlier) and the
+    // first carries a low-contrast paragraph (rules failure) in its subtree.
+    let jsonl = r##"{"id":1,"tag":"DIV","selector":"div.card:nth-child(1)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[{"id":4,"tag":"P","selector":"div.card:nth-child(1) > p","depth":1,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"visual":{"color":"#212529","background-color":"#020842","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}]}
+{"id":2,"tag":"DIV","selector":"div.card:nth-child(2)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
+{"id":3,"tag":"DIV","selector":"div.card:nth-child(3)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"80px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
+"##;
+
+    let result = running
+        .call_tool(tool_call(
+            "run_checks",
+            serde_json::json!({
+                "jsonl": jsonl,
+                "uniform": true,
+                "rules": true,
+                "tolerance": 0.5,
+            }),
+        ))
+        .await
+        .unwrap();
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .expect("text")
+        .text
+        .clone();
+
+    assert!(
+        text.contains("contrast-aa"),
+        "rules must emit contrast-aa: {text}"
+    );
+    assert!(
+        text.contains("\"uniformity\""),
+        "uniformity outlier: {text}"
+    );
+    let summary: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(summary["__check_summary"]["uniformity_outliers"], 1);
+    assert!(summary["__check_summary"]["rules"].as_u64().unwrap() > 0);
     running.cancel().await.unwrap();
 }

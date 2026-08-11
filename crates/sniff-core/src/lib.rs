@@ -5,6 +5,7 @@
 //! and [`sniff-cli`](sniff_cli), with no I/O or protocol logic.
 
 pub mod config;
+pub mod contrast;
 pub mod error;
 pub mod properties;
 pub mod types;

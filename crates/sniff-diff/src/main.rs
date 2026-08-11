@@ -22,6 +22,14 @@ struct Cli {
     /// (e.g. 0.5 absorbs 16px -> 16.2px subpixel jitter). 0 disables.
     #[arg(long, default_value_t = 0.5)]
     tolerance: f64,
+    /// Property names whose changes never mark a node as changed
+    /// (volatile/animated props), comma-separated.
+    #[arg(long, value_delimiter = ',')]
+    ignore_props: Vec<String>,
+    /// Suppress ADDED/REMOVED lines (report only CHANGED) — for lists
+    /// whose item count varies by design.
+    #[arg(long, default_value_t = false)]
+    no_structural: bool,
     /// Only print summary statistics, not the delta lines.
     #[arg(long, default_value_t = false)]
     stats_only: bool,
@@ -34,6 +42,8 @@ fn main() -> anyhow::Result<()> {
 
     let opts = DiffOptions {
         tolerance: cli.tolerance,
+        ignore_props: cli.ignore_props,
+        ignore_structural: cli.no_structural,
     };
     let (deltas, stats) = diff_trees(&base, &head, &opts);
 

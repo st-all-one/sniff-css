@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+</head>
+<body>
+  <header id="site-header">Cabeçalho global</header>
+  <main>
+    <header id="article-header">Cabeçalho de seção</header>
+    <section id="bloco">
+      <h2 id="h2">Bloco</h2>
+      <fieldset id="prefs">
+        <legend id="legend">Preferências</legend>
+        <input type="checkbox" id="a"> <label for="a">A</label>
+      </fieldset>
+      <dl id="dl">
+        <dt id="dt">HTML</dt>
+        <dd id="dd">Linguagem de marcação</dd>
+      </dl>
+      <progress id="prog" max="100" value="40"></progress>
+      <meter id="met" min="0" max="100" value="70"></meter>
+      <output id="out">42</output>
+      <p id="para">Parágrafo com <strong id="s">forte</strong>, <em id="e">ênfase</em>, <code id="c">code()</code>, <mark id="m">marca</mark>, <sub id="sub">sub</sub>, <sup id="sup">sup</sup> e <time id="t" datetime="2025-01-01">data</time>.</p>
+      <table id="tab">
+        <caption id="cap">Notas</caption>
+        <thead id="thead"><tr><th id="th-col" scope="col">Nome</th><th scope="col">Nota</th></tr></thead>
+        <tbody id="tbody"><tr><th id="th-row" scope="row">Ana</th><td id="td">9</td></tr></tbody>
+      </table>
+      <select id="multi" multiple>
+        <option>Um</option>
+        <option>Dois</option>
+      </select>
+      <select id="single">
+        <option>Único</option>
+      </select>
+      <canvas id="cv" width="10" height="10">fallback</canvas>
+      <audio id="au" controls></audio>
+    </section>
+  </main>
+  <footer id="site-footer">Rodapé global</footer>
+</body>
+</html>

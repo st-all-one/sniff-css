@@ -104,6 +104,33 @@ pub struct Cli {
     #[arg(long = "no-style-hash", default_value_t = false)]
     pub no_style_hash: bool,
 
+    /// Omit the per-node resolved `aria` facet (role, accessible name,
+    /// focusable; default: computed in-page).
+    #[arg(long = "no-aria", default_value_t = false)]
+    pub no_aria: bool,
+
+    /// Derive and emit a measured WCAG `contrast` facet per node (AA/AAA
+    /// vs. normal/large text). Off by default to keep the capture lean.
+    #[arg(long, default_value_t = false)]
+    pub contrast: bool,
+
+    /// Capture the browser-computed accessibility-tree node (`ax`) per
+    /// element via the CDP `Accessibility` domain.
+    #[arg(long, default_value_t = false)]
+    pub ax: bool,
+
+    /// Capture the full accessibility subtree for the matched elements and
+    /// emit it as a `__ax_tree` document (implies --ax).
+    #[arg(long = "ax-tree", default_value_t = false)]
+    pub ax_tree: bool,
+
+    /// Freeze animations/transitions before capture for deterministic
+    /// snapshots of dynamic pages (emulates prefers-reduced-motion,
+    /// cancels running animations and injects
+    /// `animation/transition: none !important`).
+    #[arg(long, default_value_t = false)]
+    pub stabilize: bool,
+
     /// Path to the Chrome/Chromium binary.
     #[arg(long)]
     pub chrome: Option<String>,
@@ -152,6 +179,9 @@ impl Cli {
             compact: self.compact,
             include_visibility: !self.no_visibility,
             include_style_hash: !self.no_style_hash,
+            include_aria: !self.no_aria,
+            include_contrast: self.contrast,
+            include_ax: self.ax || self.ax_tree,
         };
 
         let filter = ElementFilter {
@@ -182,6 +212,8 @@ impl Cli {
             viewport,
             include_custom_properties: self.custom_props,
             stable_key: self.stable_key,
+            stabilize: self.stabilize,
+            ax_tree: self.ax_tree,
         })
     }
 }
@@ -276,6 +308,11 @@ mod tests {
             compact: false,
             no_visibility: false,
             no_style_hash: false,
+            no_aria: false,
+            contrast: false,
+            ax: false,
+            ax_tree: false,
+            stabilize: false,
             chrome: None,
             connect: None,
             viewport: None,
@@ -322,6 +359,11 @@ mod tests {
             compact: false,
             no_visibility: false,
             no_style_hash: false,
+            no_aria: false,
+            contrast: false,
+            ax: false,
+            ax_tree: false,
+            stabilize: false,
             chrome: None,
             connect: None,
             viewport: None,

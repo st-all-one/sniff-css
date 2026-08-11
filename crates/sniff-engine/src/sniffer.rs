@@ -1,12 +1,15 @@
 //! Orchestration: browser lifecycle, page sessions and the sniffing flow.
 
+use crate::ax;
 use crate::extractor::{self, SniffOutcome};
 use crate::waiter;
 use sniff_cdp::browser::BrowserProcess;
 use sniff_cdp::client::CdpClient;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_cdp::session::CdpSession;
+use sniff_core::contrast;
 use sniff_core::{SniffConfig, SniffError, SniffResult};
+use std::time::Duration;
 
 /// A coarse phase of the sniffing pipeline, used to report progress to
 /// long-running consumers (e.g. an MCP server) without coupling the engine
@@ -16,7 +19,11 @@ pub enum Phase {
     Navigating,
     Waiting,
     Extracting,
-    Formatting { nodes: usize },
+    /// Capturing the accessibility tree (only when requested).
+    Accessibility,
+    Formatting {
+        nodes: usize,
+    },
 }
 
 impl Phase {
@@ -26,10 +33,29 @@ impl Phase {
             Phase::Navigating => 0.2,
             Phase::Waiting => 0.4,
             Phase::Extracting => 0.7,
+            Phase::Accessibility => 0.8,
             Phase::Formatting { .. } => 0.9,
         }
     }
 }
+
+/// De-animation pass executed before waits when `config.stabilize` is set:
+/// emulates `prefers-reduced-motion: reduce`, cancels running animations
+/// and injects an override that disables future animations/transitions,
+/// so the captured state is deterministic across runs.
+const STABILIZE_JS: &str = r#"
+(() => {
+  const id = '__sniff_stabilize';
+  if (!document.getElementById(id)) {
+    const st = document.createElement('style');
+    st.id = id;
+    st.textContent = '*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important;animation-delay:0s!important;transition-delay:0s!important}';
+    document.head.appendChild(st);
+  }
+  document.getAnimations().forEach((a) => { try { a.cancel(); } catch (e) {} });
+  return true;
+})()
+"#;
 
 /// A reusable sniffer: owns one browser process + CDP connection and
 /// serves any number of sequential sniffing runs (each gets a fresh
@@ -124,15 +150,52 @@ where
         .navigate(&config.url)
         .await
         .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    if config.stabilize {
+        session
+            .call(
+                "Emulation.setEmulatedMedia",
+                serde_json::json!({
+                    "features": [{ "name": "prefers-reduced-motion", "value": "reduce" }]
+                }),
+            )
+            .await
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+        session
+            .evaluate(STABILIZE_JS, false)
+            .await
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+        // Let the layout settle after animations are cancelled.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
     on_progress(Phase::Waiting).await;
     waiter::wait_for_page(session, config).await?;
     on_progress(Phase::Extracting).await;
-    let outcome = extractor::extract(session, config).await?;
+    let mut outcome = extractor::extract(session, config).await?;
     if outcome.snapshots.is_empty() {
         return Err(SniffError::NoMatch {
             selector: config.selector.clone(),
         });
     }
+
+    if config.output.include_contrast {
+        contrast::apply_contrast_all(&mut outcome.snapshots);
+    }
+
+    if config.output.include_ax || config.ax_tree {
+        on_progress(Phase::Accessibility).await;
+        let capture = ax::capture(
+            session,
+            &outcome.snapshots,
+            config.output.include_ax,
+            config.ax_tree,
+        )
+        .await?;
+        if let Some(facets) = capture.facets {
+            ax::attach_ax(&mut outcome.snapshots, &facets);
+        }
+        outcome.ax_tree = capture.tree;
+    }
+
     let nodes: usize = outcome.snapshots.iter().map(|s| s.node_count()).sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)

@@ -72,6 +72,21 @@ fn node_to_json(
             obj.insert("is_visible".into(), Value::Bool(visible));
         }
     }
+    if let Some(aria) = &snap.aria {
+        obj.insert(
+            "aria".into(),
+            serde_json::to_value(aria).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(contrast) = &snap.contrast {
+        obj.insert(
+            "contrast".into(),
+            serde_json::to_value(contrast).unwrap_or(Value::Null),
+        );
+    }
+    if let Some(ax) = &snap.ax {
+        obj.insert("ax".into(), serde_json::to_value(ax).unwrap_or(Value::Null));
+    }
     let pseudo_value = if snap.pseudo.is_empty() {
         None
     } else {
@@ -436,6 +451,7 @@ pub fn write_output<W: Write>(
             if config.compact {
                 emit_meta_line(writer, &global)?;
             }
+            emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             for snap in &outcome.snapshots {
                 let json = snapshot_to_json(snap, config, global.as_ref());
                 writeln!(
@@ -450,6 +466,7 @@ pub fn write_output<W: Write>(
             if config.compact {
                 emit_meta_line(writer, &global)?;
             }
+            emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             let mut nodes = Vec::new();
             for snap in &outcome.snapshots {
                 flatten(snap, &mut nodes);
@@ -471,14 +488,20 @@ pub fn write_output<W: Write>(
                 .iter()
                 .map(|s| snapshot_to_json(s, config, global.as_ref()))
                 .collect();
-            let document = if compact_meta {
+            let document = if compact_meta || outcome.ax_tree.is_some() {
                 let mut root = Map::new();
                 let mut meta = Map::new();
-                meta.insert(
-                    "css_variables".into(),
-                    vars_to_json(global.as_ref().unwrap()),
-                );
-                root.insert("__meta".into(), Value::Object(meta));
+                if let Some(vars) = global.as_ref() {
+                    if !vars.is_empty() {
+                        meta.insert("css_variables".into(), vars_to_json(vars));
+                    }
+                }
+                if !meta.is_empty() {
+                    root.insert("__meta".into(), Value::Object(meta));
+                }
+                if let Some(ax_tree) = &outcome.ax_tree {
+                    root.insert("__ax_tree".into(), ax_tree.clone());
+                }
                 root.insert("elements".into(), Value::Array(array));
                 Value::Object(root)
             } else {
@@ -526,6 +549,21 @@ fn emit_meta_line<W: Write>(
     Ok(())
 }
 
+/// Emit the captured accessibility subtree as a single `__ax_tree` line
+/// (only when an AX tree capture was requested).
+fn emit_ax_tree_line<W: Write>(writer: &mut W, ax_tree: Option<&Value>) -> SniffResult<()> {
+    if let Some(tree) = ax_tree {
+        let line = serde_json::to_string(&Value::Object({
+            let mut m = Map::new();
+            m.insert("__ax_tree".into(), tree.clone());
+            m
+        }))
+        .map_err(SniffError::from)?;
+        writeln!(writer, "{line}").map_err(io_err)?;
+    }
+    Ok(())
+}
+
 fn io_err(e: std::io::Error) -> SniffError {
     SniffError::Other(format!("io error: {e}"))
 }
@@ -562,6 +600,9 @@ mod tests {
                 stacking_context: false,
             }),
             is_visible: Some(true),
+            aria: None,
+            contrast: None,
+            ax: None,
             styles: ComputedStyles {
                 groups: vec![
                     (
@@ -651,7 +692,9 @@ mod tests {
         let outcome = crate::extractor::SniffOutcome {
             snapshots: snaps,
             global_css_variables: global,
+            ax_tree: None,
         };
+
         let cfg = OutputConfig {
             compact: true,
             ..OutputConfig::default()
@@ -682,6 +725,9 @@ mod tests {
             rect: None,
             metrics: None,
             is_visible: None,
+            aria: None,
+            contrast: None,
+            ax: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![],
@@ -691,6 +737,7 @@ mod tests {
         let outcome = crate::extractor::SniffOutcome {
             snapshots: vec![snap],
             global_css_variables: None,
+            ax_tree: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::JsonLinesFlat,
@@ -714,6 +761,7 @@ mod tests {
         let outcome = crate::extractor::SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: Some(vec![("--x".to_string(), "1".to_string())]),
+            ax_tree: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -793,5 +841,82 @@ mod tests {
             None,
         );
         assert_ne!(full["computed_style_hash"], compact["computed_style_hash"]);
+    }
+
+    #[test]
+    fn serializes_aria_contrast_and_ax_facets() {
+        use sniff_core::types::{AriaInfo, AxInfo, ContrastInfo, TriState};
+        let mut snap = sample_snapshot();
+        snap.aria = Some(AriaInfo {
+            role: Some("button".into()),
+            name: Some("Confirmar".into()),
+            focusable: true,
+            ..Default::default()
+        });
+        snap.contrast = Some(ContrastInfo {
+            ratio: 4.54,
+            foreground: "#2563eb".into(),
+            background: "#ffffff".into(),
+            large: false,
+            aa: TriState::Pass,
+            aaa: TriState::Fail,
+            unknown_reason: None,
+        });
+        snap.ax = Some(AxInfo {
+            role: Some("button".into()),
+            name: Some("Confirmar".into()),
+            ignored: false,
+            ..Default::default()
+        });
+        let cfg = OutputConfig {
+            include_aria: true,
+            include_contrast: true,
+            include_ax: true,
+            ..OutputConfig::default()
+        };
+        let json = snapshot_to_json(&snap, &cfg, None);
+        assert_eq!(json["aria"]["role"], "button");
+        assert_eq!(json["aria"]["focusable"], true);
+        assert_eq!(json["contrast"]["ratio"], 4.54);
+        assert_eq!(json["contrast"]["aa"], "pass");
+        assert_eq!(json["contrast"]["aaa"], "fail");
+        assert_eq!(json["ax"]["role"], "button");
+        assert_eq!(json["ax"]["ignored"], false);
+    }
+
+    #[test]
+    fn ax_tree_emitted_as_dedicated_line_in_jsonl() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: Some(serde_json::json!([
+                {"role": "group", "children": [{"role": "button"}]}
+            ])),
+        };
+        let cfg = OutputConfig::default();
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(first["__ax_tree"][0]["role"], "group");
+        assert_eq!(first["__ax_tree"][0]["children"][0]["role"], "button");
+    }
+
+    #[test]
+    fn json_mode_embeds_ax_tree_document() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: Some(serde_json::json!([{"role": "main"}])),
+        };
+        let cfg = OutputConfig {
+            format: OutputFormat::Json,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["__ax_tree"][0]["role"], "main");
+        assert_eq!(v["elements"].as_array().unwrap().len(), 1);
     }
 }

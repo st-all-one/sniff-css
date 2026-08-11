@@ -54,6 +54,18 @@
           "reason": {
             "type": "string",
             "description": "Evidence-based explanation (e.g. 'contrast fell from 4.5:1 to 2.1:1')."
+          },
+          "measured": {
+            "type": "object",
+            "description": "Optional measured signals backing the reason — only values actually emitted by the tool (contrast.ratio/aa, aria.role/name, ax.role, uniformity deviation).",
+            "properties": {
+              "contrast_ratio": { "type": "number" },
+              "contrast_aa": { "type": "string", "enum": ["pass", "fail", "unknown"] },
+              "aria_role": { "type": "string" },
+              "aria_name": { "type": "string" },
+              "uniformity_deviation": { "type": "string" }
+            },
+            "additionalProperties": false
           }
         }
       }

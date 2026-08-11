@@ -64,7 +64,14 @@ fn tolerance_swallows_small_structural_drift() {
     let head = load_file(&fixture("head.jsonl")).unwrap();
     // Tolerance 10px absorbs the widget width 44 -> 40 drift entirely,
     // leaving only the toggle color change and the added hint.
-    let (deltas, stats) = diff_trees(&base, &head, &DiffOptions { tolerance: 10.0 });
+    let (deltas, stats) = diff_trees(
+        &base,
+        &head,
+        &DiffOptions {
+            tolerance: 10.0,
+            ..DiffOptions::default()
+        },
+    );
     assert_eq!(stats.changed, 1);
     assert_eq!(deltas[0].selector, "button[data-testid=\"toggle\"]");
     assert_eq!(deltas[1].status, "ADDED");

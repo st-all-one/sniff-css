@@ -21,13 +21,23 @@ async fn execute_strategy(session: &CdpSession, strategy: &WaitStrategy) -> Snif
             selector,
             timeout_ms,
         } => {
-            wait_until(
+            match wait_until(
                 session,
                 *timeout_ms,
                 format!("selector `{selector}` to appear"),
                 selector_exists_expr(selector),
             )
             .await
+            {
+                Ok(()) => Ok(()),
+                // The selector never appeared in time: report it as an
+                // empty match rather than a generic timeout, so callers
+                // (and AI agents) get an actionable message.
+                Err(SniffError::Timeout(_)) => Err(SniffError::NoMatch {
+                    selector: selector.clone(),
+                }),
+                Err(e) => Err(e),
+            }
         }
         WaitStrategy::NetworkIdle {
             idle_ms,
@@ -38,13 +48,34 @@ async fn execute_strategy(session: &CdpSession, strategy: &WaitStrategy) -> Snif
             conditions,
             timeout_ms,
         } => {
-            wait_until(
+            match wait_until(
                 session,
                 *timeout_ms,
                 format!("element `{selector}` to be ready"),
                 element_ready_expr(selector, conditions),
             )
             .await
+            {
+                Ok(()) => Ok(()),
+                Err(SniffError::Timeout(_)) => {
+                    // Distinguish "selector never matched" (dynamic/empty
+                    // page) from "matched but never satisfied conditions".
+                    if !eval_selector_exists(session, selector).await? {
+                        Err(SniffError::NoMatch {
+                            selector: selector.clone(),
+                        })
+                    } else {
+                        Err(SniffError::Timeout(format!(
+                            "`{selector}` to become ready — the element exists but conditions \
+                             ({conds}) never held within {timeout_ms}ms (e.g. a carousel whose \
+                             first slide is hidden); try a `delay:N` wait or a longer \
+                             `element-ready` timeout",
+                            conds = describe_conditions(conditions),
+                        )))
+                    }
+                }
+                Err(e) => Err(e),
+            }
         }
         WaitStrategy::FontsLoaded { timeout_ms } => {
             let expr = "document.fonts ? document.fonts.ready.then(() => true) : true";
@@ -105,6 +136,28 @@ fn selector_exists_expr(selector: &str) -> String {
     format!(
         "(() => {{ try {{ return document.querySelector({sel}) !== null; }} catch (e) {{ return false; }} }})()"
     )
+}
+
+/// One-off check of whether `selector` matches anything right now.
+async fn eval_selector_exists(session: &CdpSession, selector: &str) -> SniffResult<bool> {
+    session
+        .evaluate(&selector_exists_expr(selector), false)
+        .await
+        .map(|v| v.as_bool().unwrap_or(false))
+        .map_err(|e| SniffError::Cdp(e.to_string()))
+}
+
+/// Human-readable list of readiness conditions (for error messages).
+fn describe_conditions(conditions: &[ReadyCondition]) -> String {
+    conditions
+        .iter()
+        .map(|c| match c {
+            ReadyCondition::Visible => "visible".to_string(),
+            ReadyCondition::HasSize => "has-size".to_string(),
+            ReadyCondition::Opacity(t) => format!("opacity={t}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn element_ready_expr(selector: &str, conditions: &[ReadyCondition]) -> String {
@@ -206,5 +259,18 @@ mod tests {
     fn ready_expr_escapes_selector() {
         let expr = element_ready_expr(".a\\\"b", &[ReadyCondition::Visible]);
         assert!(expr.contains("\\\""));
+    }
+
+    #[test]
+    fn describe_conditions_is_readable() {
+        assert_eq!(describe_conditions(&[]), "");
+        assert_eq!(
+            describe_conditions(&[ReadyCondition::Visible, ReadyCondition::HasSize]),
+            "visible, has-size"
+        );
+        assert_eq!(
+            describe_conditions(&[ReadyCondition::Opacity(0.5)]),
+            "opacity=0.5"
+        );
     }
 }

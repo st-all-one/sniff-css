@@ -35,7 +35,16 @@ sniff-computed-style \
 | `--compact` | Dedup lógico/físico + supressão de defaults + `css_variables` escopado → ~55% menos tokens. |
 | `--custom-props` | Captura as variáveis CSS (`--*`); global no `__meta`, overrides por nó. |
 | `--stable-key data-testid` | Seletores estáveis entre deploys → diff confiável. |
+| `--stabilize` | Páginas animadas/carrosséis: congela `animation`/`transition` → snapshot determinístico. |
 | `--depth N` | Subárvore controlada; `0` = só o elemento. |
+
+Flags de a11y (opt-in, adicionam facetas medidas):
+
+| Flag | Facet emitido |
+|---|---|
+| `--contrast` | `contrast` por nó: ratio WCAG medido + AA/AAA (normal vs. texto grande); `unknown` para fundo transparente/gradiente/imagem. |
+| `--ax` | `ax` por nó: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`...). |
+| `--ax-tree` | Linha `__ax_tree` com a subárvore AX completa dos elementos casados (implica `--ax`). |
 
 Saída (padrão `jsonl`, árvore aninhada):
 
@@ -45,14 +54,22 @@ Saída (padrão `jsonl`, árvore aninhada):
  "path":"div[data-testid=\"form\"]","depth":0,
  "is_visible":true,
  "computed_style_hash":"afbd33ba764bb8d4",
+ "aria":{"role":"form","name":"","focusable":false,"has_text":false},
  "rect":{...},"metrics":{...},
  "styles":{"box_model":{...},"visual":{...}, ...},
  "children":[/* aninhado */]}
 ```
 
+> O `sniff-check` (ou a tool MCP `run_checks`) avalia o snapshot **sem IA**:
+> `--uniform` acha o "card estranho" entre instâncias irmãs; `--rules` emite
+> PASS/WARN/FAIL para contraste, alvo 24x24, indicador de foco, focusables
+> ocultos e alt vazio em imagens grandes.
+
 Campos derivados que a IA **não precisa inferir**:
 
-- `is_visible` — derivado de `display`/`visibility`/`opacity`/rect.
+- `is_visible` — derivado de `display`/`visibility`/`opacity`/rect **com interseção com o viewport**:
+  elementos sr-only ou posicionados fora da tela (ex.: skip-links de 1×1px em `-1,-1`)
+  são marcados como **invisíveis**; `position: fixed` visível no viewport → visível.
 - `computed_style_hash` — xxHash64 dos estilos efetivos; igual entre runs
   idênticos (mesmo modo), diferente quando algo mudou.
 - `id` / `parent_id` — pre-order; use `jsonl-flat` quando quiser um nó por linha.
@@ -69,10 +86,14 @@ sniff-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 O que sai: só os nós que mudaram.
 
 - `CHANGED` → `changes` com `before`/`after` por propriedade (`styles`, `pseudo`,
-  `rect`, `metrics`, `is_visible`).
+  `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_visible`).
 - `ADDED`/`REMOVED` → `snapshot` completo do nó.
 - `--tolerance 0.5` absorve jitter de subpixel (`16px`→`16.2px`); unidades
   diferentes (`16px` vs `16rem`) **nunca** são consideradas iguais.
+- `--ignore-props transform,translate,opacity` — props voláteis/animadas não
+  marcam o nó como changed (uso com `--stabilize`).
+- `--no-structural` — suprime `ADDED`/`REMOVED` (reporta só `CHANGED`); certo
+  para feeds com contagem de itens variável.
 - `--stats-only` → só `nodes: N -> M | changed/added/removed` (varredura em escala).
 
 ```bash
@@ -80,6 +101,31 @@ O que sai: só os nós que mudaram.
 sniff-diff base.jsonl head.jsonl --stats-only 2>&1
 # nodes: 14 -> 14 | changed: 1 | added: 0 | removed: 0
 ```
+
+## 2b. Descoberta determinística (`sniff-check`)
+
+Avalia um snapshot **sem IA** e offline:
+
+```bash
+# o "card estranho": instâncias irmãs do mesmo selector que desviam da norma
+sniff-check --input head.jsonl --uniform --tolerance 0.5
+
+# regras derivadas (PASS/WARN/FAIL): contraste medido, alvo 24x24, foco, alt
+sniff-check --input head.jsonl --rules
+```
+
+Saída JSONL com evidência medida:
+
+```jsonc
+{"check":"contrast-aa","selector":"footer .text","tag":"P","status":"fail",
+ "evidence":"ratio 2.1:1 on #212529 against #020842 (need 4.5:1 text AA)"}
+{"check":"uniformity","selector":"div.card:nth-child(3)","status":"fail",
+ "evidence":"deviates from the 3/3 group norm: box_model.height: 80px (norm 120px ±40.00)"}
+{"__check_summary":{"uniformity_instances":3,"uniformity_outliers":1,"rules":12}}
+```
+
+O resultado vira **evidência** para o `reason` da avaliação IA (etapa 3) —
+a IA cita fatos medidos, não chutes.
 
 Exemplo de linha de delta:
 
@@ -125,16 +171,21 @@ Preferencial para agentes: exponha `sniff-mcp` como servidor MCP (stdio) em vez
 de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece:
 
 1. **`sniff_page`** — captura (args: url, selector, depth, categories, compact,
-   custom_props, stable_key, pseudo, wait, viewport, format) e retorna JSONL.
+   custom_props, stable_key, pseudo, wait, viewport, format, stabilize,
+   contrast, include_ax, ax_tree) e retorna JSONL.
    Durante a execução envia `notifications/progress` por fase:
    `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
-   `formatting N nodes` (streaming assíncrono, o pipeline não bloqueia).
+   `capturing accessibility tree` (se `--ax`) → `formatting N nodes`.
 2. **`diff_snapshots`** — diff determinístico de dois JSONL inline
-   (args: base_jsonl, head_jsonl, tolerance) → delta + `__diff_summary`.
-3. **`list_categories`** — categorias aceitas.
+   (args: base_jsonl, head_jsonl, tolerance, ignore_props, ignore_structural)
+   → delta + `__diff_summary`.
+3. **`run_checks`** — checks determinísticos offline sobre um JSONL inline
+   (args: jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
+4. **`list_categories`** — categorias aceitas.
 
-Recursos embutidos: `sniff://prompts/eval` (prompt) e `sniff://schemas/eval`
-(schema) — leia-os em vez de copiar arquivos.
+Recursos embutidos: `sniff://prompts/eval` (prompt), `sniff://schemas/eval`
+(schema) e `sniff://guides/golden` (padrão ouro de execução) — leia-os em vez
+de copiar arquivos.
 
 Config do Claude Desktop:
 
@@ -178,9 +229,15 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
 5. **Espere a página estabilizar** — use `--wait` (network-idle, element-ready,
    fonts-loaded) para capturar sempre no mesmo estado; `document.fonts.ready`
    evita variação de métricas por troca de fonte.
-6. **Conecte no seu dev server** — `--connect ws://127.0.0.1:9222/devtools/browser/<id>`
+6. **Páginas dinâmicas (carrosséis, lazy-load)** — um elemento pode existir no
+   load e **sumir depois** (ex.: `.footer-widget-wrapper h3` → 4 H3s no load,
+   0 após 500ms). Se o `element-ready`/`selector` padrão falhar com timeout,
+   capture a **subárvore estável** (`selector=footer --depth 2`) ou use
+   `--wait delay:N`. O primeiro slide oculto de um carrossel também faz o
+   `element-ready` falhar mesmo com o conteúdo visível depois.
+7. **Conecte no seu dev server** — `--connect ws://127.0.0.1:9222/devtools/browser/<id>`
    evita subir outro Chrome e captura exatamente o que você está vendo.
-7. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_visible`
+8. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_visible`
    são parte valiosa do sinal de CLS/visibilidade.
 
 ## Referência rápida
@@ -189,7 +246,13 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
 |---|---|
 | Capturar | `sniff-computed-style -u URL -s SEL [flags]` |
 | Achatado | `--output jsonl-flat` |
+| Estabilizar animações | `--stabilize` |
+| A11y medida | `--contrast --ax` ou `--ax-tree` |
 | Resumo de mudanças | `sniff-diff base.jsonl head.jsonl --stats-only` |
+| Ignorar props voláteis | `sniff-diff ... --ignore-props transform,opacity` |
+| Listas de contagem variável | `sniff-diff ... --no-structural` |
 | Delta completo | `sniff-diff base.jsonl head.jsonl > delta.jsonl` |
+| Checagens determinísticas | `sniff-check --input snap.jsonl --uniform --rules` |
 | Schema da resposta IA | `docs/sniff-eval.schema.json` |
 | Prompt de avaliação | `docs/eval-prompt.md` |
+| Padrão ouro de execução | `docs/golden-run.md` |

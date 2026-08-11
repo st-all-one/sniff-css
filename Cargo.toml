@@ -6,6 +6,7 @@ members = [
     "crates/sniff-engine",
     "crates/sniff-cli",
     "crates/sniff-diff",
+    "crates/sniff-check",
     "crates/sniff-mcp",
 ]
 

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .skip { position: absolute; top: -1px; left: -1px; width: 1px; height: 1px; overflow: hidden; }
+  nav { background: #111; padding: 8px; }
+  nav a { color: #fff; }
+  button.save { background-color: rgb(37, 99, 235); color: rgb(255, 255, 255); padding: 8px 12px; }
+  p.dim { color: rgb(153, 153, 153); background-color: rgb(255, 255, 255); }
+  p.good { color: rgb(37, 99, 235); background-color: rgb(255, 255, 255); }
+  img.photo { width: 200px; height: 100px; }
+</style>
+</head>
+<body>
+  <a class="skip" href="#main">Pular para o conteúdo</a>
+  <nav aria-label="Principal">
+    <a href="/">Home</a>
+  </nav>
+  <main id="main">
+    <h1>Título da página</h1>
+    <button class="save" aria-expanded="false">Salvar alterações</button>
+    <p class="dim">texto de baixo contraste</p>
+    <p class="good">texto de bom contraste</p>
+    <img class="photo" src="foto.jpg">
+  </main>
+</body>
+</html>

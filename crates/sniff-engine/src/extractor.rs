@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use sniff_cdp::session::CdpSession;
 use sniff_core::properties::StyleCategory;
 use sniff_core::types::{
-    ComputedProperty, ComputedStyles, ElementMetrics, ElementSnapshot, PseudoStyles, Rect,
+    AriaInfo, ComputedProperty, ComputedStyles, ElementMetrics, ElementSnapshot, PseudoStyles, Rect,
 };
 use sniff_core::{SniffConfig, SniffError, SniffResult};
 
@@ -137,6 +137,166 @@ const EXTRACT_JS: &str = r#"
     return false;
   }
 
+  function implicitRole(el) {
+    const t = el.tagName;
+    switch (t) {
+      case 'A': case 'AREA': return el.hasAttribute('href') ? 'link' : null;
+      case 'BUTTON': return 'button';
+      case 'INPUT': {
+        const ty = (el.getAttribute('type') || 'text').toLowerCase();
+        if (ty === 'button' || ty === 'submit' || ty === 'reset' || ty === 'image') return 'button';
+        if (ty === 'checkbox') return 'checkbox';
+        if (ty === 'radio') return 'radio';
+        if (ty === 'range') return 'slider';
+        if (ty === 'number') return 'spinbutton';
+        if (ty === 'search') return 'searchbox';
+        if (ty === 'email' || ty === 'url' || ty === 'tel') return 'textbox';
+        // file/color/date/time/week/month/datetime-local/password/hidden -> no role
+        return null;
+      }
+      case 'SELECT':
+        return (el.hasAttribute('multiple') || parseInt(el.getAttribute('size') || '0', 10) > 1)
+          ? 'listbox' : 'combobox';
+      case 'OPTION': return 'option';
+      case 'OPTGROUP': return 'group';
+      case 'TEXTAREA': return 'textbox';
+      case 'HEADER': case 'FOOTER':
+        // banner/contentinfo only outside article/aside/main/nav/section.
+        return el.closest('article,aside,main,nav,section') ? null
+          : (t === 'HEADER' ? 'banner' : 'contentinfo');
+      case 'NAV': return 'navigation';
+      case 'MAIN': return 'main';
+      case 'ASIDE': return 'complementary';
+      case 'FORM': return 'form';
+      case 'SEARCH': return 'search';
+      case 'ARTICLE': return 'article';
+      case 'SECTION':
+        return (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title'))
+          ? 'region' : null;
+      case 'UL': case 'OL': case 'MENU': return 'list';
+      case 'LI': return 'listitem';
+      case 'DL': return 'list';
+      case 'DT': return 'term';
+      case 'DD': return 'definition';
+      case 'DFN': return 'term';
+      case 'TABLE': return 'table';
+      case 'CAPTION': return null;
+      case 'COLGROUP': case 'THEAD': case 'TBODY': case 'TFOOT': return 'rowgroup';
+      case 'COL': return 'column';
+      case 'TR': return 'row';
+      case 'TD': return 'cell';
+      case 'TH': return el.getAttribute('scope') === 'row' ? 'rowheader' : 'columnheader';
+      case 'IMG':
+        return el.hasAttribute('alt') && el.getAttribute('alt') === '' ? 'presentation' : 'img';
+      case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6': return 'heading';
+      case 'HGROUP': return 'group';
+      case 'FIGURE': return 'figure';
+      case 'FIGCAPTION': return null;
+      case 'FIELDSET': return 'group';
+      case 'LEGEND': return null;
+      case 'DIALOG': return 'dialog';
+      case 'SUMMARY': return 'button';
+      case 'DETAILS': return 'group';
+      case 'HR': return 'separator';
+      case 'PROGRESS': return 'progressbar';
+      case 'METER': return 'meter';
+      case 'OUTPUT': return 'status';
+      case 'MARK': return 'mark';
+      case 'STRONG': return 'strong';
+      case 'EM': return 'emphasis';
+      case 'SUB': return 'subscript';
+      case 'SUP': return 'superscript';
+      case 'CODE': return 'code';
+      case 'BLOCKQUOTE': return 'blockquote';
+      case 'TIME': return 'time';
+      case 'P': return 'paragraph';
+      case 'MATH': return 'math';
+      case 'CANVAS': return (el.textContent || '').trim() ? 'img' : null;
+      case 'IFRAME': return (el.getAttribute('title') || '').trim() ? 'document' : null;
+      case 'EMBED': return 'embedded';
+      case 'AUDIO': case 'VIDEO': return el.hasAttribute('controls') ? 'group' : null;
+      default: return null;
+    }
+  }
+
+  function textOf(el) {
+    const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    return t.slice(0, 200);
+  }
+
+  function accessibleName(el) {
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) {
+      const parts = lb.split(/\s+/)
+        .map((id) => { const n = document.getElementById(id); return n ? textOf(n) : ''; })
+        .filter(Boolean).join(' ');
+      if (parts) return parts;
+    }
+    const label = el.getAttribute('aria-label');
+    if (label && label.trim()) return label.trim();
+    const alt = el.getAttribute('alt');
+    if (alt !== null && (el.tagName === 'IMG' || el.tagName === 'AREA' ||
+        (el.tagName === 'INPUT' && el.getAttribute('type') === 'image'))) return alt;
+    const title = el.getAttribute('title');
+    if (title) return title;
+    if (el.tagName === 'INPUT' && el.getAttribute('type') === 'submit') return el.value || '';
+    const ph = el.getAttribute('placeholder');
+    if (ph) return ph;
+    const role = el.getAttribute('role') || implicitRole(el) || '';
+    if (['button', 'link', 'heading', 'tab', 'menuitem', 'checkbox', 'radio', 'option',
+         'searchbox', 'textbox', 'combobox'].indexOf(role) >= 0) {
+      const t = textOf(el);
+      if (t) return t;
+    }
+    return '';
+  }
+
+  function isFocusable(el) {
+    if (el.disabled === true) return false;
+    const ti = el.getAttribute('tabindex');
+    if (ti !== null && ti !== '') {
+      const n = parseInt(ti, 10);
+      if (!isNaN(n) && n >= 0) return true;
+    }
+    if (el.hasAttribute('hidden')) return false;
+    const t = el.tagName;
+    if (t === 'A' || t === 'AREA') return el.hasAttribute('href');
+    if (t === 'BUTTON' || t === 'SELECT' || t === 'TEXTAREA' || t === 'SUMMARY' || t === 'IFRAME') return true;
+    if (t === 'INPUT') return (el.getAttribute('type') || 'text') !== 'hidden';
+    if (t === 'DETAILS') return true;
+    return false;
+  }
+
+  function ariaOf(el) {
+    const out = {};
+    const role = el.getAttribute('role');
+    const implicit = implicitRole(el);
+    if (role) out.role = role; else if (implicit) out.role = implicit;
+    const name = accessibleName(el);
+    if (name) out.name = name;
+    out.focusable = isFocusable(el);
+    const attrs = [
+      ['aria-hidden', 'ariaHidden'], ['aria-expanded', 'ariaExpanded'],
+      ['aria-checked', 'ariaChecked'], ['aria-controls', 'ariaControls'],
+      ['aria-labelledby', 'ariaLabelledby'], ['aria-describedby', 'ariaDescribedby'],
+      ['lang', 'lang'], ['alt', 'alt'], ['title', 'title']
+    ];
+    for (let i = 0; i < attrs.length; i++) {
+      const v = el.getAttribute(attrs[i][0]);
+      if (v !== null && v !== '') out[attrs[i][1]] = v;
+    }
+    out.htmlHidden = el.hasAttribute('hidden');
+    out.disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true';
+    out.hasText = (() => {
+      const nodes = el.childNodes;
+      for (let i = 0; i < nodes.length; i++) {
+        if (nodes[i].nodeType === 3 && (nodes[i].textContent || '').trim()) return true;
+      }
+      return false;
+    })();
+    return out;
+  }
+
   function buildStyles(el, cs) {
     const result = {};
     const keys = Object.keys(categories);
@@ -219,7 +379,12 @@ const EXTRACT_JS: &str = r#"
     }
     if (opts.includeVisibility) {
       node.isVisible = cs.display !== 'none' && cs.visibility !== 'hidden' &&
-        parseFloat(cs.opacity) > 0 && (rect.width > 0 || rect.height > 0);
+        parseFloat(cs.opacity) > 0 && (rect.width > 0 || rect.height > 0) &&
+        rect.x + rect.width > 0 && rect.y + rect.height > 0 &&
+        rect.x < window.innerWidth && rect.y < window.innerHeight;
+    }
+    if (opts.includeAria) {
+      node.aria = ariaOf(el);
     }
     node.styles = buildStyles(el, cs);
     if (pseudo.length) {
@@ -267,6 +432,9 @@ const EXTRACT_JS: &str = r#"
 pub struct SniffOutcome {
     pub snapshots: Vec<ElementSnapshot>,
     pub global_css_variables: Option<Vec<(String, String)>>,
+    /// Full accessibility subtree (CDP `Accessibility` domain) for the
+    /// matched elements, when `ax_tree` capture was requested.
+    pub ax_tree: Option<Value>,
 }
 
 /// Run the extraction pass and convert the returned JSON to snapshots.
@@ -298,6 +466,7 @@ fn build_args(config: &SniffConfig) -> Value {
         "includeRect": config.output.include_rect,
         "includeMetrics": config.output.include_metrics,
         "includeVisibility": config.output.include_visibility,
+        "includeAria": config.output.include_aria,
         "normalizeColors": config.output.normalize_colors,
         "customProps": config.include_custom_properties,
         "stableKey": config.stable_key,
@@ -388,6 +557,7 @@ fn parse_results(value: &Value, _config: &SniffConfig) -> SniffResult<SniffOutco
     Ok(SniffOutcome {
         snapshots,
         global_css_variables,
+        ax_tree: None,
     })
 }
 
@@ -414,6 +584,9 @@ fn parse_node(v: &Value) -> ElementSnapshot {
         rect: v.get("rect").map(parse_rect),
         metrics: v.get("metrics").map(parse_metrics),
         is_visible: v.get("isVisible").and_then(Value::as_bool),
+        aria: v.get("aria").map(parse_aria),
+        contrast: None,
+        ax: None,
         styles: parse_styles(v.get("styles").unwrap_or(&Value::Null)),
         pseudo: v
             .get("pseudo")
@@ -432,6 +605,28 @@ fn parse_node(v: &Value) -> ElementSnapshot {
             .and_then(Value::as_array)
             .map(|arr| arr.iter().map(parse_node).collect())
             .unwrap_or_default(),
+    }
+}
+
+fn parse_aria(v: &Value) -> AriaInfo {
+    let str_opt = |key: &str| v.get(key).and_then(Value::as_str).map(String::from);
+    let flag = |key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
+    AriaInfo {
+        role: str_opt("role"),
+        name: str_opt("name"),
+        focusable: flag("focusable"),
+        aria_hidden: str_opt("ariaHidden"),
+        aria_expanded: str_opt("ariaExpanded"),
+        aria_checked: str_opt("ariaChecked"),
+        aria_controls: str_opt("ariaControls"),
+        aria_labelledby: str_opt("ariaLabelledby"),
+        aria_describedby: str_opt("ariaDescribedby"),
+        lang: str_opt("lang"),
+        alt: str_opt("alt"),
+        title: str_opt("title"),
+        html_hidden: flag("htmlHidden"),
+        disabled: flag("disabled"),
+        has_text: flag("hasText"),
     }
 }
 
@@ -533,6 +728,7 @@ mod tests {
             "depth": 0,
             "rect": {"x": 1.0, "y": 2.0, "width": 100.0, "height": 50.0},
             "metrics": {"z_index": "10", "stacking_context": true},
+            "aria": {"role": "link", "name": "Go", "focusable": true, "ariaHidden": "false"},
             "styles": {
                 "box_model": {"width": "100px"},
                 "layout": {"display": "block"}
@@ -549,6 +745,27 @@ mod tests {
         assert_eq!(snap.styles.groups.len(), 2);
         assert_eq!(snap.children.len(), 1);
         assert_eq!(snap.children[0].depth, 1);
+        let aria = snap.aria.expect("aria parsed");
+        assert_eq!(aria.role.as_deref(), Some("link"));
+        assert_eq!(aria.name.as_deref(), Some("Go"));
+        assert!(aria.focusable);
+        assert_eq!(aria.aria_hidden.as_deref(), Some("false"));
+        assert_eq!(snap.contrast, None);
+        assert_eq!(snap.ax, None);
+    }
+
+    #[test]
+    fn parse_aria_missing_fields_default() {
+        let snap = parse_node(&json!({
+            "tag": "DIV", "selector": "div",
+            "aria": {"focusable": false, "htmlHidden": false, "disabled": false},
+            "styles": {}, "children": []
+        }));
+        let aria = snap.aria.expect("aria facet parsed");
+        assert_eq!(aria.role, None);
+        assert!(!aria.focusable);
+        assert!(!aria.html_hidden);
+        assert!(!aria.disabled);
     }
 
     #[test]
@@ -598,6 +815,8 @@ mod tests {
         assert!(js.contains("opts.normalizeColors"));
         assert!(js.contains("opts.includeVisibility"));
         assert!(js.contains("opts.stableKey"));
+        assert!(js.contains("opts.includeAria"));
+        assert!(js.contains("ariaOf(el)"));
         assert!(js.contains("filter.minWidth"));
         assert!(js.contains("filter.minHeight"));
         assert!(js.contains("filter.excludeSelectors"));
@@ -629,5 +848,93 @@ mod tests {
         let js = EXTRACT_JS.to_string();
         assert!(js.contains("opts.stableKey"));
         assert!(js.contains("el.getAttribute(sk)"));
+    }
+
+    #[test]
+    fn implicit_role_covers_arria_spec_tags() {
+        let js = EXTRACT_JS.to_string();
+        // The implicit-role switch must map the HTML-ARIA implicit roles the
+        // accessibility guide documents. Guards against drift when the map
+        // is enriched.
+        let expected: &[(&str, &str)] = &[
+            ("A", "case 'A': case 'AREA':"),
+            ("BUTTON", "case 'BUTTON': return 'button'"),
+            ("INPUT types", "'checkbox'"),
+            ("SELECT multiple -> listbox", "'listbox' : 'combobox'"),
+            ("OPTION", "case 'OPTION': return 'option'"),
+            ("OPTGROUP", "case 'OPTGROUP': return 'group'"),
+            (
+                "HEADER/FOOTER scoping",
+                "el.closest('article,aside,main,nav,section')",
+            ),
+            ("NAV", "case 'NAV': return 'navigation'"),
+            ("MAIN", "case 'MAIN': return 'main'"),
+            ("ASIDE", "case 'ASIDE': return 'complementary'"),
+            ("FORM", "case 'FORM': return 'form'"),
+            ("SEARCH", "case 'SEARCH': return 'search'"),
+            ("ARTICLE", "case 'ARTICLE': return 'article'"),
+            ("SECTION->region", "'region' : null"),
+            (
+                "UL/OL/MENU",
+                "case 'UL': case 'OL': case 'MENU': return 'list'",
+            ),
+            ("LI", "case 'LI': return 'listitem'"),
+            ("DL", "case 'DL': return 'list'"),
+            ("DT->term", "case 'DT': return 'term'"),
+            ("DD->definition", "case 'DD': return 'definition'"),
+            ("DFN->term", "case 'DFN': return 'term'"),
+            ("TABLE", "case 'TABLE': return 'table'"),
+            (
+                "COLGROUP/THEAD/TBODY/TFOOT->rowgroup",
+                "case 'COLGROUP': case 'THEAD': case 'TBODY': case 'TFOOT': return 'rowgroup'",
+            ),
+            ("COL->column", "case 'COL': return 'column'"),
+            ("TR->row", "case 'TR': return 'row'"),
+            ("TD->cell", "case 'TD': return 'cell'"),
+            (
+                "TH scope",
+                "el.getAttribute('scope') === 'row' ? 'rowheader' : 'columnheader'",
+            ),
+            ("IMG alt=\"\"->presentation", "'presentation' : 'img'"),
+            (
+                "H1-H6->heading",
+                "case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6': return 'heading'",
+            ),
+            ("FIGURE->figure", "case 'FIGURE': return 'figure'"),
+            ("FIELDSET->group", "case 'FIELDSET': return 'group'"),
+            ("DIALOG", "case 'DIALOG': return 'dialog'"),
+            ("SUMMARY->button", "case 'SUMMARY': return 'button'"),
+            ("DETAILS->group", "case 'DETAILS': return 'group'"),
+            ("HR->separator", "case 'HR': return 'separator'"),
+            (
+                "PROGRESS->progressbar",
+                "case 'PROGRESS': return 'progressbar'",
+            ),
+            ("METER->meter", "case 'METER': return 'meter'"),
+            ("OUTPUT->status", "case 'OUTPUT': return 'status'"),
+            ("MARK->mark", "case 'MARK': return 'mark'"),
+            ("STRONG->strong", "case 'STRONG': return 'strong'"),
+            ("EM->emphasis", "case 'EM': return 'emphasis'"),
+            ("SUB->subscript", "case 'SUB': return 'subscript'"),
+            ("SUP->superscript", "case 'SUP': return 'superscript'"),
+            ("CODE->code", "case 'CODE': return 'code'"),
+            (
+                "BLOCKQUOTE->blockquote",
+                "case 'BLOCKQUOTE': return 'blockquote'",
+            ),
+            ("TIME->time", "case 'TIME': return 'time'"),
+            ("P->paragraph", "case 'P': return 'paragraph'"),
+            ("MATH->math", "case 'MATH': return 'math'"),
+            ("CANVAS fallback", "case 'CANVAS':"),
+            ("IFRAME title->document", "case 'IFRAME':"),
+            ("EMBED->embedded", "case 'EMBED': return 'embedded'"),
+            ("AUDIO/VIDEO controls->group", "case 'AUDIO': case 'VIDEO':"),
+        ];
+        for (label, needle) in expected {
+            assert!(
+                js.contains(needle),
+                "implicitRole must map {label} (missing `{needle}`)"
+            );
+        }
     }
 }

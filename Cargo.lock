@@ -875,6 +875,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sniff-check"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "sniff-core",
+ "sniff-diff",
+ "thiserror",
+]
+
+[[package]]
 name = "sniff-computed-style"
 version = "0.1.0"
 dependencies = [
@@ -934,6 +947,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sniff-cdp",
+ "sniff-check",
  "sniff-core",
  "sniff-diff",
  "sniff-engine",

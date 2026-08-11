@@ -1,11 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# Instala os binários sniff-computed-style, sniff-diff e sniff-mcp em
-# ~/.local/bin e garante que o diretório esteja no PATH (Linux/macOS).
+# Instala os binários sniff-computed-style, sniff-diff, sniff-check e
+# sniff-mcp em ~/.local/bin e garante que o diretório esteja no PATH
+# (Linux/macOS).
 
 BIN_SNIFF="sniff-computed-style"
 BIN_DIFF="sniff-diff"
+BIN_CHECK="sniff-check"
 BIN_MCP="sniff-mcp"
 INSTALL_DIR="${HOME}/.local/bin"
 
@@ -91,22 +93,25 @@ fi
 
 [[ -x "target/release/${BIN_SNIFF}" ]] || err "Binário ${BIN_SNIFF} não encontrado em target/release. Rode sem --no-build."
 [[ -x "target/release/${BIN_DIFF}" ]] || err "Binário ${BIN_DIFF} não encontrado em target/release. Rode sem --no-build."
+[[ -x "target/release/${BIN_CHECK}" ]] || err "Binário ${BIN_CHECK} não encontrado em target/release. Rode sem --no-build."
 [[ -x "target/release/${BIN_MCP}" ]] || err "Binário ${BIN_MCP} não encontrado em target/release. Rode sem --no-build."
 
 info "Instalando em ${INSTALL_DIR}/..."
 mkdir -p "$INSTALL_DIR"
 cp "target/release/${BIN_SNIFF}" "${INSTALL_DIR}/${BIN_SNIFF}"
 cp "target/release/${BIN_DIFF}" "${INSTALL_DIR}/${BIN_DIFF}"
+cp "target/release/${BIN_CHECK}" "${INSTALL_DIR}/${BIN_CHECK}"
 cp "target/release/${BIN_MCP}" "${INSTALL_DIR}/${BIN_MCP}"
-ok "Binários: ${INSTALL_DIR}/${BIN_SNIFF}, ${INSTALL_DIR}/${BIN_DIFF}, ${INSTALL_DIR}/${BIN_MCP}"
+ok "Binários: ${INSTALL_DIR}/${BIN_SNIFF}, ${INSTALL_DIR}/${BIN_DIFF}, ${INSTALL_DIR}/${BIN_CHECK}, ${INSTALL_DIR}/${BIN_MCP}"
 
 setup_path
 check_chrome
 
 echo ""
 info "Pronto! Execute no terminal:"
-echo "  sniff-computed-style -u <URL> -s <selector> --stable-key data-testid --compact"
+echo "  sniff-computed-style -u <URL> -s <selector> --stable-key data-testid --compact --stabilize"
 echo "  sniff-diff base.jsonl head.jsonl --tolerance 0.5"
+echo "  sniff-check --input snap.jsonl --uniform --rules"
 echo "  sniff-mcp   # servidor MCP (stdio) para agentes de IA"
 echo ""
-info "Guia para IA: docs/ai-usage.md | Prompt de avaliação: docs/eval-prompt.md"
+info "Guia para IA: docs/ai-usage.md | Padrão ouro: docs/golden-run.md"

@@ -6,10 +6,12 @@
   .card { width: 300px; padding: 16px; background-color: rgb(37, 99, 235); color: rgb(255, 255, 255); font-size: 16px; display: inline-flex; gap: 8px; align-items: center; }
   .card .icon { width: 24px; height: 24px; background-color: rgba(255, 255, 255, 0.2); }
   .hidden { display: none; }
+  .sr-focusable { position: absolute; width: 1px; height: 1px; top: -1px; left: -1px; overflow: hidden; }
 </style>
 </head>
 <body>
-  <main>
+  <a class="sr-focusable" href="#main">Pular para o conteúdo</a>
+  <main id="main">
     <div class="card" id="primary">
       <span class="icon"></span>
       <span class="label">Hello</span>

@@ -105,7 +105,9 @@ Reduz tokens em ~55% em três frentes (implementadas em `output.rs`):
 - `is_visible` é calculado **na página** durante a extração, reutilizando o único
   `getComputedStyle` por elemento (refatorado em `buildNode`) + `getBoundingClientRect`
   já exigido por `rect` — custo marginal ≈ zero. Cobre `display`, `visibility`,
-  `opacity` e dimensões do rect.
+  `opacity`, dimensões do rect e **interseção com o viewport** (`x+width>0 && y+height>0
+  && x<vw && y<vh`), de modo que elementos sr-only/off-viewport (1×1px fora da tela)
+  não são reportados como visíveis.
 - `computed_style_hash` é um **xxHash64** (feature `xxh3` do `xxhash-rust`, ~20–30 GB/s,
   ~40× mais rápido que SHA-1) calculado em `output.rs` sobre a serialização canônica
   dos estilos efetivos de cada nó (estável graças à ordem determinística do `Map` com

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @keyframes slide {
+    from { transform: translateX(0px); }
+    to   { transform: translateX(-22px); }
+  }
+  .mover {
+    width: 120px;
+    height: 80px;
+    background-color: rgb(37, 99, 235);
+    animation: slide 0.4s linear infinite;
+  }
+</style>
+</head>
+<body>
+  <div class="mover" id="mover"></div>
+</body>
+</html>

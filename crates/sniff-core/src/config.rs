@@ -36,6 +36,15 @@ pub struct SniffConfig {
     /// (e.g. `data-testid`) over the DOM `id` as the stable anchor, so
     /// the output can be matched across deploys that change generated ids.
     pub stable_key: Option<String>,
+    /// Freeze animations and transitions before capture: pauses running
+    /// animations, injects `animation/transition: none !important` and
+    /// emulates `prefers-reduced-motion: reduce`, making the captured
+    /// state deterministic across runs (no mid-animation jitter).
+    pub stabilize: bool,
+    /// Capture the full browser-computed accessibility subtree (CDP
+    /// `Accessibility` domain) for the matched elements and emit it as
+    /// the `__ax_tree` document. Implies `output.include_ax`.
+    pub ax_tree: bool,
 }
 
 impl Default for SniffConfig {
@@ -57,6 +66,8 @@ impl Default for SniffConfig {
             }),
             include_custom_properties: false,
             stable_key: None,
+            stabilize: false,
+            ax_tree: false,
         }
     }
 }
@@ -119,7 +130,9 @@ impl WaitStrategy {
         vec![
             Self::Selector {
                 selector: selector.clone(),
-                timeout_ms: 30_000,
+                // Keep default waits short so failures are fast and
+                // actionable; long waits are passed explicitly.
+                timeout_ms: 10_000,
             },
             Self::NetworkIdle {
                 idle_ms: 400,
@@ -128,7 +141,7 @@ impl WaitStrategy {
             Self::ElementReady {
                 selector,
                 conditions: vec![ReadyCondition::Visible, ReadyCondition::HasSize],
-                timeout_ms: 30_000,
+                timeout_ms: 10_000,
             },
         ]
     }
@@ -194,6 +207,14 @@ pub struct OutputConfig {
     /// Emit `computed_style_hash` per node: a fast 64-bit checksum of the
     /// effective styles, for change detection between runs.
     pub include_style_hash: bool,
+    /// Emit a resolved `aria` facet per node (role, accessible name,
+    /// focusable, aria-* attributes), computed in-page.
+    pub include_aria: bool,
+    /// Derive and emit a measured WCAG `contrast` facet per node.
+    pub include_contrast: bool,
+    /// Capture the browser-computed accessibility-tree node (`ax`) per
+    /// element via the CDP `Accessibility` domain.
+    pub include_ax: bool,
 }
 
 impl Default for OutputConfig {
@@ -209,6 +230,9 @@ impl Default for OutputConfig {
             compact: false,
             include_visibility: true,
             include_style_hash: true,
+            include_aria: true,
+            include_contrast: false,
+            include_ax: false,
         }
     }
 }
@@ -244,7 +268,14 @@ pub fn parse_wait_strategy(spec: &str) -> Result<WaitStrategy, SniffError> {
     let name = parts.next().unwrap_or("").trim();
     let mut args: Vec<&str> = parts.map(str::trim).collect();
 
-    let err = |e: String| SniffError::InvalidWaitStrategy(e);
+    let err = |e: String| {
+        SniffError::InvalidWaitStrategy(format!(
+            "{e} — wait format: delay:<ms> | network-idle:<idle_ms>[:<timeout_ms>] | \
+             fonts-loaded[:<timeout_ms>] | selector:<sel>[:<timeout_ms>] | \
+             element-ready:<sel>:<visible,has-size[,opacity=N]>[:<timeout_ms>] | \
+             app-flag:<flag>[:<timeout_ms>]"
+        ))
+    };
     let take_arg = |args: &mut Vec<&str>, what: &str| -> Result<String, SniffError> {
         if args.is_empty() {
             Err(err(format!("missing {what} for `{name}` strategy")))
@@ -341,8 +372,15 @@ fn parse_ready_condition(input: &str) -> Result<ReadyCondition, SniffError> {
         s if s.starts_with("opacity=") => s["opacity=".len()..]
             .parse::<f64>()
             .map(ReadyCondition::Opacity)
-            .map_err(|_| SniffError::InvalidReadyCondition(s.to_string())),
-        other => Err(SniffError::InvalidReadyCondition(other.to_string())),
+            .map_err(|_| {
+                SniffError::InvalidReadyCondition(format!(
+                    "invalid opacity in `{input}` (expected opacity=<0..1>)"
+                ))
+            }),
+        other => Err(SniffError::InvalidReadyCondition(format!(
+            "`{other}` — expected one of: visible, has-size, opacity=<0..1> \
+             (element-ready format: element-ready:<selector>:<cond1,cond2>[:<timeout_ms>])"
+        ))),
     }
 }
 
@@ -412,6 +450,41 @@ mod tests {
         assert!(matches!(pipe[0], WaitStrategy::Selector { .. }));
         assert!(matches!(pipe[1], WaitStrategy::NetworkIdle { .. }));
         assert!(matches!(pipe[2], WaitStrategy::ElementReady { .. }));
+        // Default waits are short so failures fail fast; callers pass
+        // longer timeouts explicitly when needed.
+        match &pipe[0] {
+            WaitStrategy::Selector { timeout_ms, .. } => assert_eq!(*timeout_ms, 10_000),
+            _ => unreachable!(),
+        }
+        match &pipe[2] {
+            WaitStrategy::ElementReady { timeout_ms, .. } => assert_eq!(*timeout_ms, 10_000),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn malformed_ready_condition_error_hints_format() {
+        let err = parse_wait_strategy("element-ready:.card:1000")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("expected one of: visible, has-size, opacity=<0..1>"),
+            "got: {err}"
+        );
+        assert!(
+            err.contains("element-ready:<selector>:<cond1,cond2>"),
+            "got: {err}"
+        );
+        // The intended-timeout-in-conditions-slot case must be recognizable.
+        assert!(err.contains("1000"), "got: {err}");
+    }
+
+    #[test]
+    fn wait_strategy_errors_include_format_hint() {
+        let err = parse_wait_strategy("delay").unwrap_err().to_string();
+        assert!(err.contains("wait format: delay:<ms>"), "got: {err}");
+        let err = parse_wait_strategy("bogus:1").unwrap_err().to_string();
+        assert!(err.contains("wait format:"), "got: {err}");
     }
 
     #[test]

@@ -17,7 +17,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = ChromePool::launch(&opts).await?;
     let service = SniffMcpServer::new(pool);
 
-    tracing::info!("sniff-mcp ready: sniff_page, diff_snapshots, list_categories over stdio");
+    tracing::info!(
+        "sniff-mcp ready: sniff_page, diff_snapshots, run_checks, list_categories over stdio"
+    );
     let running = rmcp::serve_server(service, rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())

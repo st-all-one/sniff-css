@@ -79,6 +79,17 @@ pub struct ElementSnapshot {
     /// `display`, `visibility`, `opacity` and the bounding rect. `None`
     /// when visibility capture is disabled.
     pub is_visible: Option<bool>,
+    /// Resolved accessibility attributes (role, accessible name, focus
+    /// state), computed in-page. `None` when aria capture is disabled.
+    pub aria: Option<AriaInfo>,
+    /// Measured WCAG contrast of text against a solid background,
+    /// derived in Rust from the captured colors. `None` when contrast
+    /// capture is disabled.
+    pub contrast: Option<ContrastInfo>,
+    /// The browser-computed accessibility-tree node for this element,
+    /// captured via the CDP `Accessibility` domain. `None` when AX
+    /// capture is disabled.
+    pub ax: Option<AxInfo>,
     /// Captured computed styles.
     pub styles: ComputedStyles,
     /// Styles captured for pseudo-elements (`::before`, ...).
@@ -94,6 +105,83 @@ pub struct PseudoStyles {
     pub name: String,
     /// Captured styles.
     pub styles: ComputedStyles,
+}
+
+/// Resolved accessibility attributes of an element, computed deterministically
+/// in-page (no AX tree required).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AriaInfo {
+    /// Effective role: the explicit `role` attribute when present,
+    /// otherwise inferred from the element's tag.
+    pub role: Option<String>,
+    /// Accessible name: `aria-labelledby` (resolved) -> `aria-label` ->
+    /// `alt` -> `title` -> `placeholder` -> text content.
+    pub name: Option<String>,
+    /// Whether the element can receive focus (tabindex or interactive tag).
+    pub focusable: bool,
+    /// Present only when the attribute is set and non-empty.
+    pub aria_hidden: Option<String>,
+    pub aria_expanded: Option<String>,
+    pub aria_checked: Option<String>,
+    pub aria_controls: Option<String>,
+    pub aria_labelledby: Option<String>,
+    pub aria_describedby: Option<String>,
+    pub lang: Option<String>,
+    pub alt: Option<String>,
+    pub title: Option<String>,
+    /// `hidden` HTML attribute present.
+    pub html_hidden: bool,
+    /// `disabled` DOM property or `aria-disabled="true"`.
+    pub disabled: bool,
+    /// Whether the element renders visible text (a non-whitespace text
+    /// node among its direct children) — the deterministic signal used by
+    /// the derived contrast checks.
+    pub has_text: bool,
+}
+
+/// The browser-computed accessibility-tree node for one element, captured via
+/// the CDP `Accessibility` domain. `None` fields mean the value was absent or
+/// `ignored`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AxInfo {
+    pub role: Option<String>,
+    pub name: Option<String>,
+    pub value: Option<String>,
+    pub focusable: Option<bool>,
+    pub ignored: bool,
+    pub level: Option<i64>,
+    pub expanded: Option<bool>,
+    pub checked: Option<String>,
+    pub disabled: Option<bool>,
+}
+
+/// Result of a tri-state evaluation (e.g. contrast compliance).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TriState {
+    Pass,
+    Fail,
+    Unknown,
+}
+
+/// Measured WCAG contrast of a node, derived in Rust from the captured
+/// `color`, `background-color`, `font-size` and `font-weight`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContrastInfo {
+    /// Contrast ratio (1.0..=21.0). `0.0` when the value is `unknown`.
+    pub ratio: f64,
+    /// Foreground color as captured.
+    pub foreground: String,
+    /// Background color as captured.
+    pub background: String,
+    /// Whether WCAG "large text" thresholds apply (>=24px, or >=18.66px bold).
+    pub large: bool,
+    /// AA compliance for the node's actual text size.
+    pub aa: TriState,
+    /// AAA compliance for the node's actual text size.
+    pub aaa: TriState,
+    /// Why the value could not be measured, when `unknown`.
+    pub unknown_reason: Option<String>,
 }
 
 impl ElementSnapshot {
@@ -150,6 +238,9 @@ mod tests {
             rect: None,
             metrics: None,
             is_visible: None,
+            aria: None,
+            contrast: None,
+            ax: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![],
@@ -164,6 +255,9 @@ mod tests {
             rect: None,
             metrics: None,
             is_visible: None,
+            aria: None,
+            contrast: None,
+            ax: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![child],
