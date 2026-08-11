@@ -1,0 +1,334 @@
+//! Configuration types that drive a sniffing run.
+
+use crate::error::SniffError;
+use crate::properties::{StyleCategory, parse_category};
+use serde::{Deserialize, Serialize};
+
+/// Full specification of a sniffing run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SniffConfig {
+    /// URL to navigate to.
+    pub url: String,
+    /// CSS selector for the element(s) to sniff.
+    pub selector: String,
+    /// How many levels of children to include. `0` means the matched
+    /// elements only (no recursion).
+    pub depth: usize,
+    /// Semantic categories to capture.
+    pub categories: Vec<StyleCategory>,
+    /// Extra property names requested on top of the categories.
+    pub custom_properties: Vec<String>,
+    /// Pseudo-elements to capture alongside the element, e.g. `::before`.
+    pub pseudo_elements: Vec<String>,
+    /// Ordered list of wait strategies executed before extraction.
+    pub wait: Vec<WaitStrategy>,
+    /// Element filter applied to matched candidates.
+    pub filter: ElementFilter,
+    /// Output shaping options.
+    pub output: OutputConfig,
+    /// Emulated viewport size; affects `%`, `vh`, `rem`-derived values
+    /// and media queries.
+    pub viewport: Option<Viewport>,
+    /// Capture all CSS custom properties (`--*`) per element, mirroring
+    /// the DevTools Computed panel.
+    pub include_custom_properties: bool,
+    /// When set, `selector`/`path` are built preferring this attribute
+    /// (e.g. `data-testid`) over the DOM `id` as the stable anchor, so
+    /// the output can be matched across deploys that change generated ids.
+    pub stable_key: Option<String>,
+}
+
+impl Default for SniffConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            selector: String::new(),
+            depth: 0,
+            categories: vec![StyleCategory::All],
+            custom_properties: Vec::new(),
+            pseudo_elements: Vec::new(),
+            wait: WaitStrategy::default_pipeline(""),
+            filter: ElementFilter::default(),
+            output: OutputConfig::default(),
+            // Laptop-sized viewport is the assumed development default.
+            viewport: Some(Viewport {
+                width: 1366,
+                height: 768,
+            }),
+            include_custom_properties: false,
+            stable_key: None,
+        }
+    }
+}
+
+/// Emulated viewport dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Viewport {
+    /// Parse a `WxH` string (e.g. `1280x720`).
+    pub fn parse_cli(input: &str) -> Result<Self, SniffError> {
+        let (w, h) = input.trim().split_once(['x', 'X']).ok_or_else(|| {
+            SniffError::InvalidOutputFormat(format!("invalid viewport `{input}`"))
+        })?;
+        let width = w.trim().parse().map_err(|_| {
+            SniffError::InvalidOutputFormat(format!("invalid viewport width `{input}`"))
+        })?;
+        let height = h.trim().parse().map_err(|_| {
+            SniffError::InvalidOutputFormat(format!("invalid viewport height `{input}`"))
+        })?;
+        if width == 0 || height == 0 {
+            return Err(SniffError::InvalidOutputFormat(format!(
+                "viewport must be non-zero `{input}`"
+            )));
+        }
+        Ok(Self { width, height })
+    }
+}
+
+/// A single wait/readiness strategy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum WaitStrategy {
+    /// Wait until `selector` exists in the DOM.
+    Selector { selector: String, timeout_ms: u64 },
+    /// Wait until the network is idle (no in-flight requests) for
+    /// `idle_ms`, up to `timeout_ms`.
+    NetworkIdle { idle_ms: u64, timeout_ms: u64 },
+    /// Poll `selector` until its computed style satisfies every
+    /// condition, up to `timeout_ms`.
+    ElementReady {
+        selector: String,
+        conditions: Vec<ReadyCondition>,
+        timeout_ms: u64,
+    },
+    /// Wait until `document.fonts.ready` resolves.
+    FontsLoaded { timeout_ms: u64 },
+    /// Wait until `window[flag] === true`.
+    AppFlag { flag: String, timeout_ms: u64 },
+    /// Fixed sleep.
+    Delay { ms: u64 },
+}
+
+impl WaitStrategy {
+    /// Sensible default pipeline for a selector.
+    pub fn default_pipeline(selector: &str) -> Vec<Self> {
+        let selector = selector.to_string();
+        vec![
+            Self::Selector {
+                selector: selector.clone(),
+                timeout_ms: 30_000,
+            },
+            Self::NetworkIdle {
+                idle_ms: 400,
+                timeout_ms: 30_000,
+            },
+            Self::ElementReady {
+                selector,
+                conditions: vec![ReadyCondition::Visible, ReadyCondition::HasSize],
+                timeout_ms: 30_000,
+            },
+        ]
+    }
+}
+
+/// Granular readiness condition for [`WaitStrategy::ElementReady`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ReadyCondition {
+    /// `display != none` and `visibility != hidden`.
+    Visible,
+    /// `width > 0 && height > 0`.
+    HasSize,
+    /// `opacity >= threshold`.
+    Opacity(f64),
+}
+
+/// Element filter applied after matching the selector.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElementFilter {
+    /// Keep only elements that are visible (display != none, visibility != hidden).
+    pub visible: bool,
+    /// Keep only elements with width >= min_width.
+    pub min_width: Option<f64>,
+    /// Keep only elements with height >= min_height.
+    pub min_height: Option<f64>,
+    /// Skip elements matching any of these selectors.
+    pub exclude_selectors: Vec<String>,
+}
+
+impl Default for ElementFilter {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            min_width: None,
+            min_height: None,
+            exclude_selectors: Vec::new(),
+        }
+    }
+}
+
+/// Output shaping options.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    /// Serialization format.
+    pub format: OutputFormat,
+    /// Include the bounding rect for each element.
+    pub include_rect: bool,
+    /// Include the DOM path for each element.
+    pub include_path: bool,
+    /// Include derived metrics (z-index, stacking context).
+    pub include_metrics: bool,
+    /// Normalize `rgb(...)` colors to hexadecimal.
+    pub normalize_colors: bool,
+    /// Group styles by category in the output object.
+    pub group_by_category: bool,
+    /// Pretty-print JSON (single JSON output only).
+    pub pretty: bool,
+    /// Compact mode: drop redundant logical/default properties and scope
+    /// `css_variables` to a single global map plus per-node overrides.
+    pub compact: bool,
+    /// Emit `is_visible` per node (derived from display/visibility/opacity/rect).
+    pub include_visibility: bool,
+    /// Emit `computed_style_hash` per node: a fast 64-bit checksum of the
+    /// effective styles, for change detection between runs.
+    pub include_style_hash: bool,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            format: OutputFormat::JsonLines,
+            include_rect: true,
+            include_path: true,
+            include_metrics: true,
+            normalize_colors: true,
+            group_by_category: true,
+            pretty: false,
+            compact: false,
+            include_visibility: true,
+            include_style_hash: true,
+        }
+    }
+}
+
+/// Supported output serialization formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputFormat {
+    /// One JSON object per line (streaming-friendly). Tree mode: each
+    /// line is a matched root element with nested `children`.
+    JsonLines,
+    /// One JSON object per line, fully flat: every node is its own line
+    /// with `id`/`parent_id` references.
+    JsonLinesFlat,
+    /// A single JSON array.
+    Json,
+}
+
+impl OutputFormat {
+    /// Parse a CLI value (`jsonl`, `jsonl-flat`, `json`).
+    pub fn parse_cli(input: &str) -> Result<Self, SniffError> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "jsonl" | "ndjson" => Ok(Self::JsonLines),
+            "jsonl-flat" | "ndjson-flat" => Ok(Self::JsonLinesFlat),
+            "json" => Ok(Self::Json),
+            other => Err(SniffError::InvalidOutputFormat(other.to_string())),
+        }
+    }
+}
+
+/// Parse a comma-separated list of categories.
+pub fn parse_categories(input: &str) -> Result<Vec<StyleCategory>, SniffError> {
+    let mut out = Vec::new();
+    for part in input.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match parse_category(part) {
+            Some(cat) => out.push(cat),
+            None => return Err(SniffError::UnknownCategory(part.to_string())),
+        }
+    }
+    if out.is_empty() {
+        return Err(SniffError::UnknownCategory(input.to_string()));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_format_parse() {
+        assert_eq!(
+            OutputFormat::parse_cli("jsonl").unwrap(),
+            OutputFormat::JsonLines
+        );
+        assert_eq!(
+            OutputFormat::parse_cli("ndjson").unwrap(),
+            OutputFormat::JsonLines
+        );
+        assert_eq!(
+            OutputFormat::parse_cli("jsonl-flat").unwrap(),
+            OutputFormat::JsonLinesFlat
+        );
+        assert_eq!(OutputFormat::parse_cli("json").unwrap(), OutputFormat::Json);
+        assert!(OutputFormat::parse_cli("yaml").is_err());
+    }
+
+    #[test]
+    fn parse_categories_multiple() {
+        let cats = parse_categories("box-model, layout, visual").unwrap();
+        assert_eq!(
+            cats,
+            vec![
+                StyleCategory::BoxModel,
+                StyleCategory::Layout,
+                StyleCategory::Visual
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_categories_unknown_fails() {
+        assert!(parse_categories("bogus").is_err());
+    }
+
+    #[test]
+    fn default_pipeline_is_sane() {
+        let pipe = WaitStrategy::default_pipeline(".card");
+        assert_eq!(pipe.len(), 3);
+        assert!(matches!(pipe[0], WaitStrategy::Selector { .. }));
+        assert!(matches!(pipe[1], WaitStrategy::NetworkIdle { .. }));
+        assert!(matches!(pipe[2], WaitStrategy::ElementReady { .. }));
+    }
+
+    #[test]
+    fn default_viewport_is_laptop() {
+        let cfg = SniffConfig::default();
+        assert_eq!(
+            cfg.viewport,
+            Some(Viewport {
+                width: 1366,
+                height: 768
+            })
+        );
+    }
+
+    #[test]
+    fn viewport_parse_cli() {
+        assert_eq!(
+            Viewport::parse_cli("1280x720").unwrap(),
+            Viewport {
+                width: 1280,
+                height: 720
+            }
+        );
+        assert_eq!(Viewport::parse_cli("1920X1080").unwrap().width, 1920);
+        assert!(Viewport::parse_cli("800").is_err());
+        assert!(Viewport::parse_cli("0x0").is_err());
+    }
+}

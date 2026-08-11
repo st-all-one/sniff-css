@@ -1,0 +1,12 @@
+[package]
+name = "sniff-core"
+description = "Core types, config and property catalog for sniff-computed-style"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

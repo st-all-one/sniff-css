@@ -1,0 +1,18 @@
+[package]
+name = "sniff-engine"
+description = "Sniffing engine orchestrating wait, filter and extraction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+sniff-core = { path = "../sniff-core" }
+sniff-cdp = { path = "../sniff-cdp" }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
