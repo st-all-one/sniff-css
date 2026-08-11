@@ -75,13 +75,21 @@ pub struct ElementSnapshot {
     pub rect: Option<Rect>,
     /// Derived metrics, when requested.
     pub metrics: Option<ElementMetrics>,
-    /// Whether the element is rendered in layout, derived in-page from
-    /// `display`, `visibility`, `opacity` and the bounding rect. `None`
-    /// when visibility capture is disabled.
-    pub is_visible: Option<bool>,
+    /// Whether and how noticeably the element is exposed to the user
+    /// (visual and assistive-tech perceptibility), derived in-page from
+    /// `display`, `visibility`, `opacity`, the bounding rect and the
+    /// resolved `aria` facet. `None` when noticeability capture is
+    /// disabled.
+    pub noticeable: Option<Noticeability>,
     /// Resolved accessibility attributes (role, accessible name, focus
     /// state), computed in-page. `None` when aria capture is disabled.
     pub aria: Option<AriaInfo>,
+    /// Effective background painted behind the element, composited in-page
+    /// over its ancestors up to the page canvas (used by the contrast
+    /// derivation). `Some("#rrggbb")` for a solid color, `Some("image")`
+    /// when a background image is involved, `None` when not captured or
+    /// unresolvable.
+    pub effective_background: Option<String>,
     /// Measured WCAG contrast of text against a solid background,
     /// derived in Rust from the captured colors. `None` when contrast
     /// capture is disabled.
@@ -164,6 +172,38 @@ pub enum TriState {
     Unknown,
 }
 
+/// Accessibility grade of an element's exposure to the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AccessibilityGrade {
+    /// Not perceivable at all: hidden from assistive tech and/or not
+    /// rendered (`display:none`, `visibility:hidden`, `aria-hidden`,
+    /// `hidden`/`inert`, zero-size).
+    None,
+    /// Perceivable but not fully: present in the accessibility tree yet
+    /// off-screen (below the fold), fully transparent, or missing a
+    /// required accessible name.
+    Aa,
+    /// Fully perceivable: rendered on screen, exposed to assistive tech
+    /// and named where the role requires a name.
+    Aaa,
+}
+
+/// How noticeably an element reaches the user, split into the visual
+/// ("is it actually displayed?") and the accessibility ("how accessible
+/// is it?") axes. Replaces the old single `is_visible` boolean, which
+/// conflated off-screen-but-navigable content with truly hidden content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Noticeability {
+    /// The element is rendered in layout: `display` is not `none`,
+    /// `visibility` is not `hidden`/`collapse`, `opacity` is non-zero and
+    /// it has a non-zero bounding rect. Independent of the viewport —
+    /// scrolled-out content is still *displayed*.
+    pub display_visible: bool,
+    /// Perceptibility grade (see [`AccessibilityGrade`]).
+    pub accessibility_grade: AccessibilityGrade,
+}
+
 /// Measured WCAG contrast of a node, derived in Rust from the captured
 /// `color`, `background-color`, `font-size` and `font-weight`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,8 +277,9 @@ mod tests {
             depth: 1,
             rect: None,
             metrics: None,
-            is_visible: None,
+            noticeable: None,
             aria: None,
+            effective_background: None,
             contrast: None,
             ax: None,
             styles: ComputedStyles::default(),
@@ -254,8 +295,9 @@ mod tests {
             depth: 0,
             rect: None,
             metrics: None,
-            is_visible: None,
+            noticeable: None,
             aria: None,
+            effective_background: None,
             contrast: None,
             ax: None,
             styles: ComputedStyles::default(),

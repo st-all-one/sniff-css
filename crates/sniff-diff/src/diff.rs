@@ -176,13 +176,10 @@ fn compute_changes(base: &DiffNode, head: &DiffNode, opts: &DiffOptions) -> Opti
             json_before_after(base.metrics.as_ref(), head.metrics.as_ref()),
         );
     }
-    if base.is_visible != head.is_visible {
+    if base.noticeable != head.noticeable {
         changes.insert(
-            "is_visible".into(),
-            json_before_after(
-                base.is_visible.map(Value::Bool).as_ref(),
-                head.is_visible.map(Value::Bool).as_ref(),
-            ),
+            "is_user_noticeable".into(),
+            json_before_after(base.noticeable.as_ref(), head.noticeable.as_ref()),
         );
     }
     if let Some(aria) = object_diff(base.aria.as_ref(), head.aria.as_ref()) {
@@ -477,8 +474,8 @@ fn snapshot_value(node: &DiffNode) -> Value {
     if let Some(mt) = &node.metrics {
         m.insert("metrics".into(), mt.clone());
     }
-    if let Some(v) = node.is_visible {
-        m.insert("is_visible".into(), Value::Bool(v));
+    if let Some(v) = &node.noticeable {
+        m.insert("is_user_noticeable".into(), v.clone());
     }
     if let Some(s) = &node.styles {
         m.insert("styles".into(), Value::Object(s.clone()));
@@ -506,7 +503,7 @@ mod tests {
             depth: Some(0),
             rect: None,
             metrics: None,
-            is_visible: Some(true),
+            noticeable: None,
             hash: None,
             styles,
             pseudo: None,
@@ -634,16 +631,26 @@ mod tests {
     }
 
     #[test]
-    fn is_visible_change_is_reported() {
+    fn noticeable_change_is_reported() {
         let mut a = node("div.card", box_width("44px"));
         let mut b = node("div.card", box_width("44px"));
-        a.is_visible = Some(true);
-        b.is_visible = Some(false);
+        a.noticeable = Some(serde_json::json!({
+            "display_visible": true, "accessibility_grade": "AAA"
+        }));
+        b.noticeable = Some(serde_json::json!({
+            "display_visible": false, "accessibility_grade": "NONE"
+        }));
         let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions::default());
         assert_eq!(deltas.len(), 1);
         let changes = deltas[0].changes.as_ref().unwrap();
-        assert_eq!(changes["is_visible"]["before"], true);
-        assert_eq!(changes["is_visible"]["after"], false);
+        assert_eq!(
+            changes["is_user_noticeable"]["before"]["accessibility_grade"],
+            "AAA"
+        );
+        assert_eq!(
+            changes["is_user_noticeable"]["after"]["display_visible"],
+            false
+        );
     }
 
     #[test]

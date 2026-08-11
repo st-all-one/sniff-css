@@ -202,7 +202,8 @@ pub struct OutputConfig {
     /// Compact mode: drop redundant logical/default properties and scope
     /// `css_variables` to a single global map plus per-node overrides.
     pub compact: bool,
-    /// Emit `is_visible` per node (derived from display/visibility/opacity/rect).
+    /// Emit `is_user_noticeable` per node (display_visible +
+    /// accessibility_grade, derived in-page from display/visibility/opacity/rect/aria).
     pub include_visibility: bool,
     /// Emit `computed_style_hash` per node: a fast 64-bit checksum of the
     /// effective styles, for change detection between runs.

@@ -76,7 +76,7 @@ sniff-computed-style --url http://localhost:3000 --selector "header" \
 | `--exclude sel` | Excluir seletores (repetível) | — |
 | `--output jsonl\|jsonl-flat\|json` | Formato de saída | `jsonl` |
 | `--compact` | Modo compacto (ver abaixo) | — |
-| `--no-visibility` | Omitir campo `is_visible` por nó | — |
+| `--no-visibility` | Omitir campo `is_user_noticeable` por nó | — |
 | `--no-style-hash` | Omitir `computed_style_hash` por nó | — |
 | `--pretty` | JSON pretty | — |
 | `--no-rect/--no-path/--no-metrics` | Omitir campos | — |
@@ -150,9 +150,16 @@ Uma linha JSON por elemento raiz, com filhos aninhados. Nomes legíveis e compac
 - `pseudo`: mapa de pseudo-elementos → mesmos grupos de estilos.
 - `css_variables`: grupo extra com todas as variáveis CSS (`--*`) quando `--custom-props` é usado.
 - `id` / `parent_id`: todos os nós recebem identificadores (pre-order), permitindo achatamento/referência.
-- `is_visible`: booleano derivado na página a partir de `display`, `visibility`, `opacity` e do rect **interseccionando o viewport** (elementos sr-only/off-viewport como skip-links de 1×1px fora da tela são marcados como invisíveis) — a IA não precisa inferir visibilidade.
+- `is_user_noticeable`: objeto que divide o antigo `is_visible` em dois eixos — `display_visible`
+  (renderizado de fato: `display`≠`none`, `visibility`≠`hidden`, `opacity`>0, tamanho≠0;
+  **independente do viewport**, então conteúdo fora da dobra continua `true`) e
+  `accessibility_grade` (`NONE` = não exposto à AT; `AA` = exposto mas fora da tela/transparente/sem
+  nome acessível; `AAA` = na tela, exposto e nomeado quando o role exige).
 - `aria`: role (explícita ou inferida do tag), accessible name, `focusable`, `aria-*`, `has_text` — calculados na página.
-- `contrast`: ratio WCAG **medido** + AA/AAA (normal vs. texto grande); `unknown` para fundo transparente/gradiente/imagem.
+- `contrast`: ratio WCAG **medido** + AA/AAA (normal vs. texto grande). O fundo efetivo é
+  resolvido **na página**: o JS compõe camadas transparentes/semi-transparentes subindo até o
+  canvas do `html`/`body` (independente da profundidade da captura) — fundos-imagem viram
+  `unknown` para revisão manual.
 - `ax`: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`/`level`...).
 - `computed_style_hash`: checksum **xxHash64** (não criptográfico, ~40× mais rápido que SHA-1) dos estilos efetivos de cada nó (inclui pseudo-elementos). Permite **detectar mudanças entre execuções** comparando apenas o hash; determinístico entre runs no mesmo modo.
 - Cores `rgb(...)`/`rgba(...)` são normalizadas para `#rrggbb`/`#rrggbbaa`.
@@ -211,7 +218,7 @@ Como funciona:
   absorver jitter de subpixel (`16px` → `16.2px`); unidades diferentes nunca
   são tratadas como iguais.
 - **Saída JSONL** com `CHANGED` (deltas `before`/`after` por propriedade, incluindo
-  `styles`, `pseudo`, `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_visible`)
+  `styles`, `pseudo`, `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_user_noticeable`)
   e `ADDED`/`REMOVED` (snapshot completo do nó).
 - `--ignore-props a,b` — mudanças nessas props nunca marcam o nó como changed.
 - `--no-structural` — suprime `ADDED`/`REMOVED` (reporta só `CHANGED`).

@@ -52,7 +52,7 @@ Saída (padrão `jsonl`, árvore aninhada):
 {"__meta":{"css_variables":{/* global :root, uma única vez */}}}
 {"id":1,"tag":"DIV","selector":"div[data-testid=\"form\"]",
  "path":"div[data-testid=\"form\"]","depth":0,
- "is_visible":true,
+ "is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},
  "computed_style_hash":"afbd33ba764bb8d4",
  "aria":{"role":"form","name":"","focusable":false,"has_text":false},
  "rect":{...},"metrics":{...},
@@ -67,9 +67,15 @@ Saída (padrão `jsonl`, árvore aninhada):
 
 Campos derivados que a IA **não precisa inferir**:
 
-- `is_visible` — derivado de `display`/`visibility`/`opacity`/rect **com interseção com o viewport**:
-  elementos sr-only ou posicionados fora da tela (ex.: skip-links de 1×1px em `-1,-1`)
-  são marcados como **invisíveis**; `position: fixed` visível no viewport → visível.
+- `is_user_noticeable` — divide o antigo `is_visible` em dois eixos:
+  - `display_visible` — o elemento **está renderizado** (`display`≠`none`,
+    `visibility`≠`hidden`, `opacity`>0, tamanho ≠ 0). **Independente do
+    viewport**: conteúdo rolado para fora da tela (rodapé, conteúdo abaixo da
+    dobra) continua `display_visible:true`.
+  - `accessibility_grade` — `NONE` (não exposto à AT: `aria-hidden`,
+    `hidden`/`inert`, `display:none`, zero-size), `AA` (exposto, mas fora da
+    tela/transparente/sem nome acessível) ou `AAA` (na tela, exposto e com
+    nome quando o role exige).
 - `computed_style_hash` — xxHash64 dos estilos efetivos; igual entre runs
   idênticos (mesmo modo), diferente quando algo mudou.
 - `id` / `parent_id` — pre-order; use `jsonl-flat` quando quiser um nó por linha.
@@ -86,7 +92,7 @@ sniff-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 O que sai: só os nós que mudaram.
 
 - `CHANGED` → `changes` com `before`/`after` por propriedade (`styles`, `pseudo`,
-  `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_visible`).
+  `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_user_noticeable`).
 - `ADDED`/`REMOVED` → `snapshot` completo do nó.
 - `--tolerance 0.5` absorve jitter de subpixel (`16px`→`16.2px`); unidades
   diferentes (`16px` vs `16rem`) **nunca** são consideradas iguais.
@@ -237,7 +243,7 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
    `element-ready` falhar mesmo com o conteúdo visível depois.
 7. **Conecte no seu dev server** — `--connect ws://127.0.0.1:9222/devtools/browser/<id>`
    evita subir outro Chrome e captura exatamente o que você está vendo.
-8. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_visible`
+8. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_user_noticeable`
    são parte valiosa do sinal de CLS/visibilidade.
 
 ## Referência rápida

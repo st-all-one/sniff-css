@@ -205,7 +205,7 @@ async fn sniff_page_streams_progress_and_returns_jsonl() {
     let first_line: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(first_line["tag"], "DIV");
     assert_eq!(first_line["selector"], "div[data-testid=\"widget\"]");
-    assert_eq!(first_line["is_visible"], true);
+    assert_eq!(first_line["is_user_noticeable"]["display_visible"], true);
     assert!(first_line["computed_style_hash"].is_string());
     assert!(first_line["styles"]["box_model"]["width"].is_string());
 
@@ -324,9 +324,9 @@ async fn run_checks_finds_odd_card_and_contrast_failure() {
 
     // Three sibling cards; the third is short (uniformity outlier) and the
     // first carries a low-contrast paragraph (rules failure) in its subtree.
-    let jsonl = r##"{"id":1,"tag":"DIV","selector":"div.card:nth-child(1)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[{"id":4,"tag":"P","selector":"div.card:nth-child(1) > p","depth":1,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"visual":{"color":"#212529","background-color":"#020842","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}]}
-{"id":2,"tag":"DIV","selector":"div.card:nth-child(2)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
-{"id":3,"tag":"DIV","selector":"div.card:nth-child(3)","depth":0,"is_visible":true,"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"80px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
+    let jsonl = r##"{"id":1,"tag":"DIV","selector":"div.card:nth-child(1)","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[{"id":4,"tag":"P","selector":"div.card:nth-child(1) > p","depth":1,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"aria":{"focusable":false,"has_text":true},"styles":{"visual":{"color":"#212529","background-color":"#020842","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}]}
+{"id":2,"tag":"DIV","selector":"div.card:nth-child(2)","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
+{"id":3,"tag":"DIV","selector":"div.card:nth-child(3)","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"80px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
 "##;
 
     let result = running

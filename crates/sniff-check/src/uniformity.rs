@@ -174,8 +174,17 @@ fn flat_props(node: &DiffNode) -> Vec<(String, Option<String>)> {
             }
         }
     }
-    if let Some(v) = node.is_visible {
-        out.push(("is_visible".into(), Some(v.to_string())));
+    if let Some(v) = node.display_visible() {
+        out.push((
+            "is_user_noticeable.display_visible".into(),
+            Some(v.to_string()),
+        ));
+    }
+    if let Some(v) = node.accessibility_grade() {
+        out.push((
+            "is_user_noticeable.accessibility_grade".into(),
+            Some(v.to_string()),
+        ));
     }
     out.sort_unstable();
     out
@@ -250,7 +259,9 @@ mod tests {
             depth: Some(0),
             rect: None,
             metrics: None,
-            is_visible: Some(true),
+            noticeable: Some(serde_json::json!({
+                "display_visible": true, "accessibility_grade": "AAA"
+            })),
             hash: None,
             styles: Some(
                 serde_json::json!({
@@ -361,7 +372,9 @@ mod tests {
             node("div.c", "300px", "120px"),
         ];
         let mut custom = nodes;
-        custom[1].is_visible = Some(false);
+        custom[1].noticeable = Some(serde_json::json!({
+            "display_visible": false, "accessibility_grade": "NONE"
+        }));
         let report = check_uniformity(&custom, 0.5);
         assert_eq!(report.outliers.len(), 1);
         assert_eq!(report.outliers[0].selector, "div.b");
@@ -369,7 +382,7 @@ mod tests {
             report.outliers[0]
                 .deviations
                 .iter()
-                .any(|d| d.property == "is_visible")
+                .any(|d| d.property == "is_user_noticeable.display_visible")
         );
     }
 }

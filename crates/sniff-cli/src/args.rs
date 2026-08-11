@@ -96,7 +96,7 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub compact: bool,
 
-    /// Omit the per-node `is_visible` field (default: computed).
+    /// Omit the per-node `is_user_noticeable` field (default: computed).
     #[arg(long = "no-visibility", default_value_t = false)]
     pub no_visibility: bool,
 

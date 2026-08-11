@@ -102,12 +102,16 @@ Reduz tokens em ~55% em três frentes (implementadas em `output.rs`):
 
 ### AI-friendly derived fields
 
-- `is_visible` é calculado **na página** durante a extração, reutilizando o único
+- `is_user_noticeable` é calculado **na página** durante a extração, reutilizando o único
   `getComputedStyle` por elemento (refatorado em `buildNode`) + `getBoundingClientRect`
-  já exigido por `rect` — custo marginal ≈ zero. Cobre `display`, `visibility`,
-  `opacity`, dimensões do rect e **interseção com o viewport** (`x+width>0 && y+height>0
-  && x<vw && y<vh`), de modo que elementos sr-only/off-viewport (1×1px fora da tela)
-  não são reportados como visíveis.
+  já exigido por `rect` — custo marginal ≈ zero. Divide o antigo `is_visible` em dois
+  eixos ortogonais:
+  - `display_visible` — renderizado de fato (`display`≠`none`, `visibility`≠`hidden`,
+    `opacity`>0, tamanho≠0). **Sem interseção com o viewport**: conteúdo fora da dobra
+    (rodapé, skip-links) continua `display_visible:true`.
+  - `accessibility_grade` — `NONE` (não exposto à AT: `aria-hidden`, `hidden`/`inert`,
+    `display:none`, zero-size), `AA` (exposto mas fora da tela/transparente/sem nome
+    acessível) ou `AAA` (na tela, exposto e nomeado quando o role exige).
 - `computed_style_hash` é um **xxHash64** (feature `xxh3` do `xxhash-rust`, ~20–30 GB/s,
   ~40× mais rápido que SHA-1) calculado em `output.rs` sobre a serialização canônica
   dos estilos efetivos de cada nó (estável graças à ordem determinística do `Map` com
@@ -135,8 +139,8 @@ head.jsonl ─┘
 - **`diff`** — pareamento por `selector` estável (fallback posicional por ordem de
   irmãos), depois diff por propriedade com tolerância numérica (`--tolerance`):
   `16px` vs `16.2px` são iguais dentro de `0.5`, mas `16px` vs `16rem` **nunca**
-  (a unidade é comparada). Detecta mudanças em `styles`, `pseudo`, `rect`,
-  `metrics` e `is_visible`.
+   (a unidade é comparada). Detecta mudanças em `styles`, `pseudo`, `rect`,
+   `metrics` e `is_user_noticeable`.
 - **`output`** — JSONL de deltas: `CHANGED` com `{before, after}` por propriedade,
   `ADDED`/`REMOVED` com snapshot completo; `--stats-only` para varrer centenas de
   páginas sem gastar tokens.

@@ -68,8 +68,11 @@ fn node_to_json(
         }
     }
     if config.include_visibility {
-        if let Some(visible) = snap.is_visible {
-            obj.insert("is_visible".into(), Value::Bool(visible));
+        if let Some(noticeable) = &snap.noticeable {
+            obj.insert(
+                "is_user_noticeable".into(),
+                serde_json::to_value(noticeable).unwrap_or(Value::Null),
+            );
         }
     }
     if let Some(aria) = &snap.aria {
@@ -572,7 +575,9 @@ fn io_err(e: std::io::Error) -> SniffError {
 mod tests {
     use super::*;
     use sniff_core::config::OutputFormat;
-    use sniff_core::types::{ComputedStyles, ElementMetrics, Rect};
+    use sniff_core::types::{
+        AccessibilityGrade, ComputedStyles, ElementMetrics, Noticeability, Rect,
+    };
 
     fn cp(name: &str, value: &str) -> ComputedProperty {
         ComputedProperty {
@@ -599,8 +604,12 @@ mod tests {
                 z_index: "auto".into(),
                 stacking_context: false,
             }),
-            is_visible: Some(true),
+            noticeable: Some(Noticeability {
+                display_visible: true,
+                accessibility_grade: AccessibilityGrade::Aaa,
+            }),
             aria: None,
+            effective_background: None,
             contrast: None,
             ax: None,
             styles: ComputedStyles {
@@ -724,8 +733,9 @@ mod tests {
             depth: 2,
             rect: None,
             metrics: None,
-            is_visible: None,
+            noticeable: None,
             aria: None,
+            effective_background: None,
             contrast: None,
             ax: None,
             styles: ComputedStyles::default(),
@@ -776,19 +786,26 @@ mod tests {
     }
 
     #[test]
-    fn emits_is_visible_when_present() {
+    fn emits_is_user_noticeable_when_present() {
         let mut snap = sample_snapshot();
-        snap.is_visible = Some(true);
+        snap.noticeable = Some(Noticeability {
+            display_visible: true,
+            accessibility_grade: AccessibilityGrade::Aa,
+        });
         let cfg = OutputConfig::default();
         let json = snapshot_to_json(&snap, &cfg, None);
-        assert_eq!(json["is_visible"], true);
+        assert_eq!(json["is_user_noticeable"]["display_visible"], true);
+        assert_eq!(json["is_user_noticeable"]["accessibility_grade"], "AA");
         assert_eq!(json["computed_style_hash"].as_str().unwrap().len(), 16);
     }
 
     #[test]
     fn omits_hash_and_visibility_when_disabled() {
         let mut snap = sample_snapshot();
-        snap.is_visible = Some(true);
+        snap.noticeable = Some(Noticeability {
+            display_visible: true,
+            accessibility_grade: AccessibilityGrade::Aaa,
+        });
         let cfg = OutputConfig {
             include_style_hash: false,
             include_visibility: false,
@@ -796,7 +813,7 @@ mod tests {
         };
         let json = snapshot_to_json(&snap, &cfg, None);
         assert!(json.get("computed_style_hash").is_none());
-        assert!(json.get("is_visible").is_none());
+        assert!(json.get("is_user_noticeable").is_none());
     }
 
     #[test]

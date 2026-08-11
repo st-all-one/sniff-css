@@ -3,19 +3,32 @@
 //!
 //! Checks:
 //! - `contrast-aa` / `contrast-aaa`: measured WCAG ratio vs. the threshold
-//!   for the node's text size. `UNKNOWN` (gradient/image/transparent bg)
-//!   surfaces as a `warn` for manual review.
+//!   for the node's text size. Uses the engine's `contrast` facet (which
+//!   resolves the effective background in-page); `UNKNOWN` (background
+//!   image) surfaces as a `warn` for manual review.
 //! - `target-size`: interactive controls below the WCAG 2.2 24x24 CSS px
 //!   minimum.
 //! - `focus-indicator`: focusable element with no visible focus signal
 //!   (outline suppressed and no box-shadow).
-//! - `hidden-focusable`: focusable but not perceivable (`is_visible=false`).
+//! - `hidden-focusable`: focusable but not exposed to assistive tech
+//!   (`accessibility_grade == NONE`).
 //! - `empty-alt-image`: non-decorative image with an empty `alt`.
 
 use serde_json::Value;
 use sniff_core::TriState;
 use sniff_core::contrast::derive_contrast_values;
 use sniff_diff::DiffNode;
+
+/// Contrast data used by the rule, from either the engine's `contrast`
+/// facet (preferred) or a fallback derivation from raw styles.
+struct ContrastFacet {
+    ratio: f64,
+    aa: TriState,
+    large: bool,
+    foreground: String,
+    background: String,
+    unknown_reason: Option<String>,
+}
 
 /// Status of a single check line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -91,7 +104,7 @@ pub fn run_rules(nodes: &[DiffNode]) -> Vec<CheckLine> {
 
 fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
     let tag = node.tag.as_deref().unwrap_or("");
-    let visible = node.is_visible != Some(false);
+    let visible = node.display_visible().unwrap_or(true);
     let focusable = node
         .aria
         .as_ref()
@@ -123,12 +136,57 @@ fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
 
     // --- Contrast (measured) ---
     if visible && is_text {
-        let fg = style_val(node, "visual", "color");
-        let bg = style_val(node, "visual", "background-color");
-        let bg_image = style_val(node, "visual", "background-image");
-        let font_size = style_val(node, "typography", "font-size");
-        let font_weight = style_val(node, "typography", "font-weight");
-        if let Some(info) = derive_contrast_values(fg, bg, bg_image, font_size, font_weight) {
+        // Prefer the engine's `contrast` facet (ratio composited over the
+        // real effective background, resolved in-page). Fall back to
+        // re-deriving from this node's own styles for snapshots without it.
+        let info = node
+            .contrast
+            .as_ref()
+            .and_then(|c| {
+                let ratio = c.get("ratio").and_then(Value::as_f64)?;
+                let aa = match c.get("aa").and_then(Value::as_str)? {
+                    "pass" => TriState::Pass,
+                    "fail" => TriState::Fail,
+                    _ => TriState::Unknown,
+                };
+                Some(ContrastFacet {
+                    ratio,
+                    aa,
+                    large: c.get("large").and_then(Value::as_bool).unwrap_or(false),
+                    foreground: c
+                        .get("foreground")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    background: c
+                        .get("background")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    unknown_reason: c
+                        .get("unknown_reason")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                })
+            })
+            .or_else(|| {
+                derive_contrast_values(
+                    style_val(node, "visual", "color"),
+                    style_val(node, "visual", "background-color"),
+                    style_val(node, "visual", "background-image"),
+                    style_val(node, "typography", "font-size"),
+                    style_val(node, "typography", "font-weight"),
+                )
+                .map(|i| ContrastFacet {
+                    ratio: i.ratio,
+                    aa: i.aa,
+                    large: i.large,
+                    foreground: i.foreground,
+                    background: i.background,
+                    unknown_reason: i.unknown_reason,
+                })
+            });
+        if let Some(info) = info {
             let large = if info.large { "large " } else { "" };
             match info.aa {
                 TriState::Pass => out.push(CheckLine {
@@ -198,13 +256,13 @@ fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
     }
 
     // --- Hidden but focusable ---
-    if focusable && node.is_visible == Some(false) {
+    if focusable && node.accessibility_grade() == Some("NONE") {
         out.push(CheckLine {
             check: "hidden-focusable".into(),
             selector: node.selector.clone(),
             tag: node.tag.clone(),
             status: RuleStatus::Warn,
-            evidence: "focusable element is not visible (sr-only/off-screen trap)".to_string(),
+            evidence: "focusable element is not exposed to assistive tech (tab trap)".to_string(),
         });
     }
 
@@ -290,7 +348,9 @@ mod tests {
             depth: Some(0),
             rect: Some(serde_json::json!({"x": 0, "y": 0, "width": 100, "height": 40})),
             metrics: None,
-            is_visible: Some(true),
+            noticeable: Some(serde_json::json!({
+                "display_visible": true, "accessibility_grade": "AAA"
+            })),
             hash: None,
             styles: Some(
                 serde_json::json!({
@@ -431,7 +491,9 @@ mod tests {
     #[test]
     fn hidden_focusable_warns() {
         let mut node = text_node();
-        node.is_visible = Some(false);
+        node.noticeable = Some(serde_json::json!({
+            "display_visible": false, "accessibility_grade": "NONE"
+        }));
         let lines = run_rules(&[node]);
         let hf = lines
             .iter()

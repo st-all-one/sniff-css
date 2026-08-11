@@ -2,8 +2,11 @@
 //!
 //! Pure math: parses CSS colors, computes relative luminance and the
 //! contrast ratio, and classifies AA/AAA compliance for normal vs. large
-//! text. Transparent/gradient/image backgrounds are reported as
-//! [`TriState::Unknown`] instead of guessing — honesty over false precision.
+//! text. The effective background is resolved in-page (JS composites
+//! transparent/semi-transparent layers over ancestors up to the page
+//! canvas); only background images — where the color is genuinely unknown —
+//! are reported as [`TriState::Unknown`] instead of guessing. Honesty over
+//! false precision.
 
 use crate::types::{ContrastInfo, ElementSnapshot, TriState};
 
@@ -182,25 +185,181 @@ fn parse_px(value: &str) -> Option<f64> {
     v.parse().ok()
 }
 
-/// Attach a contrast facet to a snapshot in place, reading the already
-/// captured `color`, `background-color`, `background-image`, `font-size`
-/// and `font-weight` properties.
-pub fn apply_contrast(snap: &mut ElementSnapshot) {
-    let info = derive_contrast_values(
-        snap.styles.get("color"),
-        snap.styles.get("background-color"),
-        snap.styles.get("background-image"),
-        snap.styles.get("font-size"),
-        snap.styles.get("font-weight"),
-    );
-    snap.contrast = info;
+/// The effective background behind a node's text, resolved by walking the
+/// ancestor chain: transparent/semi-transparent backgrounds composite
+/// over the nearest opaque ancestor, while a background image anywhere in
+/// the chain makes the value unmeasurable.
+#[derive(Debug, Clone, PartialEq)]
+enum EffectiveBackground {
+    /// A composited opaque color, plus the raw value it was derived from.
+    Solid { color: [f64; 3], raw: String },
+    /// Some ancestor (or the node itself) paints an image underneath.
+    Image,
+    /// No ancestor has a resolvable background (all transparent to the
+    /// capture root) — unknown, manual review.
+    Unknown,
 }
 
-/// Apply contrast derivation to every node in a snapshot forest.
+impl EffectiveBackground {
+    fn raw(&self) -> Option<&str> {
+        match self {
+            Self::Solid { raw, .. } => Some(raw),
+            Self::Image | Self::Unknown => None,
+        }
+    }
+}
+
+/// Resolve the effective background of `snap` given the background
+/// inherited from its ancestors.
+///
+/// - An opaque `background-color` becomes the new effective background.
+/// - A `background-image` (this node) paints over everything below it:
+///   the node itself and all descendants become unmeasurable.
+/// - A fully transparent background keeps the inherited one.
+/// - A semi-transparent background composites over the inherited one
+///   (when the inherited one is a solid color).
+fn resolve_background(
+    snap: &ElementSnapshot,
+    inherited: &EffectiveBackground,
+) -> EffectiveBackground {
+    let bg = snap.styles.get("background-color");
+    let bg_image = snap.styles.get("background-image").unwrap_or("none").trim();
+    let has_image = !bg_image.is_empty() && bg_image != "none";
+
+    let Some(bg) = bg.and_then(parse_color) else {
+        // Unparseable background-color (named color, `currentcolor`, ...)
+        // or none captured: keep the inherited background unless this
+        // node paints an image.
+        return if has_image {
+            EffectiveBackground::Image
+        } else {
+            inherited.clone()
+        };
+    };
+    let (color, alpha) = bg;
+
+    if has_image {
+        // An image paints over both the color and anything below.
+        return EffectiveBackground::Image;
+    }
+    if alpha >= 1.0 {
+        return EffectiveBackground::Solid {
+            color,
+            raw: snap
+                .styles
+                .get("background-color")
+                .unwrap_or("")
+                .to_string(),
+        };
+    }
+    if alpha <= 0.0 {
+        // Fully transparent: the inherited background shows through.
+        return inherited.clone();
+    }
+    // Semi-transparent: blend over the inherited solid color.
+    match inherited {
+        EffectiveBackground::Solid { color: under, raw } => {
+            let composite = [
+                color[0] * alpha + under[0] * (1.0 - alpha),
+                color[1] * alpha + under[1] * (1.0 - alpha),
+                color[2] * alpha + under[2] * (1.0 - alpha),
+            ];
+            EffectiveBackground::Solid {
+                color: composite,
+                raw: raw.clone(),
+            }
+        }
+        EffectiveBackground::Image | EffectiveBackground::Unknown => inherited.clone(),
+    }
+}
+
+/// Apply contrast derivation to every node in a snapshot forest, resolving
+/// the effective background (transparent/semi-transparent colors composite
+/// over the nearest opaque ancestor; background images make the value
+/// unmeasurable) top-down.
 pub fn apply_contrast_all(snaps: &mut [ElementSnapshot]) {
     for snap in snaps {
-        apply_contrast(snap);
-        apply_contrast_all(&mut snap.children);
+        apply_contrast_node(snap, &EffectiveBackground::Unknown);
+    }
+}
+
+fn apply_contrast_node(snap: &mut ElementSnapshot, inherited: &EffectiveBackground) {
+    // Prefer the effective background composited in-page (JS climbs the real
+    // DOM, so even a transparent capture root resolves to the page color).
+    // Fall back to the tree-walk for snapshots without the field.
+    let eff = match snap.effective_background.as_deref() {
+        Some("image") => EffectiveBackground::Image,
+        Some(color) => match parse_color(color) {
+            Some((rgb, alpha)) if alpha >= 1.0 => EffectiveBackground::Solid {
+                color: rgb,
+                raw: color.to_string(),
+            },
+            _ => EffectiveBackground::Unknown,
+        },
+        None => resolve_background(snap, inherited),
+    };
+    match &eff {
+        EffectiveBackground::Solid {
+            color: bg_color, ..
+        } => {
+            let fg = snap.styles.get("color");
+            match fg.and_then(parse_color) {
+                Some((fg_color, fg_alpha)) => {
+                    // Composite a translucent foreground over the resolved
+                    // background before measuring (e.g. `rgba(0,0,0,.5)`
+                    // text on white is effectively gray).
+                    let fg_eff = if fg_alpha < 1.0 {
+                        [
+                            fg_color[0] * fg_alpha + bg_color[0] * (1.0 - fg_alpha),
+                            fg_color[1] * fg_alpha + bg_color[1] * (1.0 - fg_alpha),
+                            fg_color[2] * fg_alpha + bg_color[2] * (1.0 - fg_alpha),
+                        ]
+                    } else {
+                        fg_color
+                    };
+                    let large =
+                        is_large_text(snap.styles.get("font-size"), snap.styles.get("font-weight"));
+                    let (aa_th, aaa_th) = if large { (3.0, 4.5) } else { (4.5, 7.0) };
+                    let ratio = contrast_ratio(fg_eff, *bg_color);
+                    snap.contrast = Some(ContrastInfo {
+                        ratio: (ratio * 100.0).round() / 100.0,
+                        foreground: fg.unwrap_or("").to_string(),
+                        background: eff.raw().unwrap_or("").to_string(),
+                        large,
+                        aa: classify(ratio, aa_th),
+                        aaa: classify(ratio, aaa_th),
+                        unknown_reason: None,
+                    });
+                }
+                None => snap.contrast = Some(unknown_contrast(snap, "unparseable foreground")),
+            }
+        }
+        EffectiveBackground::Image => {
+            snap.contrast = Some(unknown_contrast(snap, "background image"));
+        }
+        EffectiveBackground::Unknown => {
+            snap.contrast = Some(unknown_contrast(snap, "transparent background"));
+        }
+    }
+    let children = &mut snap.children;
+    for child in children.iter_mut() {
+        apply_contrast_node(child, &eff);
+    }
+}
+
+fn unknown_contrast(snap: &ElementSnapshot, reason: &str) -> ContrastInfo {
+    ContrastInfo {
+        ratio: 0.0,
+        foreground: snap.styles.get("color").unwrap_or("").to_string(),
+        background: snap
+            .styles
+            .get("background-color")
+            .unwrap_or("")
+            .to_string(),
+        large: false,
+        aa: TriState::Unknown,
+        aaa: TriState::Unknown,
+        unknown_reason: Some(reason.to_string()),
     }
 }
 
@@ -320,8 +479,9 @@ mod tests {
             depth: 0,
             rect: None,
             metrics: None,
-            is_visible: Some(true),
+            noticeable: None,
             aria: None,
+            effective_background: None,
             contrast: None,
             ax: None,
             styles: ComputedStyles {
@@ -338,9 +498,279 @@ mod tests {
             pseudo: vec![],
             children: vec![],
         };
-        apply_contrast(&mut snap);
+        apply_contrast_all(std::slice::from_mut(&mut snap));
         let c = snap.contrast.expect("contrast derived");
         assert_eq!(c.aa, TriState::Pass);
         assert_eq!(c.foreground, "#2563eb");
+    }
+
+    #[test]
+    fn apply_contrast_resolves_transparent_through_ancestors() {
+        // Parent paints an opaque white; the child (text) has a transparent
+        // background. The old behaviour reported `unknown`; now the child's
+        // effective background is resolved to the ancestor's white.
+        let child = ElementSnapshot {
+            id: 2,
+            parent_id: Some(1),
+            tag: "P".into(),
+            selector: ".card > p".into(),
+            path: ".card > p".into(),
+            depth: 1,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Typography,
+                    vec![
+                        prop("font-size", "16px"),
+                        prop("font-weight", "400"),
+                        prop("color", "#2563eb"),
+                        prop("background-color", "rgba(0, 0, 0, 0)"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![],
+        };
+        let mut parent = ElementSnapshot {
+            id: 1,
+            parent_id: None,
+            tag: "DIV".into(),
+            selector: ".card".into(),
+            path: ".card".into(),
+            depth: 0,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Typography,
+                    vec![
+                        prop("font-size", "16px"),
+                        prop("font-weight", "400"),
+                        prop("color", "#212529"),
+                        prop("background-color", "#ffffff"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![child],
+        };
+        apply_contrast_all(std::slice::from_mut(&mut parent));
+        let c = parent.children[0]
+            .contrast
+            .as_ref()
+            .expect("child contrast");
+        assert_eq!(c.aa, TriState::Pass);
+        assert_eq!(c.background, "#ffffff");
+        assert_eq!(c.foreground, "#2563eb");
+    }
+
+    #[test]
+    fn apply_contrast_composites_semitransparent_over_ancestor() {
+        // Text sits on a 50% black overlay that itself sits on white: the
+        // effective background is mid-gray (~#808080), a real measurable
+        // value, not `unknown`.
+        let text = ElementSnapshot {
+            id: 3,
+            parent_id: Some(2),
+            tag: "SPAN".into(),
+            selector: ".overlay > span".into(),
+            path: ".overlay > span".into(),
+            depth: 2,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Typography,
+                    vec![
+                        prop("font-size", "16px"),
+                        prop("font-weight", "400"),
+                        prop("color", "#ffffff"),
+                        prop("background-color", "rgba(0, 0, 0, 0)"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![],
+        };
+        let overlay = ElementSnapshot {
+            id: 2,
+            parent_id: Some(1),
+            tag: "DIV".into(),
+            selector: ".card > .overlay".into(),
+            path: ".card > .overlay".into(),
+            depth: 1,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Visual,
+                    vec![
+                        prop("color", "#000000"),
+                        prop("background-color", "rgba(0, 0, 0, 0.5)"),
+                        prop("background-image", "none"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![text],
+        };
+        let mut card = ElementSnapshot {
+            id: 1,
+            parent_id: None,
+            tag: "DIV".into(),
+            selector: ".card".into(),
+            path: ".card".into(),
+            depth: 0,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Visual,
+                    vec![
+                        prop("color", "#000000"),
+                        prop("background-color", "#ffffff"),
+                        prop("background-image", "none"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![overlay],
+        };
+        apply_contrast_all(std::slice::from_mut(&mut card));
+        let c = card.children[0].children[0]
+            .contrast
+            .as_ref()
+            .expect("child contrast");
+        assert!(c.aa != TriState::Unknown, "expected measurable, got {c:?}");
+        assert!(c.ratio > 1.0 && c.ratio < 21.0);
+    }
+
+    #[test]
+    fn apply_contrast_prefers_inpage_effective_background() {
+        // The capture root is transparent, but the in-page composited
+        // background (climbed by JS over the real DOM) is #f8f9fa. The
+        // measured muted text (~4.4:1) is a genuine AA failure.
+        let mut snap = ElementSnapshot {
+            id: 1,
+            parent_id: None,
+            tag: "P".into(),
+            selector: "main > p".into(),
+            path: "main > p".into(),
+            depth: 0,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            contrast: None,
+            effective_background: Some("#f8f9fa".into()),
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Typography,
+                    vec![
+                        prop("font-size", "16px"),
+                        prop("font-weight", "400"),
+                        prop("color", "#6c757d"),
+                        prop("background-color", "rgba(0, 0, 0, 0)"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![],
+        };
+        apply_contrast_all(std::slice::from_mut(&mut snap));
+        let c = snap.contrast.expect("contrast derived");
+        assert_eq!(c.background, "#f8f9fa");
+        assert_eq!(c.aa, TriState::Fail, "4.4:1 muted-on-light must fail AA");
+        assert!(c.ratio > 4.0 && c.ratio < 4.5, "ratio {}", c.ratio);
+    }
+
+    #[test]
+    fn apply_contrast_image_background_propagates_unknown() {
+        let child = ElementSnapshot {
+            id: 2,
+            parent_id: Some(1),
+            tag: "P".into(),
+            selector: ".hero > p".into(),
+            path: ".hero > p".into(),
+            depth: 1,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Typography,
+                    vec![
+                        prop("font-size", "16px"),
+                        prop("font-weight", "400"),
+                        prop("color", "#ffffff"),
+                        prop("background-color", "rgba(0, 0, 0, 0)"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![],
+        };
+        let mut hero = ElementSnapshot {
+            id: 1,
+            parent_id: None,
+            tag: "DIV".into(),
+            selector: ".hero".into(),
+            path: ".hero".into(),
+            depth: 0,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    crate::properties::StyleCategory::Visual,
+                    vec![
+                        prop("color", "#000000"),
+                        prop("background-color", "#223d73"),
+                        prop("background-image", "url(hero.png)"),
+                    ],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![child],
+        };
+        apply_contrast_all(std::slice::from_mut(&mut hero));
+        let c = hero.children[0].contrast.as_ref().expect("child contrast");
+        assert_eq!(c.aa, TriState::Unknown);
+        assert_eq!(c.unknown_reason.as_deref(), Some("background image"));
     }
 }

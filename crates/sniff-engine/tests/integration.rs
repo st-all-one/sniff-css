@@ -7,7 +7,8 @@
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::config::{OutputFormat, parse_categories};
 use sniff_core::{
-    ElementFilter, OutputConfig, ReadyCondition, SniffConfig, SniffResult, WaitStrategy,
+    AccessibilityGrade, ElementFilter, OutputConfig, ReadyCondition, SniffConfig, SniffResult,
+    WaitStrategy,
 };
 use sniff_engine::Sniffer;
 use std::sync::OnceLock;
@@ -118,7 +119,9 @@ async fn sniffs_computed_styles_of_element() -> SniffResult<()> {
 
     let rect = card.rect.expect("rect requested");
     assert!(rect.width > 0.0 && rect.height > 0.0);
-    assert_eq!(card.is_visible, Some(true));
+    let noticeable = card.noticeable.expect("noticeability requested");
+    assert!(noticeable.display_visible);
+    assert_eq!(noticeable.accessibility_grade, AccessibilityGrade::Aaa);
     Ok(())
 }
 
@@ -170,18 +173,22 @@ async fn visible_filter_excludes_hidden_elements() -> SniffResult<()> {
         .iter()
         .find(|c| c.selector.contains(".hidden"))
         .unwrap();
-    assert_eq!(hidden.is_visible, Some(false));
+    let hidden_n = hidden.noticeable.expect("noticeability requested");
+    assert!(!hidden_n.display_visible);
+    assert_eq!(hidden_n.accessibility_grade, AccessibilityGrade::None);
     let visible = snaps[0]
         .children
         .iter()
         .find(|c| c.selector.contains(".label"))
         .unwrap();
-    assert_eq!(visible.is_visible, Some(true));
+    let visible_n = visible.noticeable.expect("noticeability requested");
+    assert!(visible_n.display_visible);
+    assert_eq!(visible_n.accessibility_grade, AccessibilityGrade::Aaa);
     Ok(())
 }
 
 #[tokio::test]
-async fn off_viewport_sr_only_element_is_not_visible() -> SniffResult<()> {
+async fn off_viewport_sr_only_element_is_displayed_but_grade_aa() -> SniffResult<()> {
     let Some(opts) = require_chrome() else {
         eprintln!("skipping: no Chrome binary found");
         return Ok(());
@@ -192,10 +199,13 @@ async fn off_viewport_sr_only_element_is_not_visible() -> SniffResult<()> {
     let config = base_config(&fixture_path("fixture.html"), ".sr-focusable");
     let outcome = sniffer.sniff(&config).await?;
     let link = &outcome.snapshots[0];
-    // position: absolute at (-1px,-1px) with 1x1px: rendered but NOT
-    // perceivable within the viewport -> is_visible must be false.
+    // position: absolute at (-1px,-1px) with 1x1px: rendered (display_visible)
+    // but NOT on screen, so the accessibility grade drops to AA instead of
+    // reporting the whole element as invisible.
     assert_eq!(link.tag, "A");
-    assert_eq!(link.is_visible, Some(false));
+    let noticeable = link.noticeable.expect("noticeability requested");
+    assert!(noticeable.display_visible);
+    assert_eq!(noticeable.accessibility_grade, AccessibilityGrade::Aa);
     let rect = link.rect.expect("rect requested");
     assert_eq!(rect.width, 1.0);
     assert_eq!(rect.height, 1.0);

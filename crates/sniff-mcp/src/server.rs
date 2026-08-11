@@ -174,7 +174,8 @@ impl SniffMcpServer {
         name = "sniff_page",
         description = "Capture the real computed CSS styles of elements on a page and return them as \
                        JSONL. Each node carries readable fields (tag, selector, path, rect, metrics, \
-                       styles grouped by category) plus is_visible and computed_style_hash. \
+                       styles grouped by category) plus is_user_noticeable (display_visible + \
+                       accessibility_grade) and computed_style_hash. \
                        Use compact=true for ~55% fewer tokens and stable_key (e.g. data-testid) for \
                        selectors that stay matchable across deploys. Feed two runs to diff_snapshots \
                        to detect what changed."
@@ -218,12 +219,13 @@ impl SniffMcpServer {
         name = "diff_snapshots",
         description = "Deterministically diff two sniff_page JSONL snapshots (passed inline as \
                        strings) and return only what changed: CHANGED nodes with before/after values \
-                       per property (styles, pseudo, aria, contrast, ax, rect, metrics, is_visible), \
-                       ADDED/REMOVED nodes with their full snapshot, plus a final __diff_summary \
-                       line. tolerance ignores subpixel jitter in the same unit; ignore_props \
-                       skips volatile props (e.g. transform); ignore_structural suppresses \
-                       ADDED/REMOVED for variable-count lists. Use this delta as the input to your \
-                       evaluation prompt instead of the full snapshots."
+                       per property (styles, pseudo, aria, contrast, ax, rect, metrics, \
+                       is_user_noticeable), ADDED/REMOVED nodes with their full snapshot, plus a \
+                       final __diff_summary line. tolerance ignores subpixel jitter in the same \
+                       unit; ignore_props skips volatile props (e.g. transform); \
+                       ignore_structural suppresses ADDED/REMOVED for variable-count lists. Use \
+                       this delta as the input to your evaluation prompt instead of the full \
+                       snapshots."
     )]
     pub async fn diff_snapshots(
         &self,

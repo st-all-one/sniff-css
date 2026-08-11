@@ -23,7 +23,8 @@ pub struct DiffNode {
     pub depth: Option<usize>,
     pub rect: Option<Value>,
     pub metrics: Option<Value>,
-    pub is_visible: Option<bool>,
+    /// `{"display_visible": bool, "accessibility_grade": "NONE"|"AA"|"AAA"}`.
+    pub noticeable: Option<Value>,
     pub hash: Option<String>,
     pub styles: Option<Map<String, Value>>,
     pub pseudo: Option<Map<String, Value>>,
@@ -53,7 +54,7 @@ impl DiffNode {
             depth: v.get("depth").and_then(Value::as_u64).map(|d| d as usize),
             rect: v.get("rect").cloned(),
             metrics: v.get("metrics").cloned(),
-            is_visible: v.get("is_visible").and_then(Value::as_bool),
+            noticeable: v.get("is_user_noticeable").cloned(),
             hash: v
                 .get("computed_style_hash")
                 .and_then(Value::as_str)
@@ -65,6 +66,24 @@ impl DiffNode {
             ax: v.get("ax").cloned(),
             children,
         }
+    }
+
+    /// Whether the element is rendered in layout (`display_visible`), when
+    /// noticeability was captured. `None` if unknown.
+    pub fn display_visible(&self) -> Option<bool> {
+        self.noticeable
+            .as_ref()
+            .and_then(|v| v.get("display_visible"))
+            .and_then(Value::as_bool)
+    }
+
+    /// The captured accessibility grade (`NONE`, `AA`, `AAA`), when
+    /// noticeability was captured.
+    pub fn accessibility_grade(&self) -> Option<&str> {
+        self.noticeable
+            .as_ref()
+            .and_then(|v| v.get("accessibility_grade"))
+            .and_then(Value::as_str)
     }
 }
 

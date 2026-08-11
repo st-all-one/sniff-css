@@ -18,7 +18,8 @@ A) Acessibilidade: contraste (color vs background-color, WCAG AA/AAA). Use o
    ARIA: deltas de `aria.role`/`aria.name`/`aria.focusable` e do nó `ax`
    (role/name/ignored computados pelo Chrome).
 B) Estabilidade de layout (CLS/UX): dimensões fixas, position/z-index,
-   sobreposição, `is_visible` mudando sem razão, deltas de `rect`.
+   sobreposição, `is_user_noticeable` mudando sem razão (`display_visible`
+   flip-flop ou `accessibility_grade` caindo), deltas de `rect`.
 C) Hierarquia visual / design system: alinhamento a escala (múltiplos de
    4px/8px), unificação de tipografia, fontes não mapeadas.
 D) Evidências de sniff-check: outliers de `uniformity` (instância que desvia

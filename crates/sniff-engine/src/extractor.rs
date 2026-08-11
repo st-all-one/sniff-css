@@ -4,7 +4,8 @@ use serde_json::{Map, Value, json};
 use sniff_cdp::session::CdpSession;
 use sniff_core::properties::StyleCategory;
 use sniff_core::types::{
-    AriaInfo, ComputedProperty, ComputedStyles, ElementMetrics, ElementSnapshot, PseudoStyles, Rect,
+    AccessibilityGrade, AriaInfo, ComputedProperty, ComputedStyles, ElementMetrics,
+    ElementSnapshot, Noticeability, PseudoStyles, Rect,
 };
 use sniff_core::{SniffConfig, SniffError, SniffResult};
 
@@ -358,6 +359,93 @@ const EXTRACT_JS: &str = r#"
     return out;
   }
 
+  function parseRgba(color) {
+    if (!color) return null;
+    const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(\s*[,/]\s*([\d.]+%?))?\s*\)$/.exec(color);
+    if (!m) return null;
+    let a = 1;
+    if (m[5] !== undefined) a = m[5].endsWith('%') ? parseFloat(m[5]) / 100 : parseFloat(m[5]);
+    return [+m[1], +m[2], +m[3], a];
+  }
+
+  // Effective background painted BEHIND `node` (its own bg composited over
+  // every ancestor up to the html/body canvas), exactly as the browser
+  // renders it. Returns '#rrggbb' for a solid effective color, 'image' when
+  // any layer in the chain paints a background image, or null when nothing
+  // opaque is resolvable. The JS climb is independent of the capture depth,
+  // so a transparent capture root still resolves to the real page color.
+  function effectiveBackground(node) {
+    if (!node) {
+      // Above <html>: the canvas. Body/html backgrounds propagate to it.
+      const html = parseRgba(getComputedStyle(document.documentElement).backgroundColor);
+      const body = parseRgba(getComputedStyle(document.body).backgroundColor);
+      const solid = [html, body].find(function (x) { return x && x[3] >= 1; });
+      return solid ? toHexRgb(solid[0], solid[1], solid[2]) : null;
+    }
+    const cs = getComputedStyle(node);
+    if (cs.backgroundImage && cs.backgroundImage !== 'none') return 'image';
+    const bg = parseRgba(cs.backgroundColor);
+    if (bg) {
+      const r = bg[0], g = bg[1], b = bg[2], a = bg[3];
+      if (a >= 1) return toHexRgb(r, g, b);
+      if (a > 0) {
+        const below = effectiveBackground(node.parentElement);
+        if (below === 'image') return 'image';
+        if (!below) return null;
+        const [br, bg_, bb] = fromHexRgb(below);
+        return toHexRgb(
+          r * a + br * (1 - a),
+          g * a + bg_ * (1 - a),
+          b * a + bb * (1 - a)
+        );
+      }
+    }
+    return effectiveBackground(node.parentElement);
+  }
+
+  function toHexRgb(r, g, b) {
+    const h = function (v) {
+      const c = Math.round(v);
+      return (c < 0 ? 0 : c > 255 ? 255 : c).toString(16).padStart(2, '0');
+    };
+    return '#' + h(r) + h(g) + h(b);
+  }
+
+  function fromHexRgb(hex) {
+    return [
+      parseInt(hex.slice(1, 3), 16),
+      parseInt(hex.slice(3, 5), 16),
+      parseInt(hex.slice(5, 7), 16)
+    ];
+  }
+
+  function accessibilityGradeOf(el, cs, rect, aria) {
+    // Exposed to assistive tech at all?
+    const ariaHidden = aria && aria.ariaHidden === 'true';
+    const htmlHidden = el.hasAttribute('hidden') || !!el.closest('[hidden],[inert]');
+    const displayNone = cs.display === 'none';
+    const visibilityHidden = cs.visibility === 'hidden' || cs.visibility === 'collapse';
+    const zeroSize = rect.width === 0 && rect.height === 0;
+    if (ariaHidden || htmlHidden || displayNone || visibilityHidden || zeroSize) {
+      return 'NONE';
+    }
+    // On screen within the current viewport?
+    const onScreen = rect.x + rect.width > 0 && rect.y + rect.height > 0 &&
+      rect.x < window.innerWidth && rect.y < window.innerHeight;
+    const opacityZero = parseFloat(cs.opacity) === 0;
+    // Roles that require an accessible name.
+    const role = (aria && aria.role) || '';
+    const needsName = ['button','link','img','heading','checkbox','radio','switch',
+      'textbox','searchbox','combobox','slider','spinbutton','option','tab','menuitem',
+      'progressbar','meter','status','dialog','navigation','main','banner','contentinfo',
+      'complementary','region','search','form','article','figure'].indexOf(role) >= 0;
+    const hasName = aria && aria.name && aria.name.trim().length > 0;
+    if (!onScreen || opacityZero || (needsName && !hasName)) {
+      return 'AA';
+    }
+    return 'AAA';
+  }
+
   function buildNode(el, depth, parentId) {
     const node = {};
     node.id = ++__nodeId;
@@ -377,14 +465,20 @@ const EXTRACT_JS: &str = r#"
     if (opts.includeMetrics) {
       node.metrics = { z_index: cs.zIndex, stacking_context: stackingContext(cs) };
     }
-    if (opts.includeVisibility) {
-      node.isVisible = cs.display !== 'none' && cs.visibility !== 'hidden' &&
-        parseFloat(cs.opacity) > 0 && (rect.width > 0 || rect.height > 0) &&
-        rect.x + rect.width > 0 && rect.y + rect.height > 0 &&
-        rect.x < window.innerWidth && rect.y < window.innerHeight;
-    }
     if (opts.includeAria) {
       node.aria = ariaOf(el);
+    }
+    if (opts.includeVisibility) {
+      const rendered = cs.display !== 'none' &&
+        (cs.visibility !== 'hidden' && cs.visibility !== 'collapse') &&
+        parseFloat(cs.opacity) > 0 && (rect.width > 0 || rect.height > 0);
+      node.isUserNoticeable = {
+        display_visible: rendered,
+        accessibility_grade: accessibilityGradeOf(el, cs, rect, node.aria)
+      };
+    }
+    if (opts.includeContrast) {
+      node.effectiveBackground = effectiveBackground(el);
     }
     node.styles = buildStyles(el, cs);
     if (pseudo.length) {
@@ -467,6 +561,7 @@ fn build_args(config: &SniffConfig) -> Value {
         "includeMetrics": config.output.include_metrics,
         "includeVisibility": config.output.include_visibility,
         "includeAria": config.output.include_aria,
+        "includeContrast": config.output.include_contrast,
         "normalizeColors": config.output.normalize_colors,
         "customProps": config.include_custom_properties,
         "stableKey": config.stable_key,
@@ -583,7 +678,11 @@ fn parse_node(v: &Value) -> ElementSnapshot {
         depth: v.get("depth").and_then(Value::as_u64).unwrap_or(0) as usize,
         rect: v.get("rect").map(parse_rect),
         metrics: v.get("metrics").map(parse_metrics),
-        is_visible: v.get("isVisible").and_then(Value::as_bool),
+        noticeable: v.get("isUserNoticeable").and_then(parse_noticeable),
+        effective_background: v
+            .get("effectiveBackground")
+            .and_then(Value::as_str)
+            .map(String::from),
         aria: v.get("aria").map(parse_aria),
         contrast: None,
         ax: None,
@@ -651,6 +750,26 @@ fn parse_metrics(v: &Value) -> ElementMetrics {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     }
+}
+
+fn parse_noticeable(v: &Value) -> Option<Noticeability> {
+    let display_visible = v.get("display_visible").and_then(Value::as_bool)?;
+    let grade = match v
+        .get("accessibility_grade")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_uppercase()
+        .as_str()
+    {
+        "NONE" => AccessibilityGrade::None,
+        "AA" => AccessibilityGrade::Aa,
+        "AAA" => AccessibilityGrade::Aaa,
+        _ => return None,
+    };
+    Some(Noticeability {
+        display_visible,
+        accessibility_grade: grade,
+    })
 }
 
 fn parse_styles(v: &Value) -> ComputedStyles {
