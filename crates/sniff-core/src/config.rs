@@ -64,9 +64,12 @@ impl Default for SniffConfig {
                 width: 1366,
                 height: 768,
             }),
-            include_custom_properties: false,
+            // The AI-optimized default: capture design tokens too.
+            include_custom_properties: true,
             stable_key: None,
-            stabilize: false,
+            // Deterministic snapshots are the tool's contract: freeze
+            // animations/transitions unless explicitly disabled.
+            stabilize: true,
             ax_tree: false,
         }
     }
@@ -228,12 +231,17 @@ impl Default for OutputConfig {
             normalize_colors: true,
             group_by_category: true,
             pretty: false,
-            compact: false,
+            // AI-first default: compact drops redundant/default properties
+            // (~55% fewer tokens) while keeping every meaningful value.
+            compact: true,
             include_visibility: true,
             include_style_hash: true,
             include_aria: true,
-            include_contrast: false,
-            include_ax: false,
+            // Measured accessibility facets are cheap (~10-20 tokens per
+            // node) and high-value; they make sniffCSS-check work out of
+            // the box. Use `--no-contrast`/`--no-ax`/`--full` to disable.
+            include_contrast: true,
+            include_ax: true,
         }
     }
 }
@@ -498,6 +506,28 @@ mod tests {
                 height: 768
             })
         );
+    }
+
+    #[test]
+    fn default_is_ai_optimized() {
+        let cfg = SniffConfig::default();
+        assert!(cfg.output.compact, "compact must be ON by default");
+        assert!(
+            cfg.output.include_contrast,
+            "contrast facet must be ON by default"
+        );
+        assert!(cfg.output.include_ax, "ax facet must be ON by default");
+        assert!(
+            cfg.include_custom_properties,
+            "custom props must be ON by default"
+        );
+        assert!(cfg.stabilize, "stabilize must be ON by default");
+        // Per-node facets stay on for an AI-ready capture.
+        assert!(cfg.output.include_visibility);
+        assert!(cfg.output.include_style_hash);
+        assert!(cfg.output.include_aria);
+        // The full AX subtree document stays opt-in (large).
+        assert!(!cfg.ax_tree);
     }
 
     #[test]

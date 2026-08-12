@@ -14,36 +14,44 @@ sniffCSS  (segunda execução, mesmos parâmetros)       ─┘
 A extração e o diff são **sem IA** e custam ~0 tokens. O LLM só vê o delta
 (medido: ~79% menos tokens que os snapshots completos).
 
-## 1. Flag‑set recomendado para captura
+## 1. Capture — o default já é otimizado
 
-Para uso com IA, capture sempre com o mesmo conjunto de flags nas duas runs:
+Para uso com IA, o **default** do `sniffCSS` já é o conjunto otimizado: você só
+precisa de `-u` + `-s` (e, se houver, `--stable-key`). Tudo abaixo vem ligado:
 
 ```bash
 sniffCSS \
   --url "http://localhost:3000/checkout" \
   --selector ".checkout-form" \
-  --depth 2 \
-  --categories all \
-  --compact \
-  --custom-props \
-  --stable-key data-testid
+  --depth 2
+#   ^-- os 5 otimizadores abaixo já estão ON por padrão
 ```
 
-| Flag | Por quê |
+| Otimização | Status | Por quê |
+|---|---|---|
+| `compact` | **default ON** | Dedup lógico/físico + supressão de defaults + `css_variables` escopado → ~55% menos tokens. |
+| `custom-props` | **default ON** | Captura as variáveis CSS (`--*`); global no `__meta`, overrides por nó. |
+| `stabilize` | **default ON** | Páginas animadas/carrosséis: congela `animation`/`transition` → snapshot determinístico. |
+| `contrast` | **default ON** | Facet `contrast` medido por nó (fundo efetivo resolvido in-page). |
+| `ax` | **default ON** | Facet `ax` por nó (árvore de acessibilidade do Chrome). |
+
+Controle fino **opcional** (sempre sobrepõe o default):
+
+| Flag | Efeito |
 |---|---|
-| `--categories all` | Só os ~250 props do catálogo, nunca as ~400 do navegador. |
-| `--compact` | Dedup lógico/físico + supressão de defaults + `css_variables` escopado → ~55% menos tokens. |
-| `--custom-props` | Captura as variáveis CSS (`--*`); global no `__meta`, overrides por nó. |
+| `--full` | Desliga os 5 de uma vez (full-fidelity, comportamento antigo). |
+| `--no-compact` | Mantém todas as propriedades, sem dedup. |
+| `--no-custom-props` | Omitir variáveis CSS. |
+| `--no-stabilize` | Capturar o estado animado real (não congelado). |
+| `--no-contrast` | Omitir o facet `contrast`. |
+| `--no-ax` | Omitir o facet `ax`. |
 | `--stable-key data-testid` | Seletores estáveis entre deploys → diff confiável. |
-| `--stabilize` | Páginas animadas/carrosséis: congela `animation`/`transition` → snapshot determinístico. |
 | `--depth N` | Subárvore controlada; `0` = só o elemento. |
 
-Flags de a11y (opt-in, adicionam facetas medidas):
+Flags de a11y extras (continuam opt-in, adicionam facetas):
 
 | Flag | Facet emitido |
 |---|---|
-| `--contrast` | `contrast` por nó: ratio WCAG **medido** + AA/AAA (normal vs. texto grande). O fundo efetivo é resolvido **na página** — o JS compõe camadas transparentes/semi-transparentes subindo até o canvas do `html`/`body`, independente da profundidade da captura. `unknown` apenas quando há **fundo-imagem** na cadeia (revisão manual). |
-| `--ax` | `ax` por nó: nó da árvore de acessibilidade do Chrome (`role`/`name`/`focusable`/`ignored`/`level`...). |
 | `--ax-tree` | Linha `__ax_tree` com a subárvore AX completa dos elementos casados (implica `--ax`). |
 
 Saída (padrão `jsonl`, árvore aninhada):
@@ -178,7 +186,10 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
 
 1. **`sniffCSS_page`** — captura (args: url, selector, depth, categories, compact,
    custom_props, stable_key, pseudo, wait, viewport, format, stabilize,
-   contrast, include_ax, ax_tree, persist, return).
+   contrast, include_ax, ax_tree, full, persist, return).
+   Os defaults já são os otimizados: `compact`, `custom_props`, `stabilize`,
+   `contrast` e `include_ax` vêm ligados — passe `full:true` para full-fidelity
+   ou qualquer flag como `false` para desligar individualmente.
    Por padrão **persiste** o snapshot em
    `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
    e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
@@ -186,7 +197,7 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    (`persist:false` desativa a gravação).
    Durante a execução envia `notifications/progress` por fase:
    `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
-   `capturing accessibility tree` (se `--ax`) → `formatting N nodes`.
+   `capturing accessibility tree` (se `include_ax`/`ax_tree`) → `formatting N nodes`.
 2. **`sniffCSS_snapshots`** — lista os snapshots persistidos (domain/target/path/
    created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use
    para escolher o par base/head.
@@ -216,22 +227,26 @@ Config do Claude Desktop:
 
 ```bash
 # guarda o estado atual como base de comparação
+# (default otimizado; --stable-key é opcional mas recomendado)
 sniffCSS --url "$URL" --selector "$SEL" --stable-key data-testid \
-  --compact > snapshots/base.jsonl
+  > snapshots/base.jsonl
 
-# ... no build seguinte ...
+# ... no build seguinte ... (mesmos flags nos dois lados)
 sniffCSS --url "$URL" --selector "$SEL" --stable-key data-testid \
-  --compact > snapshots/head.jsonl
+  > snapshots/head.jsonl
 
 sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 # falha o job se changed/added/removed > limiar
 ```
 
+> ⚠️ Para full-fidelity, use `--full` nos **dois** lados — nunca misture
+> default com `--full` (o hash e o conteúdo dependem do modo).
+
 ### Debug de um elemento pontual
 
 ```bash
 sniffCSS -u http://localhost:3000 -s ".btn-primary" \
-  --categories visual,typography --compact \
+  --categories visual,typography \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'
 ```
 
@@ -250,15 +265,16 @@ afeta o contraste** — use `depth` para controlar o tamanho do output, não a
 precisão.
 
 ```bash
-# Visão estrutural (landmarks, headings, links, imgs) + contraste medido
-sniffCSS -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree \
+# Visão estrutural (landmarks, headings, links, imgs) + contraste medido.
+# compact/contrast/ax já vêm ON por padrão; --ax-tree é o único opt-in aqui.
+sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree \
   > body.jsonl
 
 # Regiões profundas demais para o body (menu, rodapé, formulários, carrossel)
-sniffCSS -u "$URL" -s "nav"      --depth 4 --compact --contrast > nav.jsonl
-sniffCSS -u "$URL" -s "footer"   --depth 6 --compact --contrast > footer.jsonl
-sniffCSS -u "$URL" -s "main"     --depth 5 --compact --contrast > main.jsonl
-sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 --compact --contrast > forms.jsonl
+sniffCSS -u "$URL" -s "nav"      --depth 4 > nav.jsonl
+sniffCSS -u "$URL" -s "footer"   --depth 6 > footer.jsonl
+sniffCSS -u "$URL" -s "main"     --depth 5 > main.jsonl
+sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
 ```
 
 ### Passo 2 — regras determinísticas (sem IA)
@@ -331,10 +347,12 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
 
 | Ação | Comando |
 |---|---|
-| Capturar | `sniffCSS -u URL -s SEL [flags]` |
+| Capturar (default otimizado) | `sniffCSS -u URL -s SEL [flags]` |
+| Full-fidelity | `--full` |
+| Desligar otimizações individuais | `--no-compact`, `--no-contrast`, `--no-ax`, `--no-stabilize`, `--no-custom-props` |
 | Achatado | `--output jsonl-flat` |
-| Estabilizar animações | `--stabilize` |
-| A11y medida | `--contrast --ax` ou `--ax-tree` |
+| Estabilizar animações | já ON; desligue com `--no-stabilize` |
+| A11y medida | já ON (`contrast` + `ax`); subárvore AX com `--ax-tree` |
 | Auditoria a11y completa | `docs/accessibility.md` |
 | Resumo de mudanças | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
 | Ignorar props voláteis | `sniffCSS-diff ... --ignore-props transform,opacity` |

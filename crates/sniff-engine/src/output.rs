@@ -523,9 +523,13 @@ pub fn write_output<W: Write>(
 }
 
 fn vars_to_json(vars: &HashMap<String, String>) -> Value {
+    // Deterministic order: sort keys so identical captures serialize
+    // byte-identically across runs (HashMap iteration order varies).
+    let mut keys: Vec<&String> = vars.keys().collect();
+    keys.sort();
     Value::Object(
-        vars.iter()
-            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+        keys.into_iter()
+            .map(|k| (k.clone(), Value::String(vars[k].clone())))
             .collect(),
     )
 }
@@ -643,7 +647,10 @@ mod tests {
     #[test]
     fn full_json_has_ids_and_readable_names() {
         let snap = sample_snapshot();
-        let cfg = OutputConfig::default();
+        let cfg = OutputConfig {
+            compact: false,
+            ..OutputConfig::default()
+        };
         let json = snapshot_to_json(&snap, &cfg, None);
         assert_eq!(json["id"], 1);
         assert_eq!(json["tag"], "SPAN");
@@ -720,6 +727,41 @@ mod tests {
         );
         let node: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(node["tag"], "SPAN");
+    }
+
+    #[test]
+    fn meta_css_variables_are_sorted_deterministically() {
+        // HashMap iteration order is random; the __meta css_variables line
+        // must serialize identically regardless of insertion order.
+        let global = Some(vec![
+            ("--zebra".to_string(), "3".to_string()),
+            ("--alpha".to_string(), "1".to_string()),
+            ("--mango".to_string(), "2".to_string()),
+        ]);
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: global,
+            ax_tree: None,
+        };
+        let cfg = OutputConfig {
+            compact: true,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let meta: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        let vars = meta["__meta"]["css_variables"].as_object().unwrap();
+        let keys: Vec<&String> = vars.keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                &"--alpha".to_string(),
+                &"--mango".to_string(),
+                &"--zebra".to_string()
+            ],
+            "css_variables must be emitted in sorted order"
+        );
     }
 
     #[test]
@@ -848,7 +890,14 @@ mod tests {
     #[test]
     fn compact_and_full_hashes_differ_by_mode() {
         let snap = sample_snapshot();
-        let full = snapshot_to_json(&snap, &OutputConfig::default(), None);
+        let full = snapshot_to_json(
+            &snap,
+            &OutputConfig {
+                compact: false,
+                ..OutputConfig::default()
+            },
+            None,
+        );
         let compact = snapshot_to_json(
             &snap,
             &OutputConfig {

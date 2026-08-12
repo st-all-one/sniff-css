@@ -8,10 +8,16 @@ acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
 ## Uso rápido
 
 ```bash
-# Computed styles do botão (todas as categorias)
+# Computed styles do botão — o default já é otimizado para IA:
+# compact + custom-props + stabilize + contrast + ax ligados.
 sniffCSS --url http://localhost:3000 --selector ".btn-primary"
 
-# Apenas box-model + tipografia, com 1 nível de filhos
+# Full-fidelity (todas as ~400 props do navegador, sem dedup, sem facets
+# medidos) — comportamento antigo:
+sniffCSS --url http://localhost:3000 --selector ".btn-primary" --full
+
+# Apenas box-model + tipografia, com 1 nível de filhos (flags continuam
+# funcionando e sobrepõem os defaults):
 sniffCSS --url http://localhost:3000 --selector ".card" \
   --depth 1 --categories box-model,typography
 
@@ -26,6 +32,12 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 
 ## Opções principais
 
+> **O default é AI-otimizado**: `compact`, `custom-props`, `stabilize`,
+> `contrast` e `ax` já vêm ligados. O output resultante traz o máximo de
+> informação útil no mínimo de tokens. Use `--full` para o modo full-fidelity
+> (tudo desligado de uma vez) ou os `--no-*` individuais para controle fino
+> **opcional**.
+
 | Opção | Descrição | Padrão |
 |---|---|---|
 | `-u, --url` | URL da página | obrigatório |
@@ -39,9 +51,16 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
 | `--output jsonl\|jsonl-flat\|json` | Formato de saída | `jsonl` |
-| `--compact` | Modo compacto (ver abaixo) | — |
+| `--compact` | Modo compacto (ver abaixo) | **`on`** (use `--no-compact`) |
+| `--custom-props` | Capturar todas as variáveis CSS (`--*`) | **`on`** (use `--no-custom-props`) |
+| `--stabilize` | Congelar animações/transições (snapshot determinístico) | **`on`** (use `--no-stabilize`) |
+| `--contrast` | Facet `contrast` medido por nó (WCAG AA/AAA, fundo efetivo resolvido) | **`on`** (use `--no-contrast`) |
+| `--ax` | Facet `ax` por nó (árvore de acessibilidade do Chrome) | **`on`** (use `--no-ax`) |
+| `--ax-tree` | Emitir a subárvore AX completa como `__ax_tree` (implica `--ax`) | — (opt-in) |
+| `--full` | Desliga todos os 5 otimizadores de uma vez (equivalente ao comportamento antigo) | `off` |
 | `--no-visibility` | Omitir campo `is_user_noticeable` por nó | — |
 | `--no-style-hash` | Omitir `computed_style_hash` por nó | — |
+| `--no-aria` | Omitir o facet `aria` por nó (role/nome/focusable) | — |
 | `--pretty` | JSON pretty | — |
 | `--no-rect/--no-path/--no-metrics` | Omitir campos | — |
 | `--no-normalize-colors` | Manter cores como o browser retorna | — |
@@ -49,13 +68,7 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 | `--chrome PATH` | Binário do Chrome | autodetect |
 | `--connect WS` | Conectar em browser existente | — |
 | `--viewport WxH` | Viewport emulado (afeta `%`, `vh`, media queries) | `1366x768` |
-| `--custom-props` | Capturar todas as variáveis CSS (`--*`) | — |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
-| `--stabilize` | Congelar animações/transições antes da captura (snapshot determinístico) | — |
-| `--contrast` | Emitir facet `contrast` medido por nó (WCAG AA/AAA, fundo efetivo resolvido) | — |
-| `--ax` | Emitir facet `ax` por nó (árvore de acessibilidade do Chrome) | — |
-| `--ax-tree` | Emitir a subárvore AX completa como `__ax_tree` (implica `--ax`) | — |
-| `--no-aria` | Omitir o facet `aria` por nó (role/nome/focusable) | — |
 
 ### Categorias disponíveis
 
@@ -112,7 +125,8 @@ Uma linha JSON por elemento raiz, com filhos aninhados. Nomes legíveis e compac
 ```
 
 - `pseudo`: mapa de pseudo-elementos → mesmos grupos de estilos.
-- `css_variables`: grupo extra com todas as variáveis CSS (`--*`) quando `--custom-props` é usado.
+- `css_variables`: grupo extra com todas as variáveis CSS (`--*`) — emitido por
+  padrão (use `--no-custom-props` para omitir).
 - `id` / `parent_id`: todos os nós recebem identificadores (pre-order), permitindo achatamento/referência.
 - `is_user_noticeable`: objeto que divide o antigo `is_visible` em dois eixos — `display_visible`
   (renderizado de fato: `display`≠`none`, `visibility`≠`hidden`, `opacity`>0, tamanho≠0;
@@ -131,7 +145,9 @@ Uma linha JSON por elemento raiz, com filhos aninhados. Nomes legíveis e compac
 
 ## Modo compacto (`--compact`)
 
-Otimizado para eficiência de tokens (redução típica de ~55%):
+**Ligado por padrão.** Otimizado para eficiência de tokens (redução típica de
+~55%). Desligue com `--no-compact` ou `--full` para o conjunto completo de
+propriedades:
 
 1. **Deduplicação lógico/físico**: remove `*-block-*`/`*-inline-*`, `inset-*`,
    `grid-column-gap` etc. quando idênticos ao equivalente físico
@@ -140,8 +156,23 @@ Otimizado para eficiência de tokens (redução típica de ~55%):
    `auto`, `100%`, ...) em propriedades não críticas; uma allowlist preserva
    propriedades sempre relevantes (`display`, `position`, `z-index`, cores, ...).
 3. **`css_variables` escopado**: o mapa global de `:root` é emitido **uma única
-   vez** numa linha `{"__meta":{"css_variables":{...}}}`, e cada nó carrega apenas
-   as variáveis que **sobrescrevem** localmente.
+   vez** numa linha `{"__meta":{"css_variables":{...}}}` (em ordem ordenada,
+   determinística), e cada nó carrega apenas as variáveis que **sobrescrevem**
+   localmente.
+
+## Modo full-fidelity (`--full`)
+
+Desliga todos os otimizadores de uma vez — equivalente ao comportamento
+pré-AI-default. Útil quando você precisa do conjunto **completo** de
+propriedades do navegador e das cores como o Chrome reporta:
+
+```bash
+sniffCSS --url http://localhost:3000 --selector ".card" --full
+```
+
+A mesma saída também pode ser obtida flag a flag:
+`--no-compact --no-custom-props --no-stabilize --no-contrast --no-ax`.
+O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o default.
 
 ### Formatos
 

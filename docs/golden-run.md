@@ -20,26 +20,24 @@ Para que duas runs sejam comparáveis, os seguintes parâmetros devem ser
 | Parâmetro | Padrão ouro | Por quê |
 |---|---|---|
 | `--viewport` | `1366x768` | Media queries e `vh/%/rem` mudam com o viewport. |
-| `--categories all` + `--compact` | sempre | Mesmo modo = mesmo hash/conteúdo. |
+| default otimizado | `compact`+`custom-props`+`stabilize`+`contrast`+`ax` (todos já ON) | Mesmo modo = mesmo hash/conteúdo. Não misture default com `--full`. |
 | `--stable-key data-testid` | sempre que houver | Seletores estáveis entre deploys. |
-| `--stabilize` | páginas animadas/carrosséis | Congela `animation`/`transition` (`prefers-reduced-motion` + cancelamento). |
 | Wait strategy | mesmo em ambas | `network-idle`/`element-ready`/`delay` devem esperar o mesmo estado. |
 
 ## 2. Pipeline completo (CLI)
 
 ```bash
-# 1. Baseline (antes da mudança)
+# 1. Baseline (antes da mudança) — default otimizado já inclui
+#    compact + custom-props + stabilize + contrast + ax
 sniffCSS \
   --url "$URL" --selector "$SEL" \
-  --depth 2 --categories all --compact --custom-props \
-  --stable-key data-testid --stabilize \
+  --depth 2 --stable-key data-testid \
   > snapshots/base.jsonl
 
 # 2. Após a mudança/deploy (mesmos flags)
 sniffCSS \
   --url "$URL" --selector "$SEL" \
-  --depth 2 --categories all --compact --custom-props \
-  --stable-key data-testid --stabilize \
+  --depth 2 --stable-key data-testid \
   > snapshots/head.jsonl
 
 # 3. Diff determinístico
@@ -78,8 +76,9 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 
 | Cenário | Ajuste |
 |---|---|
-| Acessibilidade a11y | `--contrast` (facet medido por nó) e `--ax` (nó AX do Chrome) ou `--ax-tree` (subárvore completa). |
-| Página animada (jitter) | `--stabilize`; se o jitter persistir, suba `--tolerance` ou amplie `--ignore-props`. |
+| Acessibilidade a11y | já ON (`contrast` + `ax` por nó); para a subárvore AX completa adicione `--ax-tree`. |
+| Página animada (jitter) | já congelada (`--stabilize` default); se o jitter persistir, suba `--tolerance` ou amplie `--ignore-props`. |
+| Full-fidelity | `--full` nos dois lados (nunca misturar com o default). |
 | Feed/lista com contagem variável | `--no-structural` no diff (só CHANGED). |
 | Cards repetidos (grid) | `sniffCSS-check --uniform` acha o card estranho. |
 | Conteúdo que some após load | capture a subárvore estável: `--selector footer --depth 2` ou `--wait delay:N`. |

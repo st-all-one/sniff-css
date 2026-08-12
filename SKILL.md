@@ -24,9 +24,9 @@ All steps before the AI are deterministic and cost ~0 tokens.
 
 | Action | Command |
 |--------|---------|
-| Capture a node/subtree | `sniffCSS -u URL -s SEL --depth N` |
-| LLM-ready capture | `sniffCSS -u URL -s SEL --depth N --compact` |
-| Accessibility capture | `sniffCSS -u URL -s SEL --compact --contrast --ax-tree` |
+| Capture a node/subtree (default is AI-optimized) | `sniffCSS -u URL -s SEL --depth N` |
+| Full-fidelity capture | `sniffCSS -u URL -s SEL --depth N --full` |
+| Accessibility capture | `sniffCSS -u URL -s SEL --depth N --ax-tree` (contrast/ax já ON) |
 | Diff two snapshots | `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` |
 | Diff summary (CI) | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
 | Offline checks | `sniffCSS-check --input snap.jsonl --uniform --rules` |
@@ -61,7 +61,8 @@ Rules of thumb:
 - **Never feed a full snapshot to the model** — diff or check it first; the AI
   interprets only the delta/evidence.
 - **Determinism is a contract:** both sides of a diff must share URL, selector,
-  viewport, wait strategy and mode (`--compact` on both, never mixed).
+  viewport, wait strategy and mode (default+default or `--full`+`--full`, never
+  mixed).
 - **The AI only judges:** the measured facets (`contrast.ratio`, `aria.name`,
   `is_user_noticeable.accessibility_grade`, `ax.role`) are evidence the tools
   already computed — cite them, don't re-derive them.
@@ -75,10 +76,12 @@ Rules of thumb:
 ### Core
 
 ```bash
+# Default is already AI-optimized: compact + custom-props + stabilize +
+# contrast + ax are all ON. Just pass url + selector (+ --depth/--stable-key).
 sniffCSS -u http://localhost:3000 -s ".btn-primary"
-sniffCSS -u "$URL" -s "main" --depth 5 --compact --contrast --ax-tree
-sniffCSS -u "$URL" -s "nav" --depth 4 --compact --contrast > nav.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
+sniffCSS -u "$URL" -s "main" --depth 5 --ax-tree
+sniffCSS -u "$URL" -s "nav" --depth 4 > nav.jsonl
+sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
 ```
 
 **Categories:** `box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`
@@ -92,12 +95,15 @@ sniffCSS -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
 | `-c, --categories` | Category subset (default `all`) |
 | `--props a,b` / `--pseudo ::before` | Extra props / pseudo-elements |
 | `--wait spec` | Repeatable: `delay:ms`, `network-idle:idle[:t]`, `element-ready:sel:cond[:t]`, `fonts-loaded[:t]`, `app-flag:flag[:t]`, `selector:sel[:t]` |
-| `--compact` | ~55% fewer tokens (dedup + suppress defaults + scoped css_variables) |
+| `--compact` | **default ON** — ~55% fewer tokens (dedup + suppress defaults + scoped css_variables) |
+| `--custom-props` | **default ON** — all CSS variables (`--*`), global in `__meta` |
+| `--stabilize` | **default ON** — freeze animations/transitions for deterministic snapshots |
+| `--contrast` | **default ON** — measured WCAG ratio + AA/AAA per node (effective background resolved in-page) |
+| `--ax` | **default ON** — browser AX node (CDP) |
+| `--ax-tree` | opt-in — full AX subtree document (implies `--ax`) |
+| `--full` | **opt-in** — disable all five optimizers at once (full-fidelity) |
+| `--no-compact` / `--no-custom-props` / `--no-stabilize` / `--no-contrast` / `--no-ax` | opt-in fine control, override the defaults individually |
 | `--stable-key attr` | Stable selectors (`data-testid`) across deploys |
-| `--stabilize` | Freeze animations/transitions for deterministic snapshots |
-| `--contrast` | Measured WCAG ratio + AA/AAA per node (effective background resolved in-page) |
-| `--ax` / `--ax-tree` | Browser AX node / full AX subtree (CDP) |
-| `--custom-props` | All CSS variables (`--*`) |
 | `--viewport WxH` | Emulated viewport (default `1366x768`) — affects media queries/%/vh |
 | `--connect ws://...` | Attach to an already-running browser |
 | `--output jsonl\|jsonl-flat\|json` | Output shape (default `jsonl`) |
@@ -178,7 +184,7 @@ disk and never enters the tool call or the returned content.
 
 | Tool | Inputs | Returns |
 |------|--------|---------|
-| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, **persist** (default `true`), **return** (default `"reference"`) | `{"__sniff": {path, url, selector, nodes}}` by default; full JSONL with `return:"jsonl"` (+ `notifications/progress` per phase) |
+| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, **full** (default `false`), **persist** (default `true`), **return** (default `"reference"`) | `{"__sniff": {path, url, selector, nodes}}` by default; full JSONL with `return:"jsonl"` (+ `notifications/progress` per phase) |
 | `sniffCSS_snapshots` | domain, target, limit (all optional) | JSONL lines: `{domain, target, path, created_at, size}`, newest first |
 | `sniffCSS_diff` | **base_path, head_path** (preferred) or base_jsonl, head_jsonl; tolerance, ignore_props, ignore_structural | CHANGED/ADDED/REMOVED delta + `__diff_summary` |
 | `sniffCSS_check` | **path** (preferred) or jsonl; uniform, rules, tolerance | PASS/WARN/FAIL lines + outliers + `__check_summary` |
@@ -186,13 +192,16 @@ disk and never enters the tool call or the returned content.
 
 ### Per-tool orientation
 
-- **`sniffCSS_page`** — the capture tool. Defaults are already the token-efficient
-  sweet spot: `persist:true` writes the snapshot to the store, `return:
-  "reference"` answers with only the tiny `__sniff` line. Reach for
-  `compact:true` (dedup, ~55% fewer tokens), `stable_key:"data-testid"` for
-  cross-deploy diffs, `contrast:true` + `ax_tree:true` for a11y facts. Use
-  `return:"jsonl"` **only** when you genuinely need the inline values; otherwise
-  reference the path later.
+- **`sniffCSS_page`** — the capture tool. The AI-optimized defaults are already
+  ON: `compact:true` (dedup, ~55% fewer tokens), `custom_props:true` (CSS
+  variables), `stabilize:true` (deterministic snapshots), `contrast:true`
+  (measured WCAG ratio) and `include_ax:true` (browser AX node) — plus
+  `persist:true` (writes the snapshot to the store) and `return:"reference"`
+  (answers with only the tiny `__sniff` line). Reach for `stable_key:
+  "data-testid"` for cross-deploy diffs and `ax_tree:true` for the full AX
+  subtree. Pass `full:true` for full-fidelity output (disables all five), or set
+  any flag to `false` to opt out individually. Use `return:"jsonl"` **only**
+  when you genuinely need the inline values; otherwise reference the path later.
 - **`sniffCSS_snapshots`** — the memory of the store. When you need a base/head
   pair (or the path of the latest capture for a target), query here instead of
   guessing filenames. Filter `domain`/`target`; `limit` caps the newest N.
@@ -211,7 +220,8 @@ disk and never enters the tool call or the returned content.
 ### Low-token workflow (recommended)
 
 ```text
-1. sniffCSS_page(url, selector, compact:true, stable_key:"data-testid", contrast:true, ax_tree:true)
+1. sniffCSS_page(url, selector, stable_key:"data-testid", ax_tree:true)
+   # compact/custom_props/stabilize/contrast/include_ax are default ON
    -> {"__sniff": {"path": "localhost_3000/checkout-form-20260812T101530Z.jsonl", "nodes": 42}}
 2. ... change happens / deploy ...
 3. sniffCSS_page(same params) -> another __sniff reference
@@ -263,10 +273,11 @@ All query commands support `--output jsonl` (nested tree, one line per root), `j
 ### Accessibility audit
 
 ```bash
-sniffCSS -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree > body.jsonl
-sniffCSS -u "$URL" -s "nav"    --depth 4 --compact --contrast > nav.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 --compact --contrast > main.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
+# compact/contrast/ax já vêm ON por padrão; --ax-tree é o único opt-in.
+sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
+sniffCSS -u "$URL" -s "nav"    --depth 4 > nav.jsonl
+sniffCSS -u "$URL" -s "main"   --depth 5 > main.jsonl
+sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
 sniffCSS-check --input main.jsonl --rules
 
 # contrast failures, missing names, headings
@@ -280,9 +291,10 @@ jq -r '.. | objects | select(.tag|test("^H[1-6]$")) | [.tag,(.aria.name//"-")] |
 ### Regression monitoring (CI)
 
 ```bash
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid --compact > base.jsonl
+# default otimizado; use --full nos DOIS lados se quiser full-fidelity
+sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > base.jsonl
 # ... deploy ...
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid --compact > head.jsonl
+sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > head.jsonl
 sniffCSS-diff base.jsonl head.jsonl --stats-only   # fail job if changed/added/removed > threshold
 sniffCSS-diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structural > delta.jsonl
 ```
@@ -290,7 +302,7 @@ sniffCSS-diff base.jsonl head.jsonl --ignore-props transform,opacity --no-struct
 ### Debug one element
 
 ```bash
-sniffCSS -u "$URL" -s ".btn-primary" --categories visual,typography --compact \
+sniffCSS -u "$URL" -s ".btn-primary" --categories visual,typography \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'
 ```
 
@@ -300,7 +312,7 @@ sniffCSS -u "$URL" -s ".btn-primary" --categories visual,typography --compact \
 
 ### Find the odd card in a grid
 ```bash
-sniffCSS -u "$URL" -s ".card" --depth 1 --compact | sniffCSS-check --input - --uniform
+sniffCSS -u "$URL" -s ".card" --depth 1 | sniffCSS-check --input - --uniform
 ```
 
 ### Real AA contrast fails only
@@ -317,14 +329,14 @@ jq -r '.. | objects | select(.tag=="A" or .tag=="BUTTON")
 
 ### Stable subtree for lazy/dynamic content
 ```bash
-sniffCSS -u "$URL" -s "footer" --depth 2 --compact --wait "delay:1500"
+sniffCSS -u "$URL" -s "footer" --depth 2 --wait "delay:1500"
 ```
 
 ---
 
 ## Anti-patterns
 
-- Diffing across different modes (`--compact` vs full) or viewports → false positives.
+- Diffing across different modes (default vs `--full`) or viewports → false positives.
 - Feeding full snapshots to the model — always diff/check first.
 - Passing inline `base_jsonl`/`head_jsonl`/`jsonl` to MCP tools when a persisted
   `path`/`base_path`/`head_path` exists — the inline string re-enters the LLM context.
@@ -349,11 +361,11 @@ sniffCSS -u "$URL" -s "footer" --depth 2 --compact --wait "delay:1500"
 
 Before completing any sniff operation:
 
-- [ ] **Same flags/viewport/mode on both diff sides?**
-- [ ] **Page stable** (`--stabilize`, proper `--wait`)?
+- [ ] **Same mode/viewport on both diff sides** (default+default, or `--full`+`--full`)?
+- [ ] **Page stable** (`--stabilize` default ON, proper `--wait`)?
 - [ ] **Stable keys** (`--stable-key data-testid`) when comparing across deploys?
-- [ ] **Compact mode** for LLM consumption?
-- [ ] **`--contrast` + `--ax-tree`** for accessibility facts?
+- [ ] **Optimized default** for LLM consumption (compact/contrast/ax already ON; `--full` only when raw props needed)?
+- [ ] **`--ax-tree`** when the full accessibility subtree is required?
 - [ ] **`sniffCSS-check` run** before the AI judges (measured evidence)?
 - [ ] **Delta only** sent to the model, not full snapshots?
 - [ ] **MCP diff/check via paths** (`base_path`/`head_path`/`path`), not inline JSONL?

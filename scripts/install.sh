@@ -109,7 +109,8 @@ check_chrome
 
 echo ""
 info "Pronto! Execute no terminal:"
-echo "  sniffCSS -u <URL> -s <selector> --stable-key data-testid --compact --stabilize"
+echo "  sniffCSS -u <URL> -s <selector> --stable-key data-testid   # default otimizado p/ IA"
+echo "  sniffCSS -u <URL> -s <selector> --full                      # full-fidelity (sem otimizações)"
 echo "  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5"
 echo "  sniffCSS-check --input snap.jsonl --uniform --rules"
 echo "  sniffCSS-mcp   # servidor MCP (stdio) para agentes de IA"

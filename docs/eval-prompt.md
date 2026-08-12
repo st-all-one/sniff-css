@@ -44,7 +44,7 @@ Evidências de checks (se disponíveis):
 
 ## Uso em escala
 
-1. Extração (determinística): `sniffCSS --stable-key data-testid --stabilize ...`
+1. Extração (determinística): `sniffCSS --stable-key data-testid ...` (default otimizado: compact, stabilize, contrast e ax já ON)
 2. Diff (determinística): `sniffCSS-diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
 3. Descoberta (determinística): `sniffCSS-check --input head.jsonl --uniform --rules > checks.jsonl`
 4. Avaliação (IA): envie `delta.jsonl` + `checks.jsonl` + este prompt; valide a

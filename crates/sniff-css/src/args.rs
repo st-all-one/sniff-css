@@ -93,8 +93,14 @@ pub struct Cli {
 
     /// Compact mode: drop redundant logical/default CSS properties and
     /// scope `css_variables` to a single global map + per-node overrides.
-    #[arg(long, default_value_t = false)]
+    /// ON by default (AI-optimized, ~55% fewer tokens); use `--no-compact`
+    /// or `--full` to keep the full raw property set.
+    #[arg(long, default_value_t = true)]
     pub compact: bool,
+
+    /// Disable compact mode (keep every captured property, no dedup).
+    #[arg(long = "no-compact", default_value_t = false)]
+    pub no_compact: bool,
 
     /// Omit the per-node `is_user_noticeable` field (default: computed).
     #[arg(long = "no-visibility", default_value_t = false)]
@@ -110,14 +116,23 @@ pub struct Cli {
     pub no_aria: bool,
 
     /// Derive and emit a measured WCAG `contrast` facet per node (AA/AAA
-    /// vs. normal/large text). Off by default to keep the capture lean.
-    #[arg(long, default_value_t = false)]
+    /// vs. normal/large text). ON by default; use `--no-contrast` or
+    /// `--full` to omit.
+    #[arg(long, default_value_t = true)]
     pub contrast: bool,
 
+    /// Disable the measured WCAG `contrast` facet.
+    #[arg(long = "no-contrast", default_value_t = false)]
+    pub no_contrast: bool,
+
     /// Capture the browser-computed accessibility-tree node (`ax`) per
-    /// element via the CDP `Accessibility` domain.
-    #[arg(long, default_value_t = false)]
+    /// element via the CDP `Accessibility` domain. ON by default.
+    #[arg(long, default_value_t = true)]
     pub ax: bool,
+
+    /// Disable the per-element `ax` accessibility-tree node capture.
+    #[arg(long = "no-ax", default_value_t = false)]
+    pub no_ax: bool,
 
     /// Capture the full accessibility subtree for the matched elements and
     /// emit it as a `__ax_tree` document (implies --ax).
@@ -127,9 +142,14 @@ pub struct Cli {
     /// Freeze animations/transitions before capture for deterministic
     /// snapshots of dynamic pages (emulates prefers-reduced-motion,
     /// cancels running animations and injects
-    /// `animation/transition: none !important`).
-    #[arg(long, default_value_t = false)]
+    /// `animation/transition: none !important`). ON by default; use
+    /// `--no-stabilize` or `--full` to capture the live animated state.
+    #[arg(long, default_value_t = true)]
     pub stabilize: bool,
+
+    /// Disable animation/transition freezing.
+    #[arg(long = "no-stabilize", default_value_t = false)]
+    pub no_stabilize: bool,
 
     /// Path to the Chrome/Chromium binary.
     #[arg(long)]
@@ -145,15 +165,26 @@ pub struct Cli {
     pub viewport: Option<String>,
 
     /// Capture all CSS custom properties (`--*`), like the DevTools
-    /// Computed panel.
-    #[arg(long = "custom-props", default_value_t = false)]
+    /// Computed panel. ON by default (scoped to a single global `__meta`
+    /// map in compact mode); use `--no-custom-props` or `--full` to omit.
+    #[arg(long = "custom-props", default_value_t = true)]
     pub custom_props: bool,
+
+    /// Disable CSS custom property capture.
+    #[arg(long = "no-custom-props", default_value_t = false)]
+    pub no_custom_props: bool,
 
     /// Attribute to use as the stable anchor in `selector`/`path`,
     /// preferred over the DOM `id` (e.g. `data-testid`). Keeps output
     /// matchable across deploys that regenerate ids.
     #[arg(long = "stable-key")]
     pub stable_key: Option<String>,
+
+    /// Full-fidelity mode: disables every AI optimization at once
+    /// (`--no-compact --no-custom-props --no-stabilize --no-contrast
+    /// --no-ax`). Equivalent to the pre-AI-default behavior.
+    #[arg(long, default_value_t = false)]
+    pub full: bool,
 }
 
 impl Cli {
@@ -168,6 +199,12 @@ impl Cli {
                 .collect::<SniffResult<Vec<_>>>()?
         };
 
+        let compact = self.compact && !self.no_compact && !self.full;
+        let include_contrast = self.contrast && !self.no_contrast && !self.full;
+        let include_ax = (self.ax && !self.no_ax && !self.full) || self.ax_tree;
+        let include_custom_properties = self.custom_props && !self.no_custom_props && !self.full;
+        let stabilize = self.stabilize && !self.no_stabilize && !self.full;
+
         let output = OutputConfig {
             format: OutputFormat::parse_cli(&self.output)?,
             include_rect: !self.no_rect,
@@ -176,12 +213,12 @@ impl Cli {
             normalize_colors: !self.no_normalize_colors,
             group_by_category: !self.no_group,
             pretty: self.pretty,
-            compact: self.compact,
+            compact,
             include_visibility: !self.no_visibility,
             include_style_hash: !self.no_style_hash,
             include_aria: !self.no_aria,
-            include_contrast: self.contrast,
-            include_ax: self.ax || self.ax_tree,
+            include_contrast,
+            include_ax,
         };
 
         let filter = ElementFilter {
@@ -210,9 +247,9 @@ impl Cli {
             filter,
             output,
             viewport,
-            include_custom_properties: self.custom_props,
+            include_custom_properties,
             stable_key: self.stable_key,
-            stabilize: self.stabilize,
+            stabilize,
             ax_tree: self.ax_tree,
         })
     }
@@ -305,19 +342,25 @@ mod tests {
             no_metrics: false,
             no_normalize_colors: false,
             no_group: false,
-            compact: false,
+            compact: true,
+            no_compact: false,
             no_visibility: false,
             no_style_hash: false,
             no_aria: false,
-            contrast: false,
-            ax: false,
+            contrast: true,
+            no_contrast: false,
+            ax: true,
+            no_ax: false,
             ax_tree: false,
-            stabilize: false,
+            stabilize: true,
+            no_stabilize: false,
             chrome: None,
             connect: None,
             viewport: None,
-            custom_props: false,
+            custom_props: true,
+            no_custom_props: false,
             stable_key: None,
+            full: false,
         };
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.categories, vec![StyleCategory::All]);
@@ -325,6 +368,12 @@ mod tests {
         assert!(cfg.output.include_rect);
         assert_eq!(cfg.wait.len(), 3);
         assert_eq!(cfg.stable_key, None);
+        // AI-optimized defaults: all optimizations ON.
+        assert!(cfg.output.compact);
+        assert!(cfg.output.include_contrast);
+        assert!(cfg.output.include_ax);
+        assert!(cfg.include_custom_properties);
+        assert!(cfg.stabilize);
         // Laptop viewport default.
         assert_eq!(
             cfg.viewport,
@@ -356,22 +405,184 @@ mod tests {
             no_metrics: false,
             no_normalize_colors: false,
             no_group: false,
-            compact: false,
+            compact: true,
+            no_compact: false,
             no_visibility: false,
             no_style_hash: false,
             no_aria: false,
-            contrast: false,
-            ax: false,
+            contrast: true,
+            no_contrast: false,
+            ax: true,
+            no_ax: false,
             ax_tree: false,
-            stabilize: false,
+            stabilize: true,
+            no_stabilize: false,
             chrome: None,
             connect: None,
             viewport: None,
-            custom_props: false,
+            custom_props: true,
+            no_custom_props: false,
             stable_key: None,
+            full: false,
         };
         cli.stable_key = Some("data-testid".into());
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.stable_key.as_deref(), Some("data-testid"));
+    }
+
+    #[test]
+    fn full_mode_disables_all_optimizations() {
+        let mut cli = Cli {
+            url: "http://localhost:3000".into(),
+            selector: ".card".into(),
+            depth: 0,
+            categories: "all".into(),
+            props: vec![],
+            pseudo: vec![],
+            wait: vec![],
+            no_visible: false,
+            min_width: None,
+            min_height: None,
+            exclude: vec![],
+            output: "jsonl".into(),
+            pretty: false,
+            no_rect: false,
+            no_path: false,
+            no_metrics: false,
+            no_normalize_colors: false,
+            no_group: false,
+            compact: true,
+            no_compact: false,
+            no_visibility: false,
+            no_style_hash: false,
+            no_aria: false,
+            contrast: true,
+            no_contrast: false,
+            ax: true,
+            no_ax: false,
+            ax_tree: false,
+            stabilize: true,
+            no_stabilize: false,
+            chrome: None,
+            connect: None,
+            viewport: None,
+            custom_props: true,
+            no_custom_props: false,
+            stable_key: None,
+            full: false,
+        };
+        cli.full = true;
+        let cfg = cli.into_config().unwrap();
+        assert!(!cfg.output.compact);
+        assert!(!cfg.output.include_contrast);
+        assert!(!cfg.output.include_ax);
+        assert!(!cfg.include_custom_properties);
+        assert!(!cfg.stabilize);
+        // Per-node facets stay on in full mode too.
+        assert!(cfg.output.include_visibility);
+        assert!(cfg.output.include_style_hash);
+        assert!(cfg.output.include_aria);
+    }
+
+    #[test]
+    fn individual_no_flags_override_defaults() {
+        let mut cli = Cli {
+            url: "http://localhost:3000".into(),
+            selector: ".card".into(),
+            depth: 0,
+            categories: "all".into(),
+            props: vec![],
+            pseudo: vec![],
+            wait: vec![],
+            no_visible: false,
+            min_width: None,
+            min_height: None,
+            exclude: vec![],
+            output: "jsonl".into(),
+            pretty: false,
+            no_rect: false,
+            no_path: false,
+            no_metrics: false,
+            no_normalize_colors: false,
+            no_group: false,
+            compact: true,
+            no_compact: false,
+            no_visibility: false,
+            no_style_hash: false,
+            no_aria: false,
+            contrast: true,
+            no_contrast: false,
+            ax: true,
+            no_ax: false,
+            ax_tree: false,
+            stabilize: true,
+            no_stabilize: false,
+            chrome: None,
+            connect: None,
+            viewport: None,
+            custom_props: true,
+            no_custom_props: false,
+            stable_key: None,
+            full: false,
+        };
+        cli.no_compact = true;
+        cli.no_contrast = true;
+        cli.no_ax = true;
+        cli.no_custom_props = true;
+        cli.no_stabilize = true;
+        let cfg = cli.into_config().unwrap();
+        assert!(!cfg.output.compact);
+        assert!(!cfg.output.include_contrast);
+        assert!(!cfg.output.include_ax);
+        assert!(!cfg.include_custom_properties);
+        assert!(!cfg.stabilize);
+    }
+
+    #[test]
+    fn ax_tree_implies_ax_even_in_full_mode() {
+        let mut cli = Cli {
+            url: "http://localhost:3000".into(),
+            selector: ".card".into(),
+            depth: 0,
+            categories: "all".into(),
+            props: vec![],
+            pseudo: vec![],
+            wait: vec![],
+            no_visible: false,
+            min_width: None,
+            min_height: None,
+            exclude: vec![],
+            output: "jsonl".into(),
+            pretty: false,
+            no_rect: false,
+            no_path: false,
+            no_metrics: false,
+            no_normalize_colors: false,
+            no_group: false,
+            compact: true,
+            no_compact: false,
+            no_visibility: false,
+            no_style_hash: false,
+            no_aria: false,
+            contrast: true,
+            no_contrast: false,
+            ax: true,
+            no_ax: false,
+            ax_tree: false,
+            stabilize: true,
+            no_stabilize: false,
+            chrome: None,
+            connect: None,
+            viewport: None,
+            custom_props: true,
+            no_custom_props: false,
+            stable_key: None,
+            full: false,
+        };
+        cli.full = true;
+        cli.ax_tree = true;
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.output.include_ax, "ax_tree must imply include_ax");
+        assert!(cfg.ax_tree);
     }
 }

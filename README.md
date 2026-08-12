@@ -1,4 +1,4 @@
-# sniffCSS
+# SniffCSS
 
 Utilitário em Rust de alta performance para capturar o **computed style real** de elementos de uma página durante o desenvolvimento — em especial no localhost — com saída estruturada, compacta e otimizada para consumo por IA.
 
@@ -6,9 +6,9 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 
 ## O que você pode fazer
 
-- **Capturar o estado real** de qualquer elemento (computed styles, rect, métricas) com recursão controlada e waits combináveis.
+- **Capturar o estado real** de qualquer elemento (computed styles, rect, métricas) com recursão controlada e waits combináveis — o **default já é otimizado para IA** (compact, custom-props, stabilize, contrast e ax ligados).
 - **Diffar duas versões** (`sniffCSS-diff`): só o que mudou, sem IA.
-- **Auditar acessibilidade** (`--contrast --ax --ax-tree`): contraste WCAG **medido** (fundo efetivo resolvido), role/nome/focusable, árvore AX do Chrome e grade de perceptibilidade `is_user_noticeable`.
+- **Auditar acessibilidade**: contraste WCAG **medido** (fundo efetivo resolvido), role/nome/focusable, árvore AX do Chrome e grade de perceptibilidade `is_user_noticeable` — vêm por padrão; `--ax-tree` adiciona a subárvore AX completa.
 - **Descobrir problemas** (`sniffCSS-check`): contraste AA, alvos ≥24px, indicador de foco, cards fora do padrão.
 - **Servir tudo como MCP** (`sniffCSS-mcp`) para agentes de IA.
 
@@ -16,8 +16,8 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 
 | Doc | Conteúdo |
 |---|---|
-| [`docs/usage.md`](docs/usage.md) | Referência completa da CLI: opções, categorias, waits, formatos de saída, `--compact`. |
-| [`docs/ai-usage.md`](docs/ai-usage.md) | Guia otimizado para IA: flag-set recomendado, pipeline captura→diff→checks→avaliação, cenários MCP/CI. |
+| [`docs/usage.md`](docs/usage.md) | Referência completa da CLI: opções, defaults otimizados, `--full`/`--no-*`, categorias, waits, formatos de saída. |
+| [`docs/ai-usage.md`](docs/ai-usage.md) | Guia otimizado para IA: default otimizado, pipeline captura→diff→checks→avaliação, cenários MCP/CI. |
 | [`docs/accessibility.md`](docs/accessibility.md) | Auditoria de acessibilidade: facetas, `is_user_noticeable`, workflow validado em páginas reais. |
 | [`docs/diff-checks.md`](docs/diff-checks.md) | `sniffCSS-diff` (diff determinístico) e `sniffCSS-check` (regras PASS/WARN/FAIL). |
 | [`docs/golden-run.md`](docs/golden-run.md) | Padrão ouro de execução (contrato de determinismo). |
@@ -42,17 +42,23 @@ Requisito: Chrome/Chromium disponível (ou defina `SNIFF_CHROME_PATH` / use `--c
 ## Uso rápido
 
 ```bash
-# Computed styles de um botão
+# Computed styles de um botão — default otimizado para IA
+# (compact + custom-props + stabilize + contrast + ax ligados)
 sniffCSS --url http://localhost:3000 --selector ".btn-primary"
 
 # Subárvore com 1 nível, só box-model + tipografia
 sniffCSS --url http://localhost:3000 --selector ".card" \
   --depth 1 --categories box-model,typography
 
-# Auditoria de acessibilidade de uma seção (contraste medido + AX tree)
+# Auditoria de acessibilidade de uma seção (contraste medido + AX tree já
+# vêm por padrão; --ax-tree adiciona a subárvore AX completa)
 sniffCSS --url "$URL" --selector "main" --depth 5 \
-  --compact --contrast --ax-tree | sniffCSS-check --rules -
+  --ax-tree | sniffCSS-check --rules -
 ```
+
+Controle fino **opcional**: `--full` desliga os 5 otimizadores de uma vez
+(full-fidelity); `--no-compact`/`--no-contrast`/`--no-ax`/`--no-stabilize`/
+`--no-custom-props` desligam individualmente.
 
 Veja [`docs/usage.md`](docs/usage.md) para a referência completa de flags.
 
@@ -77,6 +83,8 @@ sniffCSS --url http://localhost:3000 --selector ".btn-primary" \
 Para agentes, exponha `sniffCSS-mcp` como servidor MCP. O fluxo recomendado é
 **captura determinística → diff determinístico → checks determinísticos → IA
 (só interpreta o delta)**; o passo a passo está em [`docs/ai-usage.md`](docs/ai-usage.md).
+O `sniffCSS_page` já captura com os defaults otimizados (compact, contrast, ax, stabilize,
+custom-props) e persistindo o snapshot; o JSONL completo nunca entra no contexto do LLM.
 
 Por padrão o MCP persiste cada captura em
 `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)

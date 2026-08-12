@@ -7,13 +7,13 @@ Things to remember when using sniffCSS:
 - Talks to the browser over raw CDP (WebSocket); needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`). It can also attach to an already-running browser via `--connect ws://...`.
 - Captures ~250 curated CSS properties (not the ~400 the browser exposes), grouped into 8 categories: `box-model`, `layout`, `typography`, `visual`, `transform`, `animation`, `interaction`, `accessibility`, `all`.
 - Default output is JSONL: one JSON document per matched root with nested `children`; `--output jsonl-flat` emits one node per line with `id`/`parent_id`; `--output json` emits a single array.
-- `--compact` mode cuts tokens ~55%: drops logical/physical duplicates, suppresses default noise values, and scopes `css_variables` to one global `__meta` line plus per-node overrides.
-- For deterministic diffs use the SAME flags on both runs (same viewport, same mode `--compact`/full); the `computed_style_hash` (xxHash64) only matches across identical modes.
-- Accessibility is measured, not guessed: `--contrast` resolves the effective background in-page (JS composites transparent/semi-transparent layers up to the html/body canvas, so it works at any capture depth) and only reports `unknown` for background images; `--ax`/`--ax-tree` pull the browser's accessibility tree via CDP.
+- **AI-optimized by default**: a bare `sniffCSS -u URL -s SEL` already enables `--compact` (~55% fewer tokens: drops logical/physical duplicates, suppresses default noise values, scopes `css_variables` to one global `__meta` line plus per-node overrides), `--custom-props`, `--stabilize`, `--contrast`, and `--ax`. `--full` disables all five at once (full-fidelity); individual `--no-compact/--no-custom-props/--no-stabilize/--no-contrast/--no-ax` give fine control.
+- For deterministic diffs use the SAME mode on both runs (default+default, or `--full`+`--full` — never mixed); the `computed_style_hash` (xxHash64) only matches across identical modes.
+- Accessibility is measured, not guessed: `contrast` (default ON) resolves the effective background in-page (JS composites transparent/semi-transparent layers up to the html/body canvas, so it works at any capture depth) and only reports `unknown` for background images; `ax` (default ON) and `ax-tree` (opt-in) pull the browser's accessibility tree via CDP.
 - `is_user_noticeable` (per node) replaces the old `is_visible` boolean with two axes: `display_visible` (rendered: display≠none, visibility≠hidden, opacity>0, size>0 — independent of the viewport, so below-the-fold content stays `true`) and `accessibility_grade` (`NONE` = hidden from assistive tech, `AA` = exposed but off-screen/transparent/missing a required name, `AAA` = on screen + exposed + named).
 - `sniffCSS-check` is fully offline and LLM-free: `--uniform` finds the "odd card" among sibling instances; `--rules` emits PASS/WARN/FAIL for contrast AA/AAA, target size ≥24×24px (WCAG 2.2), visible focus indicator, hidden-but-focusable, and empty-alt-on-large-image.
 - `sniffCSS-diff` matches nodes by stable `selector` (fallback to sibling position), compares per-property with numeric tolerance, never treats different units as equal, and supports `--ignore-props`, `--no-structural`, and `--stats-only`.
-- `--stabilize` freezes animations/transitions (emulates prefers-reduced-motion + cancels running animations) for deterministic snapshots of dynamic pages.
+- `--stabilize` freezes animations/transitions (emulates prefers-reduced-motion + cancels running animations) for deterministic snapshots of dynamic pages. Default ON; disable with `--no-stabilize`.
 - `--stable-key data-testid` makes selectors stable across deploys that regenerate ids (e.g. `button[data-testid="submit"]` instead of `button#react-aria-123`).
 - Wait strategies are composable: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default pipeline: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
 
@@ -32,7 +32,7 @@ Core flags:
 - Element filters: `--no-visible` (include invisible), `--min-width`, `--min-height`, `--exclude sel`.
 - Output: `--output jsonl|jsonl-flat|json`, `--pretty`, `--no-rect/--no-path/--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`.
 - Browser: `--chrome PATH`, `--connect ws://...`, `--viewport WxH` (default `1366x768`).
-- Extras: `--custom-props` (all CSS variables), `--stable-key attr`, `--stabilize`, `--contrast`, `--ax`, `--ax-tree`.
+- AI optimizations (all default ON): `--compact`, `--custom-props`, `--stabilize`, `--contrast`, `--ax`. Escapes: `--full` (disable all five), or per-flag `--no-compact`, `--no-custom-props`, `--no-stabilize`, `--no-contrast`, `--no-ax`. Opt-in extras: `--ax-tree`, `--stable-key attr`.
 
 JSONL node shape (one line per root, `children` nested):
 
@@ -86,10 +86,10 @@ Facts about the node fields:
 1. Capture broadly + focused regions (contrast works at any depth):
 
 ```bash
-sniffCSS -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree > body.jsonl
-sniffCSS -u "$URL" -s "nav"    --depth 4 --compact --contrast > nav.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 --compact --contrast > main.jsonl
+sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
+sniffCSS -u "$URL" -s "nav"    --depth 4 > nav.jsonl
+sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
+sniffCSS -u "$URL" -s "main"   --depth 5 > main.jsonl
 ```
 
 2. Run the deterministic rules and read the facets:
@@ -113,10 +113,10 @@ Full list with defaults:
 - `--url` (required), `--selector` (required)
 - `--depth` (default 0), `--categories` (default `all`), `--props`, `--pseudo`
 - `--wait` (repeatable), `--min-width`, `--min-height`, `--exclude`, `--no-visible`
-- `--output` (default `jsonl`), `--pretty`, `--compact`
+- `--output` (default `jsonl`), `--pretty`, `--compact` (default ON), `--no-compact`
 - `--no-rect`, `--no-path`, `--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`
 - `--chrome`, `--connect`, `--viewport` (default `1366x768`)
-- `--custom-props`, `--stable-key`, `--stabilize`, `--contrast`, `--ax`, `--ax-tree`
+- `--custom-props` (default ON), `--no-custom-props`, `--stable-key`, `--stabilize` (default ON), `--no-stabilize`, `--contrast` (default ON), `--no-contrast`, `--ax` (default ON), `--no-ax`, `--ax-tree`, `--full`
 
 ### Categories
 
@@ -130,7 +130,7 @@ Full list with defaults:
 
 Five tools over stdio:
 
-- `sniffCSS_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, persist, return). By default persists the snapshot to `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (root via `SNIFF_SNAPSHOT_DIR`) and returns only a tiny `__sniff` reference (path, url, selector, nodes); `return:"jsonl"` returns the full JSONL inline. Emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
+- `sniffCSS_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, full, persist, return). Defaults are the AI-optimized set: compact, custom_props, stabilize, contrast and include_ax all ON; pass `full:true` for full-fidelity or set any flag `false` to opt out. By default persists the snapshot to `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (root via `SNIFF_SNAPSHOT_DIR`) and returns only a tiny `__sniff` reference (path, url, selector, nodes); `return:"jsonl"` returns the full JSONL inline. Emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
 - `sniffCSS_snapshots` — list persisted snapshots (domain/target/path/created_at/size), newest first; filters domain/target/limit.
 - `sniffCSS_diff` — deterministic diff via persisted `base_path`/`head_path` (preferred, keeps JSONL out of the LLM context) or inline `base_jsonl`/`head_jsonl` (+ tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
 - `sniffCSS_check` — deterministic checks over a persisted `path` or inline `jsonl` (uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
@@ -151,18 +151,18 @@ sniffCSS --url http://localhost:3000 --selector ".btn-primary" \
   | jq '.styles.box_model.width'
 ```
 
-- Sniff a subtree with depth and stable keys, in compact mode:
+- Sniff a subtree with depth and stable keys (compact/optimizations are default ON):
 
 ```bash
 sniffCSS --url http://localhost:3000 --selector ".card" \
-  --depth 2 --categories all --compact --stable-key data-testid
+  --depth 2 --stable-key data-testid
 ```
 
 - Deterministic regression diff in CI:
 
 ```bash
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid --compact > snapshots/base.jsonl
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid --compact > snapshots/head.jsonl
+sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > snapshots/base.jsonl
+sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > snapshots/head.jsonl
 sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 # fail the job if changed/added/removed exceed the threshold
 ```
@@ -170,15 +170,21 @@ sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 - Find the "odd card" and real AA contrast failures in a captured section:
 
 ```bash
-sniffCSS -u "$URL" -s "main" --depth 5 --compact --contrast > main.jsonl
+sniffCSS -u "$URL" -s "main" --depth 5 > main.jsonl
 sniffCSS-check --input main.jsonl --uniform --rules
 ```
 
-- Stabilize animated pages (carousels) before diffing:
+- Full-fidelity capture (all ~400 browser props, no facets):
 
 ```bash
-sniffCSS -u "$URL" -s "body" --depth 4 --compact --stabilize \
-  --wait network-idle:800:60000 > snap.jsonl
+sniffCSS -u "$URL" -s "main" --depth 2 --full > raw.jsonl
+```
+
+- Animated pages (carousels) are already stabilized by default; if jitter persists, raise the diff tolerance:
+
+```bash
+sniffCSS -u "$URL" -s "body" --depth 4 --wait network-idle:800:60000 > snap.jsonl
+sniffCSS-diff base.jsonl head.jsonl --tolerance 1.0
 ```
 
 - Accessibility audit summary: contrast fails, missing names, heading structure:
@@ -196,4 +202,4 @@ sniffCSS-mcp   # stdio MCP server sharing one headless Chrome
 
 ## Optional
 
-- The workspace also ships `docs/eval-prompt.md` (the evaluation prompt template that takes only the delta), `docs/sniffCSS-eval.schema.json` (the response contract), `docs/golden-run.md` (the determinism contract: same viewport, same flags, same mode on both diff sides), and an accessibility guide at `docs/accessibility.md`.
+- The workspace also ships `docs/eval-prompt.md` (the evaluation prompt template that takes only the delta), `docs/sniffCSS-eval.schema.json` (the response contract), `docs/golden-run.md` (the determinism contract: same viewport, same mode — default or `--full` — on both diff sides), and an accessibility guide at `docs/accessibility.md`.

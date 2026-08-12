@@ -11,9 +11,9 @@ só interpreta evidências, não chuta.
 |---|---|---|
 | *(sempre)* | `aria` | Role (explícita ou implícita pelo tag), accessible name, `focusable`, `has_text`, `aria-hidden`, `disabled`, `lang` — calculados na página. |
 | *(sempre)* | `is_user_noticeable` | `display_visible` (está renderizado) + `accessibility_grade` (`NONE`/`AA`/`AAA`). |
-| `--contrast` | `contrast` | Ratio WCAG + AA/AAA, **com o fundo efetivo composto in-page** (transparentes subindo até o canvas; `unknown` só para fundo-imagem). |
-| `--ax` | `ax` | Nó da árvore de acessibilidade do Chrome (`role`/`name`/`ignored`/`focusable`/`level`) — a verdade do browser. |
-| `--ax-tree` | `__ax_tree` | Subárvore AX completa dos elementos casados (implica `--ax`). |
+| *default ON* (`--no-contrast` para omitir) | `contrast` | Ratio WCAG + AA/AAA, **com o fundo efetivo composto in-page** (transparentes subindo até o canvas; `unknown` só para fundo-imagem). |
+| *default ON* (`--no-ax` para omitir) | `ax` | Nó da árvore de acessibilidade do Chrome (`role`/`name`/`ignored`/`focusable`/`level`) — a verdade do browser. |
+| `--ax-tree` (opt-in) | `__ax_tree` | Subárvore AX completa dos elementos casados (implica `ax`). |
 
 ## Entendendo o `is_user_noticeable`
 
@@ -43,16 +43,17 @@ Divide o antigo `is_visible` em dois eixos ortogonais:
 ### 1. Capturas
 
 ```bash
-# Visão estrutural: landmarks, headings, links, imagens + contraste + AX
-sniffCSS -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree \
+# Visão estrutural: landmarks, headings, links, imagens + contraste + AX.
+# compact/contrast/ax já vêm ON por padrão; --ax-tree é o único opt-in.
+sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree \
   > body.jsonl
 
 # Regiões profundas (menu, rodapé, formulários, carrossel) — contraste não
 # depende da profundidade (resolvido in-page), o depth controla só o tamanho.
-sniffCSS -u "$URL" -s "nav"    --depth 4 --compact --contrast > nav.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 --compact --contrast > footer.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 --compact --contrast > main.jsonl
-sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 --compact --contrast > forms.jsonl
+sniffCSS -u "$URL" -s "nav"    --depth 4 > nav.jsonl
+sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
+sniffCSS -u "$URL" -s "main"   --depth 5 > main.jsonl
+sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
 ```
 
 ### 2. Regras determinísticas

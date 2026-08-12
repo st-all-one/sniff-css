@@ -84,11 +84,11 @@ pub struct SniffPageRequest {
     #[serde(default = "default_categories")]
     pub categories: String,
     /// Compact mode: drop redundant/default properties and scope CSS
-    /// variables (~55% fewer tokens).
+    /// variables (~55% fewer tokens). Defaults to `true`.
     #[serde(default = "default_true")]
     pub compact: bool,
-    /// Capture all CSS custom properties (`--*`).
-    #[serde(default)]
+    /// Capture all CSS custom properties (`--*`). Defaults to `true`.
+    #[serde(default = "default_true")]
     pub custom_props: bool,
     /// Attribute used as the stable selector anchor (e.g. `data-testid`),
     /// preferred over generated ids for diffing across deploys.
@@ -108,20 +108,27 @@ pub struct SniffPageRequest {
     pub format: String,
     /// Freeze animations/transitions before capture for deterministic
     /// snapshots of dynamic pages (prefers-reduced-motion + cancel
-    /// animations + `animation/transition: none !important`).
-    #[serde(default)]
+    /// animations + `animation/transition: none !important`). Defaults to
+    /// `true`.
+    #[serde(default = "default_true")]
     pub stabilize: bool,
     /// Derive and emit a measured WCAG `contrast` facet per node.
-    #[serde(default)]
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
     pub contrast: bool,
     /// Capture the browser-computed accessibility-tree node (`ax`) per
-    /// element via the CDP `Accessibility` domain.
-    #[serde(default)]
+    /// element via the CDP `Accessibility` domain. Defaults to `true`.
+    #[serde(default = "default_true")]
     pub include_ax: bool,
     /// Capture the full accessibility subtree for the matched elements and
     /// emit it as a `__ax_tree` document (implies `include_ax`).
     #[serde(default)]
     pub ax_tree: bool,
+    /// Full-fidelity mode: disables every AI optimization at once
+    /// (`compact`, `custom_props`, `stabilize`, `contrast`, `include_ax`).
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub full: bool,
     /// Persist the snapshot to disk as `sniffCSS/[domain]/[path]-[selector]-
     /// [UTC].jsonl` (root overridable via `SNIFF_SNAPSHOT_DIR`). Defaults to
     /// `true` so diff/check can run on paths instead of inline JSONL.
@@ -240,9 +247,13 @@ impl SniffMcpServer {
                        sniffCSS_diff via base_path/head_path (or sniffCSS_check via path) so the full \
                        snapshot never enters the LLM context. Each node carries readable fields (tag, \
                        selector, path, rect, metrics, styles grouped by category) plus \
-                       is_user_noticeable and computed_style_hash. Use compact=true for ~55% fewer \
-                       tokens and stable_key (e.g. data-testid) for selectors that stay matchable \
-                       across deploys."
+                       is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
+                       already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
+                       stabilize (freeze animations for deterministic snapshots), contrast (measured \
+                       WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
+                       capture full-fidelity output (disables all five at once), or set any flag to \
+                       false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
+                       that stay matchable across deploys."
     )]
     pub async fn sniff_css_page(
         &self,
@@ -588,17 +599,17 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
             normalize_colors: true,
             group_by_category: true,
             pretty: false,
-            compact: request.compact,
+            compact: request.compact && !request.full,
             include_visibility: true,
             include_style_hash: true,
             include_aria: true,
-            include_contrast: request.contrast,
-            include_ax: request.include_ax || request.ax_tree,
+            include_contrast: request.contrast && !request.full,
+            include_ax: (request.include_ax && !request.full) || request.ax_tree,
         },
         viewport: Some(viewport),
-        include_custom_properties: request.custom_props,
+        include_custom_properties: request.custom_props && !request.full,
         stable_key: request.stable_key.clone(),
-        stabilize: request.stabilize,
+        stabilize: request.stabilize && !request.full,
         ax_tree: request.ax_tree,
     })
 }
@@ -657,18 +668,19 @@ mod tests {
             depth: 0,
             categories: "all".into(),
             compact: true,
-            custom_props: false,
+            custom_props: true,
             stable_key: Some("data-testid".into()),
             pseudo: vec![],
             wait: vec![],
             viewport: "1366x768".into(),
             format: "jsonl".into(),
-            stabilize: false,
-            contrast: false,
-            include_ax: false,
+            stabilize: true,
+            contrast: true,
+            include_ax: true,
             ax_tree: false,
             persist: true,
             return_mode: "reference".into(),
+            full: false,
         }
     }
 
@@ -683,19 +695,45 @@ mod tests {
         assert!(cfg.output.include_visibility);
         assert!(cfg.output.include_style_hash);
         assert!(cfg.output.include_aria);
-        assert!(!cfg.output.include_contrast);
-        assert!(!cfg.output.include_ax);
-        assert!(!cfg.stabilize);
+        // AI-optimized defaults are ON.
+        assert!(cfg.output.include_contrast);
+        assert!(cfg.output.include_ax);
+        assert!(cfg.include_custom_properties);
+        assert!(cfg.stabilize);
         assert!(!cfg.ax_tree);
         assert_eq!(cfg.output.format, OutputFormat::JsonLines);
         assert_eq!(cfg.wait.len(), 3); // default pipeline
     }
 
     #[test]
+    fn full_mode_disables_ai_optimizations() {
+        let mut req = request();
+        req.full = true;
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(!cfg.output.compact);
+        assert!(!cfg.output.include_contrast);
+        assert!(!cfg.output.include_ax);
+        assert!(!cfg.include_custom_properties);
+        assert!(!cfg.stabilize);
+        // Per-node facets stay on.
+        assert!(cfg.output.include_visibility);
+        assert!(cfg.output.include_style_hash);
+        assert!(cfg.output.include_aria);
+    }
+
+    #[test]
+    fn ax_tree_implies_ax_in_full_mode() {
+        let mut req = request();
+        req.full = true;
+        req.ax_tree = true;
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(cfg.output.include_ax, "ax_tree must imply include_ax");
+        assert!(cfg.ax_tree);
+    }
+
+    #[test]
     fn build_config_wires_new_flags() {
         let mut req = request();
-        req.stabilize = true;
-        req.contrast = true;
         req.ax_tree = true;
         let cfg = build_sniff_config(&req).unwrap();
         assert!(cfg.stabilize);
