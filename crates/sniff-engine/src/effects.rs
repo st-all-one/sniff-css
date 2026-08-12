@@ -925,6 +925,7 @@ fn action_kind(action: &Action) -> &'static str {
         Action::Click { .. } => "click",
         Action::Hover { .. } => "hover",
         Action::Type { .. } => "type",
+        Action::Upload { .. } => "upload",
     }
 }
 
@@ -932,7 +933,8 @@ fn action_selector(action: &Action) -> String {
     match action {
         Action::Click { selector, .. }
         | Action::Hover { selector, .. }
-        | Action::Type { selector, .. } => selector.clone(),
+        | Action::Type { selector, .. }
+        | Action::Upload { selector, .. } => selector.clone(),
     }
 }
 
@@ -940,7 +942,8 @@ fn action_timeout_ms(action: &Action) -> u64 {
     match action {
         Action::Click { timeout_ms, .. }
         | Action::Hover { timeout_ms, .. }
-        | Action::Type { timeout_ms, .. } => *timeout_ms,
+        | Action::Type { timeout_ms, .. }
+        | Action::Upload { timeout_ms, .. } => *timeout_ms,
     }
 }
 
@@ -948,7 +951,8 @@ fn action_settle_ms(action: &Action) -> u64 {
     match action {
         Action::Click { settle_ms, .. }
         | Action::Hover { settle_ms, .. }
-        | Action::Type { settle_ms, .. } => *settle_ms,
+        | Action::Type { settle_ms, .. }
+        | Action::Upload { settle_ms, .. } => *settle_ms,
     }
 }
 

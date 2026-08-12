@@ -11,6 +11,7 @@
 //! - `sniffCSS://prompts/eval` — the AI evaluation prompt template.
 //! - `sniffCSS://schemas/eval` — the rigid JSON Schema for the AI answer.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -37,6 +38,46 @@ const EVAL_PROMPT: &str = include_str!("../../../docs/eval-prompt.md");
 const EVAL_SCHEMA: &str = include_str!("../../../docs/sniffCSS-eval.schema.json");
 const GOLDEN_RUN: &str = include_str!("../../../docs/golden-run.md");
 
+/// Team-wide defaults applied to every `sniffCSS_page` call so the agent does
+/// not have to repeat auth/session plumbing per capture. Read from the
+/// environment once at server start:
+///
+/// - `SNIFF_DEFAULT_HEADERS` — a JSON object of extra HTTP headers applied to
+///   every request (e.g. `{"X-CMS-AI-Token": "<token>"}` for a stateless CMS
+///   AI middleware). Explicit `headers` passed per call override on collision.
+/// - `SNIFF_STORAGE_STATE` — path to a persisted session state (cookies +
+///   localStorage) restored before every navigation.
+/// - `SNIFF_BASE_URL` — base URL (e.g. `http://localhost:10011`) prefixed to
+///   relative `url` values like `cms/dashboard`.
+#[derive(Debug, Clone, Default)]
+pub struct ServerDefaults {
+    headers: BTreeMap<String, String>,
+    storage_state: Option<String>,
+    base_url: Option<String>,
+}
+
+impl ServerDefaults {
+    /// Read defaults from the environment.
+    pub fn from_env() -> Self {
+        let headers = std::env::var("SNIFF_DEFAULT_HEADERS")
+            .ok()
+            .filter(|raw| !raw.trim().is_empty())
+            .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+            .unwrap_or_default();
+        let storage_state = std::env::var("SNIFF_STORAGE_STATE")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        let base_url = std::env::var("SNIFF_BASE_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+        Self {
+            headers,
+            storage_state,
+            base_url,
+        }
+    }
+}
+
 /// The MCP service: holds the shared browser pool and the tool router.
 #[derive(Debug, Clone)]
 pub struct SniffMcpServer {
@@ -44,22 +85,31 @@ pub struct SniffMcpServer {
     /// Persisted-snapshot store; lets diff/check tools operate on paths so
     /// full JSONL snapshots never round-trip through the LLM context.
     store: Arc<SnapshotStore>,
+    /// Team-wide defaults merged into every capture config.
+    defaults: Arc<ServerDefaults>,
     #[expect(dead_code, reason = "tool_handler macro accesses this router field")]
     tool_router: ToolRouter<Self>,
 }
 
 impl SniffMcpServer {
     /// Build a server backed by the given browser pool, with the snapshot
-    /// store rooted at `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD.
+    /// store rooted at `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD, and
+    /// team defaults read from the environment.
     pub fn new(pool: ChromePool) -> Self {
-        Self::new_with_store(pool, SnapshotStore::from_env())
+        Self::new_with(pool, SnapshotStore::from_env(), ServerDefaults::from_env())
     }
 
     /// Build a server with an explicit snapshot store (tests inject a temp dir).
     pub fn new_with_store(pool: ChromePool, store: SnapshotStore) -> Self {
+        Self::new_with(pool, store, ServerDefaults::default())
+    }
+
+    /// Build a server with explicit store and defaults.
+    pub fn new_with(pool: ChromePool, store: SnapshotStore, defaults: ServerDefaults) -> Self {
         Self {
             pool,
             store: Arc::new(store),
+            defaults: Arc::new(defaults),
             tool_router: Self::tool_router(),
         }
     }
@@ -69,20 +119,25 @@ impl SniffMcpServer {
 // Tool parameters
 // ---------------------------------------------------------------------------
 
-/// A single user interaction (`click` | `hover` | `type`) run on the page
-/// before capture, to reveal elements that only exist after an action
-/// (modals, dropdowns, hover menus, type-ahead suggestions). Actions run
-/// in array order; each one waits for its target to appear, then the wait
+/// A single user interaction (`click` | `hover` | `type` | `upload`) run on
+/// the page before capture, to reveal elements that only exist after an action
+/// (modals, dropdowns, hover menus, type-ahead suggestions). Actions run in
+/// array order; each one waits for its target to appear, then the wait
 /// pipeline runs afterwards against the post-interaction DOM.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActionInput {
-    /// Action kind: `click`, `hover` or `type`.
+    /// Action kind: `click`, `hover`, `type` or `upload`.
     pub r#type: String,
     /// CSS selector of the element to interact with.
     pub selector: String,
     /// Text to insert for `type` actions (required when `type`).
     #[serde(default)]
     pub text: Option<String>,
+    /// Local files to attach for `upload` actions (required when `upload`).
+    /// Resolved by the browser process — in a container the paths must exist
+    /// inside it. Works even for visually hidden file inputs.
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
     /// Milliseconds to wait for the target to appear (default 10000).
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -214,6 +269,22 @@ pub struct SniffPageRequest {
     /// `jsonl` returns the full snapshot inline.
     #[serde(default = "default_return_mode", rename = "return")]
     pub return_mode: String,
+    /// Extra HTTP headers applied to every request of this session (e.g.
+    /// `{"X-CMS-AI-Token": "<token>"}` for a stateless CMS AI middleware).
+    /// Merged over `SNIFF_DEFAULT_HEADERS` on name collision.
+    #[serde(default)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// Restore a persisted session state (cookies + localStorage, Playwright
+    /// `storageState` JSON) into the browser before navigation, so a login
+    /// performed earlier (via `save_storage_state`) survives this capture.
+    /// Falls back to `SNIFF_STORAGE_STATE` when omitted.
+    #[serde(default)]
+    pub storage_state: Option<String>,
+    /// Write the session state (all cookies + the page's localStorage) to
+    /// this path after the pipeline — pass it back via `storage_state` in
+    /// later captures to keep the login alive across browser restarts.
+    #[serde(default)]
+    pub save_storage_state: Option<String>,
 }
 
 /// Parameters for the `sniffCSS_diff` tool.
@@ -352,8 +423,8 @@ impl SniffMcpServer {
     ) -> Result<String, ErrorData> {
         let request = params.0;
         let reporter = ProgressReporter::new(&meta, &peer);
-        let config =
-            build_sniff_config(&request).map_err(|e| ErrorData::invalid_params(e, None))?;
+        let config = build_sniff_config_with(&request, &self.defaults)
+            .map_err(|e| ErrorData::invalid_params(e, None))?;
 
         reporter.report(0.05, "acquiring browser slot").await?;
         let outcome = self
@@ -699,8 +770,20 @@ impl ServerHandler for SniffMcpServer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map `sniffCSS_page` arguments to a full `SniffConfig`.
+/// Map `sniffCSS_page` arguments to a full `SniffConfig`, with no server
+/// defaults (used by tests).
+#[cfg(test)]
 fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String> {
+    build_sniff_config_with(request, &ServerDefaults::default())
+}
+
+/// Map `sniffCSS_page` arguments to a full `SniffConfig`, merging team-wide
+/// [`ServerDefaults`]: default headers, default storage state, and `SNIFF_BASE_URL`
+/// prefixing for relative URLs. Explicit per-call values win over defaults.
+fn build_sniff_config_with(
+    request: &SniffPageRequest,
+    defaults: &ServerDefaults,
+) -> Result<SniffConfig, String> {
     let wait = if request.wait.is_empty() {
         WaitStrategy::default_pipeline(&request.selector)
     } else {
@@ -720,8 +803,22 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
         .map(action_from_input)
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Headers: server defaults first, per-call overrides win on collision.
+    let mut headers = defaults.headers.clone();
+    if let Some(overrides) = &request.headers {
+        for (k, v) in overrides {
+            headers.insert(k.clone(), v.clone());
+        }
+    }
+    let headers = headers.into_iter().collect::<Vec<(String, String)>>();
+
+    let storage_state_path = request
+        .storage_state
+        .clone()
+        .or_else(|| defaults.storage_state.clone());
+
     Ok(SniffConfig {
-        url: request.url.clone(),
+        url: resolve_url(&request.url, defaults.base_url.as_deref()),
         selector: request.selector.clone(),
         depth: request.depth,
         categories,
@@ -760,7 +857,22 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
         effects_limit: request.effects_limit.unwrap_or(10),
         screenshot: request.screenshot,
         screenshot_full_page: request.screenshot_full_page,
+        headers,
+        storage_state_path,
+        save_storage_state: request.save_storage_state.clone(),
     })
+}
+
+/// Prepend the `SNIFF_BASE_URL` to relative URLs; absolute URLs pass through.
+fn resolve_url(url: &str, base: Option<&str>) -> String {
+    match base {
+        Some(base) if !url.contains("://") => format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            url.trim_start_matches('/')
+        ),
+        _ => url.to_string(),
+    }
 }
 
 /// Map an MCP action input to an engine [`Action`].
@@ -791,8 +903,23 @@ fn action_from_input(input: &ActionInput) -> Result<Action, String> {
                 settle_ms,
             })
         }
+        "upload" => {
+            let files = input
+                .files
+                .clone()
+                .ok_or_else(|| "upload action requires `files`".to_string())?;
+            if files.is_empty() {
+                return Err("upload action requires at least one file".to_string());
+            }
+            Ok(Action::Upload {
+                selector,
+                files,
+                timeout_ms,
+                settle_ms,
+            })
+        }
         other => Err(format!(
-            "unknown action type `{other}` (expected click | hover | type)"
+            "unknown action type `{other}` (expected click | hover | type | upload)"
         )),
     }
 }
@@ -877,6 +1004,9 @@ mod tests {
             actions: vec![],
             effects: true,
             effects_limit: None,
+            headers: None,
+            storage_state: None,
+            save_storage_state: None,
         }
     }
 
@@ -1024,6 +1154,7 @@ mod tests {
             r#type: "dblclick".into(),
             selector: "#x".into(),
             text: None,
+            files: None,
             timeout_ms: None,
             settle_ms: None,
         })
@@ -1034,11 +1165,120 @@ mod tests {
             r#type: "type".into(),
             selector: "#q".into(),
             text: None,
+            files: None,
             timeout_ms: None,
             settle_ms: None,
         })
         .unwrap_err();
         assert!(err.contains("requires `text`"), "got: {err}");
+
+        let err = action_from_input(&ActionInput {
+            r#type: "upload".into(),
+            selector: "#file".into(),
+            text: None,
+            files: None,
+            timeout_ms: None,
+            settle_ms: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("requires `files`"), "got: {err}");
+
+        let err = action_from_input(&ActionInput {
+            r#type: "upload".into(),
+            selector: "#file".into(),
+            text: None,
+            files: Some(vec![]),
+            timeout_ms: None,
+            settle_ms: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("at least one file"), "got: {err}");
+    }
+
+    #[test]
+    fn build_config_maps_upload_action() {
+        let mut req = request();
+        req.actions = serde_json::from_value(serde_json::json!([
+            { "type": "upload", "selector": "#file",
+              "files": ["/tmp/photo.jpg"], "settle_ms": 500 }
+        ]))
+        .unwrap();
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(matches!(
+            &cfg.actions[0],
+            Action::Upload { selector, files, settle_ms, .. }
+                if selector == "#file" && files == &vec!["/tmp/photo.jpg".to_string()]
+                   && *settle_ms == 500
+        ));
+    }
+
+    #[test]
+    fn build_config_merges_default_headers_storage_and_base_url() {
+        let defaults = ServerDefaults {
+            headers: BTreeMap::from([
+                ("X-CMS-AI-Token".into(), "default-token".into()),
+                ("X-Common".into(), "always".into()),
+            ]),
+            storage_state: Some("default-state.json".into()),
+            base_url: Some("http://localhost:10011".into()),
+        };
+        let mut req = request();
+        req.url = "cms/dashboard".into();
+        req.headers = Some(BTreeMap::from([(
+            "X-CMS-AI-Token".into(),
+            "override-token".into(),
+        )]));
+        req.storage_state = None;
+
+        let cfg = build_sniff_config_with(&req, &defaults).unwrap();
+        // Per-call header wins on collision; default still merged.
+        let headers = cfg.headers.iter().cloned().collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            headers.get("X-CMS-AI-Token").map(String::as_str),
+            Some("override-token")
+        );
+        assert_eq!(headers.get("X-Common").map(String::as_str), Some("always"));
+        // Default storage state applied when the call omits it.
+        assert_eq!(
+            cfg.storage_state_path.as_deref(),
+            Some("default-state.json")
+        );
+        // Relative URL prefixed by SNIFF_BASE_URL.
+        assert_eq!(cfg.url, "http://localhost:10011/cms/dashboard");
+    }
+
+    #[test]
+    fn per_call_storage_state_overrides_default() {
+        let defaults = ServerDefaults {
+            headers: BTreeMap::new(),
+            storage_state: Some("default-state.json".into()),
+            base_url: None,
+        };
+        let mut req = request();
+        req.storage_state = Some("per-call.json".into());
+        let cfg = build_sniff_config_with(&req, &defaults).unwrap();
+        assert_eq!(cfg.storage_state_path.as_deref(), Some("per-call.json"));
+    }
+
+    #[test]
+    fn resolve_url_leaves_absolute_untouched() {
+        assert_eq!(
+            resolve_url("http://localhost:3000/x", Some("http://localhost:10011")),
+            "http://localhost:3000/x"
+        );
+        assert_eq!(
+            resolve_url("https://x.com", Some("http://localhost:10011")),
+            "https://x.com"
+        );
+        assert_eq!(
+            resolve_url("file:///tmp/a.html", Some("http://localhost:10011")),
+            "file:///tmp/a.html"
+        );
+        assert_eq!(
+            resolve_url("cms", Some("http://localhost:10011/")),
+            "http://localhost:10011/cms"
+        );
+        assert_eq!(resolve_url("cms", None), "cms");
     }
 
     #[test]

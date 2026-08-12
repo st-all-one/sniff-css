@@ -73,6 +73,24 @@ pub struct SniffConfig {
     /// When `screenshot` is set, capture the full scrollable document
     /// instead of only the visible viewport.
     pub screenshot_full_page: bool,
+    /// Extra HTTP headers applied to every request of this session via
+    /// `Network.setExtraHTTPHeaders` before navigation (e.g. a
+    /// `X-CMS-AI-Token` used by a stateless CMS AI middleware). Set once per
+    /// run; the MCP server can fill them from `SNIFF_DEFAULT_HEADERS`.
+    pub headers: Vec<(String, String)>,
+    /// Path to a persisted session state (cookies + localStorage, Playwright
+    /// `storageState`-style JSON). When set, the state is restored into the
+    /// browser **before** navigation: cookies via `Network.setCookies` and
+    /// `localStorage` via an init script that runs before page scripts, so a
+    /// login performed earlier (see `save_storage_state`) survives into this
+    /// capture.
+    pub storage_state_path: Option<String>,
+    /// When set, the session state (all cookies + the page's `localStorage`)
+    /// is written to this path at the end of the pipeline — after any
+    /// login/interaction actions ran — so a later capture can pass it back via
+    /// `storage_state_path`. Survives browser restarts and the MCP pool
+    /// relaunch.
+    pub save_storage_state: Option<String>,
 }
 
 impl Default for SniffConfig {
@@ -105,6 +123,9 @@ impl Default for SniffConfig {
             effects_limit: 10,
             screenshot: false,
             screenshot_full_page: false,
+            headers: Vec::new(),
+            storage_state_path: None,
+            save_storage_state: None,
         }
     }
 }
@@ -221,6 +242,19 @@ pub enum Action {
     Type {
         selector: String,
         text: String,
+        timeout_ms: u64,
+        settle_ms: u64,
+    },
+    /// Wait for `selector` to exist, then attach local `files` to an
+    /// `<input type=file>` via `DOM.setFileInputFiles`. The browser fires
+    /// the `change` event itself, so upload handlers (e.g. an image cropper
+    /// inside a CMS modal) run for real. Works even when the input is
+    /// visually hidden (`display:none`), which is common for upload buttons.
+    /// `files` are resolved by the browser process — in a container the paths
+    /// must exist inside it.
+    Upload {
+        selector: String,
+        files: Vec<String>,
         timeout_ms: u64,
         settle_ms: u64,
     },
@@ -460,9 +494,11 @@ pub fn parse_wait_strategy(spec: &str) -> Result<WaitStrategy, SniffError> {
 ///
 /// Formats: `click:<selector>[:<timeout_ms>[:<settle_ms>]]` |
 /// `hover:<selector>[:<timeout_ms>[:<settle_ms>]]` |
-/// `type:<selector>:<text>` (text may contain colons).
+/// `type:<selector>:<text>` (text may contain colons) |
+/// `upload:<selector>:<file1,file2>` (files may contain colons).
 pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
-    // splitn(3) keeps `type` text (which may itself contain `:`) intact.
+    // splitn(3) keeps `type` text and `upload` file paths (which may
+    // themselves contain `:`) intact.
     let mut parts = spec.splitn(3, ':');
     let name = parts.next().unwrap_or("").trim();
     let selector = parts.next().unwrap_or("").trim().to_string();
@@ -471,7 +507,7 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
         SniffError::InvalidAction(format!(
             "{e} — action format: click:<selector>[:<timeout_ms>[:<settle_ms>]] | \
              hover:<selector>[:<timeout_ms>[:<settle_ms>]] | \
-             type:<selector>:<text>"
+             type:<selector>:<text> | upload:<selector>:<file1,file2>"
         ))
     };
     let take_ms = |value: Option<&str>, what: &str| -> Result<u64, SniffError> {
@@ -526,6 +562,26 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
             Ok(Action::Type {
                 selector,
                 text,
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            })
+        }
+        "upload" => {
+            if selector.is_empty() {
+                return Err(err("missing selector".into()));
+            }
+            let files = parts.next().unwrap_or("");
+            if files.trim().is_empty() {
+                return Err(err("missing files for `upload` action".into()));
+            }
+            let files = files
+                .split(',')
+                .map(|f| f.trim().to_string())
+                .filter(|f| !f.is_empty())
+                .collect::<Vec<_>>();
+            Ok(Action::Upload {
+                selector,
+                files,
                 timeout_ms: Action::DEFAULT_TIMEOUT_MS,
                 settle_ms: Action::DEFAULT_SETTLE_MS,
             })
@@ -706,6 +762,40 @@ mod tests {
                 settle_ms: Action::DEFAULT_SETTLE_MS,
             }
         );
+    }
+
+    #[test]
+    fn parse_action_upload_with_files() {
+        assert_eq!(
+            parse_action("upload:#file:img/a.jpg,img/b.png").unwrap(),
+            Action::Upload {
+                selector: "#file".into(),
+                files: vec!["img/a.jpg".into(), "img/b.png".into()],
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_action_upload_keeps_colons_in_paths() {
+        assert_eq!(
+            parse_action("upload:#file:/tmp/photo:v1.jpg").unwrap(),
+            Action::Upload {
+                selector: "#file".into(),
+                files: vec!["/tmp/photo:v1.jpg".into()],
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_action_upload_requires_files() {
+        let err = parse_action("upload:#file:").unwrap_err().to_string();
+        assert!(err.contains("missing files"), "got: {err}");
+        let err = parse_action("upload").unwrap_err().to_string();
+        assert!(err.contains("missing selector"), "got: {err}");
     }
 
     #[test]

@@ -2,7 +2,9 @@
 
 use clap::Parser;
 use sniff_core::config::{OutputFormat, parse_action, parse_categories, parse_wait_strategy};
-use sniff_core::{ElementFilter, OutputConfig, SniffConfig, SniffResult, Viewport, WaitStrategy};
+use sniff_core::{
+    ElementFilter, OutputConfig, SniffConfig, SniffError, SniffResult, Viewport, WaitStrategy,
+};
 
 /// High-performance computed-style sniffer for AI-driven development.
 #[derive(Debug, Parser)]
@@ -73,6 +75,34 @@ pub struct Cli {
     /// `--action type:<selector>:<text>`.
     #[arg(long, action = clap::ArgAction::Append)]
     pub r#type: Vec<String>,
+
+    /// Attach local files to an `<input type=file>` before capture
+    /// (repeatable). Shorthand for
+    /// `--action upload:<selector>:<file1,file2>`. The browser resolves the
+    /// paths — in a container they must exist inside it. Works even when the
+    /// input is visually hidden (common for upload buttons).
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub upload: Vec<String>,
+
+    /// Extra HTTP header `Name: Value`, repeatable, applied to every request
+    /// of the session via `Network.setExtraHTTPHeaders` — e.g.
+    /// `--header "X-CMS-AI-Token: <token>"` for a stateless CMS auth.
+    /// Headers from the `SNIFF_DEFAULT_HEADERS` env var (a JSON object) are
+    /// merged first; explicit `--header` flags win on name collision.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub header: Vec<String>,
+
+    /// Restore a persisted session state (cookies + localStorage, Playwright
+    /// `storageState` JSON) into the browser before navigation, so a login
+    /// performed earlier (via `--save-storage-state`) survives this capture.
+    #[arg(long = "storage-state")]
+    pub storage_state: Option<String>,
+
+    /// Write the session state (all cookies + the page's localStorage) to
+    /// this path after the pipeline — pass it back via `--storage-state` in
+    /// later captures to keep the login alive across browser restarts.
+    #[arg(long = "save-storage-state")]
+    pub save_storage_state: Option<String>,
 
     /// Keep only visible elements (default true; use --no-visible).
     #[arg(long = "no-visible", default_value_t = false)]
@@ -301,8 +331,37 @@ impl Cli {
             for spec in &self.r#type {
                 out.push(parse_action(&format!("type:{spec}"))?);
             }
+            for spec in &self.upload {
+                out.push(parse_action(&format!("upload:{spec}"))?);
+            }
             out
         };
+
+        // Headers: `SNIFF_DEFAULT_HEADERS` (JSON object) first, explicit
+        // `--header` flags win on name collision.
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let Ok(raw) = std::env::var("SNIFF_DEFAULT_HEADERS")
+            && !raw.trim().is_empty()
+        {
+            let map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+                .map_err(|e| {
+                    SniffError::Other(format!(
+                        "invalid SNIFF_DEFAULT_HEADERS (expected a JSON object): {e}"
+                    ))
+                })?;
+            for (k, v) in map {
+                if let Some(v) = v.as_str() {
+                    headers.push((k, v.to_string()));
+                }
+            }
+        }
+        for spec in &self.header {
+            let (k, v) = parse_header(spec)?;
+            match headers.iter_mut().find(|(existing, _)| existing == &k) {
+                Some(existing) => existing.1 = v,
+                None => headers.push((k, v)),
+            }
+        }
 
         let compact = self.compact && !self.no_compact && !self.full;
         let include_contrast = self.contrast && !self.no_contrast && !self.full;
@@ -368,8 +427,28 @@ impl Cli {
             effects_limit: self.effects_limit,
             screenshot: self.screenshot.is_some(),
             screenshot_full_page: self.fullpage_screenshot,
+            headers,
+            storage_state_path: self.storage_state,
+            save_storage_state: self.save_storage_state,
         })
     }
+}
+
+/// Parse a `Name: Value` header spec into `(name, value)`.
+fn parse_header(spec: &str) -> SniffResult<(String, String)> {
+    let (name, value) = spec.split_once(':').ok_or_else(|| {
+        SniffError::Other(format!(
+            "invalid header `{spec}` — expected `Name: Value` (e.g. `X-CMS-AI-Token: <token>`)"
+        ))
+    })?;
+    let name = name.trim();
+    let value = value.trim();
+    if name.is_empty() || value.is_empty() {
+        return Err(SniffError::Other(format!(
+            "invalid header `{spec}` — both name and value must be non-empty"
+        )));
+    }
+    Ok((name.to_string(), value.to_string()))
 }
 
 #[cfg(test)]
@@ -492,6 +571,10 @@ mod tests {
             stable_key: None,
             attrs: vec![],
             full: false,
+            upload: vec![],
+            header: vec![],
+            storage_state: None,
+            save_storage_state: None,
         };
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.categories, vec![StyleCategory::All]);
@@ -568,6 +651,10 @@ mod tests {
             stable_key: None,
             attrs: vec![],
             full: false,
+            upload: vec![],
+            header: vec![],
+            storage_state: None,
+            save_storage_state: None,
         };
         cli.stable_key = Some("data-testid".into());
         let cfg = cli.into_config().unwrap();
@@ -715,6 +802,10 @@ mod tests {
             stable_key: None,
             attrs: vec![],
             full: false,
+            upload: vec![],
+            header: vec![],
+            storage_state: None,
+            save_storage_state: None,
         };
         cli.full = true;
         let cfg = cli.into_config().unwrap();
@@ -782,6 +873,10 @@ mod tests {
             stable_key: None,
             attrs: vec![],
             full: false,
+            upload: vec![],
+            header: vec![],
+            storage_state: None,
+            save_storage_state: None,
         };
         cli.no_compact = true;
         cli.no_contrast = true;
@@ -849,6 +944,10 @@ mod tests {
             stable_key: None,
             attrs: vec![],
             full: false,
+            upload: vec![],
+            header: vec![],
+            storage_state: None,
+            save_storage_state: None,
         };
         cli.full = true;
         cli.ax_tree = true;
@@ -930,5 +1029,100 @@ mod tests {
         .unwrap();
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.output.format, OutputFormat::Json);
+    }
+
+    #[test]
+    fn header_flag_maps_to_config_headers() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--header",
+            "X-CMS-AI-Token: abc123",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(
+            cfg.headers,
+            vec![("X-CMS-AI-Token".to_string(), "abc123".to_string())]
+        );
+    }
+
+    #[test]
+    fn header_parse_rejects_missing_colon_or_value() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--header",
+            "not-a-header",
+        ])
+        .unwrap();
+        assert!(cli.into_config().is_err());
+
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--header",
+            "X-Foo: ",
+        ])
+        .unwrap();
+        assert!(cli.into_config().is_err());
+    }
+
+    #[test]
+    fn upload_flag_maps_to_upload_action() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".modal",
+            "--upload",
+            "#file:img/a.jpg,img/b.png",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(matches!(
+            &cfg.actions[0],
+            Action::Upload { selector, files, .. }
+                if selector == "#file" && files == &vec!["img/a.jpg".to_string(), "img/b.png".to_string()]
+        ));
+    }
+
+    #[test]
+    fn storage_state_flags_map_to_config() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--storage-state",
+            "state.json",
+            "--save-storage-state",
+            "out.json",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.storage_state_path.as_deref(), Some("state.json"));
+        assert_eq!(cfg.save_storage_state.as_deref(), Some("out.json"));
+    }
+
+    #[test]
+    fn storage_state_absent_by_default() {
+        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
+            .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.storage_state_path.is_none());
+        assert!(cfg.save_storage_state.is_none());
+        assert!(cfg.headers.is_empty());
     }
 }

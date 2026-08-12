@@ -9,6 +9,7 @@ pub mod contrast;
 pub mod error;
 pub mod properties;
 pub mod snapshot;
+pub mod storage;
 pub mod types;
 
 pub use config::*;

@@ -275,6 +275,9 @@ mod tests {
             effects_limit: 10,
             screenshot: false,
             screenshot_full_page: false,
+            headers: Vec::new(),
+            storage_state_path: None,
+            save_storage_state: None,
         }
     }
 

@@ -289,6 +289,101 @@ impl CdpSession {
         Ok(())
     }
 
+    /// Attach local files to an `<input type=file>` matched by `selector`
+    /// (`DOM.setFileInputFiles`). The browser fires the `change` event itself,
+    /// so upload handlers (crop previews, etc.) run for real. `files` are
+    /// resolved by the browser process — in a container they must exist inside
+    /// it. Works even for visually hidden inputs.
+    pub async fn set_file_input(&self, selector: &str, files: &[String]) -> Result<()> {
+        let doc = self.call("DOM.getDocument", json!({ "depth": 1 })).await?;
+        let root = doc
+            .get("root")
+            .and_then(|r| r.get("nodeId"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| CdpError::Protocol {
+                method: "DOM.getDocument".into(),
+                message: "response missing root nodeId".into(),
+            })?;
+        let node = self
+            .call(
+                "DOM.querySelector",
+                json!({ "nodeId": root, "selector": selector }),
+            )
+            .await?;
+        let node_id =
+            node.get("nodeId")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| CdpError::Protocol {
+                    method: "DOM.querySelector".into(),
+                    message: "response missing nodeId".into(),
+                })?;
+        if node_id == 0 {
+            return Err(CdpError::Protocol {
+                method: "DOM.setFileInputFiles".into(),
+                message: format!("selector `{selector}` matched no element"),
+            });
+        }
+        self.call(
+            "DOM.setFileInputFiles",
+            json!({ "nodeId": node_id, "files": files }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Set extra HTTP headers applied to every request of this session
+    /// (`Network.setExtraHTTPHeaders`), e.g. a `X-CMS-AI-Token` for a
+    /// stateless CMS AI middleware. Must be called before navigation.
+    pub async fn set_extra_headers(&self, headers: &[(String, String)]) -> Result<()> {
+        if headers.is_empty() {
+            return Ok(());
+        }
+        let mut map = serde_json::Map::new();
+        for (k, v) in headers {
+            map.insert(k.clone(), serde_json::Value::String(v.clone()));
+        }
+        self.call(
+            "Network.setExtraHTTPHeaders",
+            json!({ "headers": serde_json::Value::Object(map) }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Read every cookie in the browser jar (`Network.getAllCookies`).
+    pub async fn get_all_cookies(&self) -> Result<Vec<Value>> {
+        let res = self.call_no_params("Network.getAllCookies").await?;
+        Ok(res
+            .get("cookies")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Set cookies into the browser jar (`Network.setCookies`). Each entry
+    /// must be a CDP `CookieParam` object (see
+    /// [`crate::storage::StorageState::to_cdp_cookies`]).
+    pub async fn set_cookies(&self, cookies: &[Value]) -> Result<()> {
+        if cookies.is_empty() {
+            return Ok(());
+        }
+        self.call("Network.setCookies", json!({ "cookies": cookies }))
+            .await?;
+        Ok(())
+    }
+
+    /// Register a script that runs on every future document of this session
+    /// before the page's own scripts (`Page.addScriptToEvaluateOnNewDocument`)
+    /// — used to restore `localStorage` before navigation.
+    pub async fn add_init_script(&self, source: &str) -> Result<()> {
+        self.call(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": source }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Close this session's target.
     pub async fn close(&self) -> Result<()> {
         self.call_no_params("Page.close").await?;

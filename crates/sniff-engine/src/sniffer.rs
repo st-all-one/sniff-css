@@ -10,6 +10,7 @@ use sniff_cdp::client::CdpClient;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_cdp::session::CdpSession;
 use sniff_core::contrast;
+use sniff_core::storage::StorageState;
 use sniff_core::{Action, SniffConfig, SniffError, SniffResult};
 use std::time::Duration;
 
@@ -151,6 +152,16 @@ where
             .await
             .map_err(|e| SniffError::Cdp(e.to_string()))?;
     }
+    // Session identity: extra headers (e.g. X-CMS-AI-Token) and a persisted
+    // session state (cookies + localStorage) must land *before* navigation so
+    // the page and its scripts see them from the first request.
+    session
+        .set_extra_headers(&config.headers)
+        .await
+        .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    if let Some(path) = &config.storage_state_path {
+        apply_storage_state(session, path).await?;
+    }
     on_progress(Phase::Navigating).await;
     session
         .navigate(&config.url)
@@ -266,9 +277,59 @@ where
         );
     }
 
+    // Persist the session state at the very end — after any login performed
+    // through `actions` — so the next capture can pass `storage_state_path`.
+    if let Some(path) = &config.save_storage_state {
+        save_storage_state(session, path).await?;
+    }
+
     let nodes: usize = outcome.snapshots.iter().map(|s| s.node_count()).sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)
+}
+
+/// Restore a persisted session state into the browser before navigation:
+/// cookies via `Network.setCookies` and `localStorage` via an init script
+/// that runs before the page's own scripts on every document.
+async fn apply_storage_state(session: &CdpSession, path: &str) -> SniffResult<()> {
+    let state = StorageState::from_file(path)?;
+    if !state.cookies.is_empty() {
+        session
+            .set_cookies(&state.to_cdp_cookies())
+            .await
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    }
+    if let Some(script) = state.to_init_script() {
+        session
+            .add_init_script(&script)
+            .await
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Export the current session state (all cookies + the page's `localStorage`)
+/// to `path`. `localStorage` is only captured from the current page's origin;
+/// sub-origins (e.g. a CDN) are not represented.
+async fn save_storage_state(session: &CdpSession, path: &str) -> SniffResult<()> {
+    let raw_cookies = session
+        .get_all_cookies()
+        .await
+        .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    // `localStorage` throws on opaque origins (about:blank); capture is best
+    // effort — cookies alone still persist the login.
+    let page_state = session
+        .evaluate(
+            r#"(() => { try { return { origin: location.origin,
+                items: Object.entries(localStorage).map(([name, value]) => ({ name, value })) }; }
+              catch (e) { return null; } })()"#,
+            false,
+        )
+        .await
+        .ok()
+        .filter(|v| !v.is_null());
+    let state = StorageState::from_cdp(&raw_cookies, page_state);
+    state.write_file(path)
 }
 
 /// Enrich an action failure with chain context so a broken sequence names
@@ -279,6 +340,9 @@ fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: SniffErro
         Action::Click { selector, .. } => format!("click:{selector}"),
         Action::Hover { selector, .. } => format!("hover:{selector}"),
         Action::Type { selector, text, .. } => format!("type:{selector}:{text}"),
+        Action::Upload {
+            selector, files, ..
+        } => format!("upload:{selector}:{}", files.join(",")),
     };
     let prior = chain[..index]
         .iter()

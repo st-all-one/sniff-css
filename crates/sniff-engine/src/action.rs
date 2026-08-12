@@ -43,12 +43,15 @@ pub async fn execute(session: &CdpSession, action: &Action) -> SniffResult<()> {
     perform(session, action, &target).await
 }
 
-/// Wait for the action's target (exists + visible + has size), scroll it into
-/// view and resolve its path/rect/center.
+/// Wait for the action's target, scroll it into view and resolve its
+/// path/rect/center. `Click`/`Hover`/`Type` require the target to be visible
+/// and sized; `Upload` only needs it to exist, since file inputs are usually
+/// visually hidden (its rect/center are reported as zeroes).
 pub async fn prepare(session: &CdpSession, action: &Action) -> SniffResult<ActionTarget> {
     let selector = selector_of(action);
     let timeout_ms = timeout_of(action);
-    wait_for_target(session, selector, timeout_ms).await?;
+    let require_visible = !matches!(action, Action::Upload { .. });
+    wait_for_target(session, selector, timeout_ms, require_visible).await?;
     session
         .evaluate(&scroll_expr(selector), false)
         .await
@@ -74,6 +77,13 @@ pub async fn prepare(session: &CdpSession, action: &Action) -> SniffResult<Actio
                 .to_string(),
             rect: (x, y, w, h),
             center: (x + w / 2.0, y + h / 2.0),
+        }),
+        // Upload targets may legitimately be hidden (display:none file
+        // inputs); there is no click point to resolve, report zeroes.
+        _ if matches!(action, Action::Upload { .. }) => Ok(ActionTarget {
+            path: selector.to_string(),
+            rect: (0.0, 0.0, 0.0, 0.0),
+            center: (0.0, 0.0),
         }),
         _ => Err(SniffError::NoMatch {
             selector: selector.to_string(),
@@ -113,22 +123,47 @@ pub async fn perform(
             session.input_insert_text(text).await.map_err(cdp_err)?;
             sleep(*settle_ms).await;
         }
+        Action::Upload {
+            selector,
+            files,
+            settle_ms,
+            ..
+        } => {
+            session
+                .set_file_input(selector, files)
+                .await
+                .map_err(cdp_err)?;
+            sleep(*settle_ms).await;
+        }
     }
     Ok(())
 }
 
-/// Poll until `selector` matches an element that is visible and has size, up
-/// to `timeout_ms`. Existence alone is not enough: a chained target injected
-/// hidden (e.g. inside a closed tab) would otherwise be clicked on top of
-/// whatever covers it.
-async fn wait_for_target(session: &CdpSession, selector: &str, timeout_ms: u64) -> SniffResult<()> {
+/// Poll until `selector` matches an element (that is visible and sized when
+/// `require_visible` is set), up to `timeout_ms`. Existence alone is not
+/// enough for click targets: a chained target injected hidden (e.g. inside a
+/// closed tab) would otherwise be clicked on top of whatever covers it.
+async fn wait_for_target(
+    session: &CdpSession,
+    selector: &str,
+    timeout_ms: u64,
+    require_visible: bool,
+) -> SniffResult<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let ready = session
             .evaluate(&ready_expr(selector), false)
             .await
             .map_err(cdp_err)?;
-        if ready.as_bool().unwrap_or(false) {
+        let exists = ready
+            .get("exists")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let visible = ready
+            .get("visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if exists && (!require_visible || visible) {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -143,10 +178,10 @@ async fn wait_for_target(session: &CdpSession, selector: &str, timeout_ms: u64) 
 fn ready_expr(selector: &str) -> String {
     let sel = serde_json::to_string(selector).unwrap_or_else(|_| "\"\"".into());
     format!(
-        "(() => {{ try {{ const el = document.querySelector({sel}); if (!el) return false; \
+        "(() => {{ try {{ const el = document.querySelector({sel}); if (!el) return {{ exists: false, visible: false }}; \
          const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); \
-         return cs.display !== 'none' && cs.visibility !== 'hidden' \
-         && r.width > 0 && r.height > 0; }} catch (e) {{ return false; }} }})()"
+         return {{ exists: true, visible: cs.display !== 'none' && cs.visibility !== 'hidden' \
+         && r.width > 0 && r.height > 0 }}; }} catch (e) {{ return {{ exists: false, visible: false }}; }} }})()"
     )
 }
 
@@ -185,7 +220,8 @@ fn selector_of(action: &Action) -> &str {
     match action {
         Action::Click { selector, .. }
         | Action::Hover { selector, .. }
-        | Action::Type { selector, .. } => selector,
+        | Action::Type { selector, .. }
+        | Action::Upload { selector, .. } => selector,
     }
 }
 
@@ -193,7 +229,8 @@ fn timeout_of(action: &Action) -> u64 {
     match action {
         Action::Click { timeout_ms, .. }
         | Action::Hover { timeout_ms, .. }
-        | Action::Type { timeout_ms, .. } => *timeout_ms,
+        | Action::Type { timeout_ms, .. }
+        | Action::Upload { timeout_ms, .. } => *timeout_ms,
     }
 }
 
@@ -217,6 +254,7 @@ mod tests {
         assert!(expr.contains("document.querySelector"));
         assert!(expr.contains("cs.display !== 'none'"));
         assert!(expr.contains("r.width > 0 && r.height > 0"));
+        assert!(expr.contains("exists"));
     }
 
     #[test]
@@ -265,5 +303,13 @@ mod tests {
         };
         assert_eq!(selector_of(&ty), "#q");
         assert_eq!(timeout_of(&ty), 7000);
+        let up = Action::Upload {
+            selector: "#file".into(),
+            files: vec!["/tmp/x.jpg".into()],
+            timeout_ms: 9000,
+            settle_ms: 50,
+        };
+        assert_eq!(selector_of(&up), "#file");
+        assert_eq!(timeout_of(&up), 9000);
     }
 }
