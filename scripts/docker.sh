@@ -33,8 +33,11 @@ case "${1:-}" in
   mcp)
     docker compose -f "$COMPOSE_FILE" exec -i "$SERVICE" sniffCSS-mcp
     ;;
+  mcp-docker)
+    exec ./scripts/mcp-docker.sh
+    ;;
   *)
-    echo "uso: scripts/docker.sh {build|build-source|up|down|exec -- <cmd>|mcp}"
+    echo "uso: scripts/docker.sh {build|build-source|up|down|exec -- <cmd>|mcp|mcp-docker}"
     exit 1
     ;;
 esac

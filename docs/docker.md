@@ -82,33 +82,57 @@ services:
 
 ## MCP via Docker
 
-O `sniffCSS-mcp` roda via **stdio**. O agente lança o processo pelo próprio
-`docker`, então o servidor MCP anexa ao Chromium da GUI do container.
+O `sniffCSS-mcp` roda via **stdio** dentro do container, anexando ao Chromium
+da GUI (`SNIFF_CONNECT=http://127.0.0.1:9222` é o default da imagem). O jeito
+mais simples (sem compose file, direto do Docker Hub) é usar o wrapper
+[`scripts/mcp-docker.sh`](../scripts/mcp-docker.sh): ele cria o container
+`stallonels/sniffcss:latest` se necessário, espera o CDP subir e executa o MCP
+via `docker exec -i` — o banner de init do linuxserver nunca chega ao stdio, o
+que mantém o canal JSON-RPC limpo.
 
-### Configuração no agente
+### Configuração no agente (opencode)
 
-```json
+```jsonc
+// opencode.jsonc
 {
-  "mcpServers": {
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
     "sniffcss": {
-      "command": "docker",
-      "args": ["compose", "-f", "docker/docker-compose.yml", "exec", "-i", "sniffcss", "sniffCSS-mcp"]
+      "type": "local",
+      "command": ["/caminho/para/sniff-css/scripts/mcp-docker.sh"],
+      "enabled": true,
+      "environment": {
+        "SNIFF_CONFIG_DIR": "/tmp/sniffcss-config",   // volume /config (snapshots)
+        "RUST_LOG": "warn"
+      }
     }
   }
 }
 ```
 
-Ou com `docker exec` direto (container já rodando):
+Variáveis do wrapper: `SNIFF_DOCKER_IMAGE` (default `stallonels/sniffcss:latest`),
+`SNIFF_DOCKER_CONTAINER` (default `sniffcss-mcp`), `SNIFF_CONFIG_DIR` (volume
+`/config`, onde ficam os snapshots), `SNIFF_DOCKER_SHM` (default `1gb`).
+
+### Configuração no agente (MCP genérico, container já rodando)
 
 ```json
 {
   "mcpServers": {
     "sniffcss": {
       "command": "docker",
-      "args": ["exec", "-i", "sniffcss", "sniffCSS-mcp"]
+      "args": ["exec", "-i", "sniffcss-mcp", "/opt/sniffcss/bin/sniffCSS-mcp"]
     }
   }
 }
+```
+
+### Uso manual
+
+```bash
+scripts/mcp-docker.sh   # inicia o container se preciso e sobe o MCP via stdio
+# ou, com o container já rodando:
+docker exec -i sniffcss-mcp /opt/sniffcss/bin/sniffCSS-mcp
 ```
 
 ### Ferramentas e persistência
@@ -122,10 +146,16 @@ Ou com `docker exec` direto (container já rodando):
 
 ### Uso manual (fora de agente)
 
+Recomendado (direto do Docker Hub, sem compose):
+
+```bash
+scripts/mcp-docker.sh
+```
+
+Ou com o container do compose já rodando:
+
 ```bash
 docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp
-# ou, com o container já rodando:
-docker exec -i sniffcss sniffCSS-mcp
 ```
 
 ## Diff / checks dentro do container
