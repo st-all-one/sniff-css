@@ -1,4 +1,4 @@
-# sniff-computed-style
+# sniffCSS
 
 Utilitário em Rust de alta performance para capturar o **computed style real** de elementos de uma página durante o desenvolvimento — em especial no localhost — com saída estruturada, compacta e otimizada para consumo por IA.
 
@@ -7,10 +7,10 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 ## O que você pode fazer
 
 - **Capturar o estado real** de qualquer elemento (computed styles, rect, métricas) com recursão controlada e waits combináveis.
-- **Diffar duas versões** (`sniff-diff`): só o que mudou, sem IA.
+- **Diffar duas versões** (`sniffCSS-diff`): só o que mudou, sem IA.
 - **Auditar acessibilidade** (`--contrast --ax --ax-tree`): contraste WCAG **medido** (fundo efetivo resolvido), role/nome/focusable, árvore AX do Chrome e grade de perceptibilidade `is_user_noticeable`.
-- **Descobrir problemas** (`sniff-check`): contraste AA, alvos ≥24px, indicador de foco, cards fora do padrão.
-- **Servir tudo como MCP** (`sniff-mcp`) para agentes de IA.
+- **Descobrir problemas** (`sniffCSS-check`): contraste AA, alvos ≥24px, indicador de foco, cards fora do padrão.
+- **Servir tudo como MCP** (`sniffCSS-mcp`) para agentes de IA.
 
 ## Documentação
 
@@ -19,7 +19,7 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 | [`docs/usage.md`](docs/usage.md) | Referência completa da CLI: opções, categorias, waits, formatos de saída, `--compact`. |
 | [`docs/ai-usage.md`](docs/ai-usage.md) | Guia otimizado para IA: flag-set recomendado, pipeline captura→diff→checks→avaliação, cenários MCP/CI. |
 | [`docs/accessibility.md`](docs/accessibility.md) | Auditoria de acessibilidade: facetas, `is_user_noticeable`, workflow validado em páginas reais. |
-| [`docs/diff-checks.md`](docs/diff-checks.md) | `sniff-diff` (diff determinístico) e `sniff-check` (regras PASS/WARN/FAIL). |
+| [`docs/diff-checks.md`](docs/diff-checks.md) | `sniffCSS-diff` (diff determinístico) e `sniffCSS-check` (regras PASS/WARN/FAIL). |
 | [`docs/golden-run.md`](docs/golden-run.md) | Padrão ouro de execução (contrato de determinismo). |
 | [`docs/architecture.md`](docs/architecture.md) | Arquitetura interna dos crates. |
 
@@ -27,7 +27,7 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 
 ```bash
 cargo build --release
-# binários: target/release/sniff-computed-style, sniff-diff, sniff-check, sniff-mcp
+# binários: target/release/sniffCSS, sniffCSS-diff, sniffCSS-check, sniffCSS-mcp
 ```
 
 Instalar no computador (fica disponível em `~/.local/bin`, com PATH automático):
@@ -43,15 +43,15 @@ Requisito: Chrome/Chromium disponível (ou defina `SNIFF_CHROME_PATH` / use `--c
 
 ```bash
 # Computed styles de um botão
-sniff-computed-style --url http://localhost:3000 --selector ".btn-primary"
+sniffCSS --url http://localhost:3000 --selector ".btn-primary"
 
 # Subárvore com 1 nível, só box-model + tipografia
-sniff-computed-style --url http://localhost:3000 --selector ".card" \
+sniffCSS --url http://localhost:3000 --selector ".card" \
   --depth 1 --categories box-model,typography
 
 # Auditoria de acessibilidade de uma seção (contraste medido + AX tree)
-sniff-computed-style --url "$URL" --selector "main" --depth 5 \
-  --compact --contrast --ax-tree | sniff-check --rules -
+sniffCSS --url "$URL" --selector "main" --depth 5 \
+  --compact --contrast --ax-tree | sniffCSS-check --rules -
 ```
 
 Veja [`docs/usage.md`](docs/usage.md) para a referência completa de flags.
@@ -60,27 +60,27 @@ Veja [`docs/usage.md`](docs/usage.md) para a referência completa de flags.
 
 | Binário | Papel |
 |---|---|
-| `sniff-computed-style` | Captura o estado real dos elementos → JSONL. |
-| `sniff-diff` | Diff determinístico entre dois snapshots → delta mínimo para a IA. |
-| `sniff-check` | Checks determinísticos offline: uniformidade + regras (contraste, alvo, foco, alt). |
-| `sniff-mcp` | Servidor MCP (stdio): `sniff_page`, `diff_snapshots`, `run_checks`, `list_snapshots`, `list_categories`. |
+| `sniffCSS` | Captura o estado real dos elementos → JSONL. |
+| `sniffCSS-diff` | Diff determinístico entre dois snapshots → delta mínimo para a IA. |
+| `sniffCSS-check` | Checks determinísticos offline: uniformidade + regras (contraste, alvo, foco, alt). |
+| `sniffCSS-mcp` | Servidor MCP (stdio): `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`, `sniffCSS_snapshots`, `sniffCSS_categories`. |
 
 ## Integração com IA
 
 Qualquer ferramenta pode chamar o binário e consumir o stdout:
 
 ```bash
-sniff-computed-style --url http://localhost:3000 --selector ".btn-primary" \
+sniffCSS --url http://localhost:3000 --selector ".btn-primary" \
   | jq '.styles.box_model.width'
 ```
 
-Para agentes, exponha `sniff-mcp` como servidor MCP. O fluxo recomendado é
+Para agentes, exponha `sniffCSS-mcp` como servidor MCP. O fluxo recomendado é
 **captura determinística → diff determinístico → checks determinísticos → IA
 (só interpreta o delta)**; o passo a passo está em [`docs/ai-usage.md`](docs/ai-usage.md).
 
 Por padrão o MCP persiste cada captura em
-`sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
-e o `sniff_page` retorna só um `__sniff` reference; `diff_snapshots`/`run_checks`
+`sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+e o `sniffCSS_page` retorna só um `__sniff` reference; `sniffCSS_diff`/`sniffCSS_check`
 leem por `base_path`/`head_path`/`path` — o JSONL completo nunca entra no contexto
 do LLM.
 
@@ -91,10 +91,10 @@ crates/
 ├── sniff-core/     # tipos, config, catálogo de ~250 propriedades CSS, contraste WCAG
 ├── sniff-cdp/      # cliente CDP raw (WebSocket), protocolo, gestão do processo Chrome
 ├── sniff-engine/   # orquestração: espera, filtro, extração (1 chamada Runtime.evaluate), AX via CDP, saída
-├── sniff-cli/      # binário clap (sniff-computed-style)
-├── sniff-diff/     # diff determinístico JSONL (binário sniff-diff) + delta p/ IA
-├── sniff-check/    # checks determinísticos (binário sniff-check): uniformidade + regras
-└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, run_checks, list_snapshots, list_categories
+├── sniff-css/         # binário clap (sniffCSS)
+├── sniff-css-diff/    # diff determinístico JSONL (binário sniffCSS-diff) + delta p/ IA
+├── sniff-css-check/   # checks determinísticos (binário sniffCSS-check): uniformidade + regras
+└── sniff-css-mcp/     # servidor MCP (stdio): sniffCSS_page, sniffCSS_diff, sniffCSS_check, sniffCSS_snapshots, sniffCSS_categories
 ```
 
 ## Testes

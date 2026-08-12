@@ -4,10 +4,10 @@ members = [
     "crates/sniff-core",
     "crates/sniff-cdp",
     "crates/sniff-engine",
-    "crates/sniff-cli",
-    "crates/sniff-diff",
-    "crates/sniff-check",
-    "crates/sniff-mcp",
+    "crates/sniff-css",
+    "crates/sniff-css-diff",
+    "crates/sniff-css-check",
+    "crates/sniff-css-mcp",
 ]
 
 [workspace.package]

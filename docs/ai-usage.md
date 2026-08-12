@@ -1,14 +1,14 @@
 # Guia de uso — otimizado para IA
 
-Este guia mostra como usar `sniff-computed-style` + `sniff-diff` do jeito certo
+Este guia mostra como usar `sniffCSS` + `sniffCSS-diff` do jeito certo
 quando o consumidor final é um modelo de IA (agente, MCP, pipeline de regressão).
 
 ## Filosofia: a IA deve receber só o delta
 
 ```
-sniff-computed-style  (extração determinística: a verdade exata)   ─┐
-                                                                    ├─► sniff-diff (determinístico) ─► delta pequeno ─► LLM
-sniff-computed-style  (segunda execução, mesmos parâmetros)       ─┘
+sniffCSS  (extração determinística: a verdade exata)   ─┐
+                                                                    ├─► sniffCSS-diff (determinístico) ─► delta pequeno ─► LLM
+sniffCSS  (segunda execução, mesmos parâmetros)       ─┘
 ```
 
 A extração e o diff são **sem IA** e custam ~0 tokens. O LLM só vê o delta
@@ -19,7 +19,7 @@ A extração e o diff são **sem IA** e custam ~0 tokens. O LLM só vê o delta
 Para uso com IA, capture sempre com o mesmo conjunto de flags nas duas runs:
 
 ```bash
-sniff-computed-style \
+sniffCSS \
   --url "http://localhost:3000/checkout" \
   --selector ".checkout-form" \
   --depth 2 \
@@ -60,7 +60,7 @@ Saída (padrão `jsonl`, árvore aninhada):
  "children":[/* aninhado */]}
 ```
 
-> O `sniff-check` (ou a tool MCP `run_checks`) avalia o snapshot **sem IA**:
+> O `sniffCSS-check` (ou a tool MCP `sniffCSS_check`) avalia o snapshot **sem IA**:
 > `--uniform` acha o "card estranho" entre instâncias irmãs; `--rules` emite
 > PASS/WARN/FAIL para contraste, alvo 24x24, indicador de foco, focusables
 > ocultos e alt vazio em imagens grandes.
@@ -86,7 +86,7 @@ Campos derivados que a IA **não precisa inferir**:
 ## 2. Diff determinístico (antes da IA)
 
 ```bash
-sniff-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
+sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 ```
 
 O que sai: só os nós que mudaram.
@@ -104,20 +104,20 @@ O que sai: só os nós que mudaram.
 
 ```bash
 # resumo para centenas de páginas
-sniff-diff base.jsonl head.jsonl --stats-only 2>&1
+sniffCSS-diff base.jsonl head.jsonl --stats-only 2>&1
 # nodes: 14 -> 14 | changed: 1 | added: 0 | removed: 0
 ```
 
-## 2b. Descoberta determinística (`sniff-check`)
+## 2b. Descoberta determinística (`sniffCSS-check`)
 
 Avalia um snapshot **sem IA** e offline:
 
 ```bash
 # o "card estranho": instâncias irmãs do mesmo selector que desviam da norma
-sniff-check --input head.jsonl --uniform --tolerance 0.5
+sniffCSS-check --input head.jsonl --uniform --tolerance 0.5
 
 # regras derivadas (PASS/WARN/FAIL): contraste medido, alvo 24x24, foco, alt
-sniff-check --input head.jsonl --rules
+sniffCSS-check --input head.jsonl --rules
 ```
 
 Saída JSONL com evidência medida:
@@ -147,7 +147,7 @@ Exemplo de linha de delta:
 ## 3. Avaliação semântica por IA
 
 Só agora o LLM entra. Envie **apenas** `delta.jsonl` + o prompt de
-`docs/eval-prompt.md`. A resposta deve validar contra `docs/sniff-eval.schema.json`:
+`docs/eval-prompt.md`. A resposta deve validar contra `docs/sniffCSS-eval.schema.json`:
 
 ```jsonc
 {
@@ -171,66 +171,66 @@ jq -e 'has("status") and has("score_change") and (.changes_evaluated|length)>0' 
 
 ## 4. Padrões de uso por cenário
 
-### Agente/MCP (servidor `sniff-mcp`)
+### Agente/MCP (servidor `sniffCSS-mcp`)
 
-Preferencial para agentes: exponha `sniff-mcp` como servidor MCP (stdio) em vez
+Preferencial para agentes: exponha `sniffCSS-mcp` como servidor MCP (stdio) em vez
 de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece:
 
-1. **`sniff_page`** — captura (args: url, selector, depth, categories, compact,
+1. **`sniffCSS_page`** — captura (args: url, selector, depth, categories, compact,
    custom_props, stable_key, pseudo, wait, viewport, format, stabilize,
    contrast, include_ax, ax_tree, persist, return).
    Por padrão **persiste** o snapshot em
-   `sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+   `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
    e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
    (~200 tokens). Use `return:"jsonl"` para obter o JSONL inline
    (`persist:false` desativa a gravação).
    Durante a execução envia `notifications/progress` por fase:
    `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
    `capturing accessibility tree` (se `--ax`) → `formatting N nodes`.
-2. **`list_snapshots`** — lista os snapshots persistidos (domain/target/path/
+2. **`sniffCSS_snapshots`** — lista os snapshots persistidos (domain/target/path/
    created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use
    para escolher o par base/head.
-3. **`diff_snapshots`** — diff determinístico de dois snapshots
+3. **`sniffCSS_diff`** — diff determinístico de dois snapshots
    (args: **base_path/head_path** — o modo otimizado — ou base_jsonl/head_jsonl,
    tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
-4. **`run_checks`** — checks determinísticos offline sobre um snapshot
+4. **`sniffCSS_check`** — checks determinísticos offline sobre um snapshot
    (args: **path** ou jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
-5. **`list_categories`** — categorias aceitas.
+5. **`sniffCSS_categories`** — categorias aceitas.
 
-> **Fluxo low-token (recomendado):** cada `sniff_page` salva no disco e retorna
-> só o `__sniff` reference. Depois, `diff_snapshots base_path/head_path` e
-> `run_checks path` leem os arquivos — o snapshot completo **nunca** entra no
+> **Fluxo low-token (recomendado):** cada `sniffCSS_page` salva no disco e retorna
+> só o `__sniff` reference. Depois, `sniffCSS_diff base_path/head_path` e
+> `sniffCSS_check path` leem os arquivos — o snapshot completo **nunca** entra no
 > contexto do LLM (nem no retorno, nem nos argumentos).
 
-Recursos embutidos: `sniff://prompts/eval` (prompt), `sniff://schemas/eval`
-(schema) e `sniff://guides/golden` (padrão ouro de execução) — leia-os em vez
+Recursos embutidos: `sniffCSS://prompts/eval` (prompt), `sniffCSS://schemas/eval`
+(schema) e `sniffCSS://guides/golden` (padrão ouro de execução) — leia-os em vez
 de copiar arquivos.
 
 Config do Claude Desktop:
 
 ```json
-{ "mcpServers": { "sniff": { "command": "sniff-mcp" } } }
+{ "mcpServers": { "sniff": { "command": "sniffCSS-mcp" } } }
 ```
 
 ### Monitor de regressão (CI)
 
 ```bash
 # guarda o estado atual como base de comparação
-sniff-computed-style --url "$URL" --selector "$SEL" --stable-key data-testid \
+sniffCSS --url "$URL" --selector "$SEL" --stable-key data-testid \
   --compact > snapshots/base.jsonl
 
 # ... no build seguinte ...
-sniff-computed-style --url "$URL" --selector "$SEL" --stable-key data-testid \
+sniffCSS --url "$URL" --selector "$SEL" --stable-key data-testid \
   --compact > snapshots/head.jsonl
 
-sniff-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
+sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 # falha o job se changed/added/removed > limiar
 ```
 
 ### Debug de um elemento pontual
 
 ```bash
-sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
+sniffCSS -u http://localhost:3000 -s ".btn-primary" \
   --categories visual,typography --compact \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'
 ```
@@ -239,7 +239,7 @@ sniff-computed-style -u http://localhost:3000 -s ".btn-primary" \
 
 Receita completa para auditar uma página, validada contra páginas reais
 (portais .gov.br). O contraste, os grades de perceptibilidade e as regras
-`sniff-check` tornam a análise **determinística** — a IA não precisa chutar
+`sniffCSS-check` tornam a análise **determinística** — a IA não precisa chutar
 cores nem "adivinhar" se algo está invisível.
 
 ### Passo 1 — captura estruturada
@@ -251,21 +251,21 @@ precisão.
 
 ```bash
 # Visão estrutural (landmarks, headings, links, imgs) + contraste medido
-sniff-computed-style -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree \
+sniffCSS -u "$URL" -s "body" --depth 5 --compact --contrast --ax-tree \
   > body.jsonl
 
 # Regiões profundas demais para o body (menu, rodapé, formulários, carrossel)
-sniff-computed-style -u "$URL" -s "nav"      --depth 4 --compact --contrast > nav.jsonl
-sniff-computed-style -u "$URL" -s "footer"   --depth 6 --compact --contrast > footer.jsonl
-sniff-computed-style -u "$URL" -s "main"     --depth 5 --compact --contrast > main.jsonl
-sniff-computed-style -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 --compact --contrast > forms.jsonl
+sniffCSS -u "$URL" -s "nav"      --depth 4 --compact --contrast > nav.jsonl
+sniffCSS -u "$URL" -s "footer"   --depth 6 --compact --contrast > footer.jsonl
+sniffCSS -u "$URL" -s "main"     --depth 5 --compact --contrast > main.jsonl
+sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 --compact --contrast > forms.jsonl
 ```
 
 ### Passo 2 — regras determinísticas (sem IA)
 
 ```bash
-sniff-check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
-sniff-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
+sniffCSS-check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
+sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 ```
 
 O `--rules` usa o **facet `contrast` medido pela engine** (com o fundo efetivo
@@ -331,16 +331,16 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
 
 | Ação | Comando |
 |---|---|
-| Capturar | `sniff-computed-style -u URL -s SEL [flags]` |
+| Capturar | `sniffCSS -u URL -s SEL [flags]` |
 | Achatado | `--output jsonl-flat` |
 | Estabilizar animações | `--stabilize` |
 | A11y medida | `--contrast --ax` ou `--ax-tree` |
 | Auditoria a11y completa | `docs/accessibility.md` |
-| Resumo de mudanças | `sniff-diff base.jsonl head.jsonl --stats-only` |
-| Ignorar props voláteis | `sniff-diff ... --ignore-props transform,opacity` |
-| Listas de contagem variável | `sniff-diff ... --no-structural` |
-| Delta completo | `sniff-diff base.jsonl head.jsonl > delta.jsonl` |
-| Checagens determinísticas | `sniff-check --input snap.jsonl --uniform --rules` |
-| Schema da resposta IA | `docs/sniff-eval.schema.json` |
+| Resumo de mudanças | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
+| Ignorar props voláteis | `sniffCSS-diff ... --ignore-props transform,opacity` |
+| Listas de contagem variável | `sniffCSS-diff ... --no-structural` |
+| Delta completo | `sniffCSS-diff base.jsonl head.jsonl > delta.jsonl` |
+| Checagens determinísticas | `sniffCSS-check --input snap.jsonl --uniform --rules` |
+| Schema da resposta IA | `docs/sniffCSS-eval.schema.json` |
 | Prompt de avaliação | `docs/eval-prompt.md` |
 | Padrão ouro de execução | `docs/golden-run.md` |

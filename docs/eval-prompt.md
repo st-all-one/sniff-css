@@ -1,15 +1,15 @@
 # Prompt de avaliação semântica (camada IA)
 
-Use este template quando a camada determinística (`sniff-diff` + `sniff-check`)
+Use este template quando a camada determinística (`sniffCSS-diff` + `sniffCSS-check`)
 já tiver produzido o delta e as evidências. O delta contém **apenas** os nós
 que mudaram; não mande snapshots completos para o LLM.
 
 ```text
 Você é um avaliador de qualidade de UI. Avalie o delta JSONL abaixo,
 produzido entre duas execuções de sniffing de computed style, e as evidências
-de checks determinísticos (sniff-check).
+de checks determinísticos (sniffCSS-check).
 
-Retorne SOMENTE um JSON que valide contra docs/sniff-eval.schema.json.
+Retorne SOMENTE um JSON que valide contra docs/sniffCSS-eval.schema.json.
 
 Pilares de avaliação:
 A) Acessibilidade: contraste (color vs background-color, WCAG AA/AAA). Use o
@@ -22,7 +22,7 @@ B) Estabilidade de layout (CLS/UX): dimensões fixas, position/z-index,
    flip-flop ou `accessibility_grade` caindo), deltas de `rect`.
 C) Hierarquia visual / design system: alinhamento a escala (múltiplos de
    4px/8px), unificação de tipografia, fontes não mapeadas.
-D) Evidências de sniff-check: outliers de `uniformity` (instância que desvia
+D) Evidências de sniffCSS-check: outliers de `uniformity` (instância que desvia
    da norma do grupo) e `fail`/`warn` de regras (contrast, target-size,
    focus-indicator, hidden-focusable, empty-alt-image).
 
@@ -36,17 +36,17 @@ Instruções:
   ou nas evidências de checks.
 
 Delta JSONL:
-<cole o output de `sniff-diff base.jsonl head.jsonl` aqui>
+<cole o output de `sniffCSS-diff base.jsonl head.jsonl` aqui>
 
 Evidências de checks (se disponíveis):
-<cole o output de `sniff-check --input head.jsonl --uniform --rules` aqui>
+<cole o output de `sniffCSS-check --input head.jsonl --uniform --rules` aqui>
 ```
 
 ## Uso em escala
 
-1. Extração (determinística): `sniff-computed-style --stable-key data-testid --stabilize ...`
-2. Diff (determinística): `sniff-diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
-3. Descoberta (determinística): `sniff-check --input head.jsonl --uniform --rules > checks.jsonl`
+1. Extração (determinística): `sniffCSS --stable-key data-testid --stabilize ...`
+2. Diff (determinística): `sniffCSS-diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
+3. Descoberta (determinística): `sniffCSS-check --input head.jsonl --uniform --rules > checks.jsonl`
 4. Avaliação (IA): envie `delta.jsonl` + `checks.jsonl` + este prompt; valide a
    resposta com `jq -e 'has("status") and has("score_change")'`.
 

@@ -1,14 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# Instala os binários sniff-computed-style, sniff-diff, sniff-check e
-# sniff-mcp em ~/.local/bin e garante que o diretório esteja no PATH
+# Instala os binários sniffCSS, sniffCSS-diff, sniffCSS-check e
+# sniffCSS-mcp em ~/.local/bin e garante que o diretório esteja no PATH
 # (Linux/macOS).
 
-BIN_SNIFF="sniff-computed-style"
-BIN_DIFF="sniff-diff"
-BIN_CHECK="sniff-check"
-BIN_MCP="sniff-mcp"
+BIN_SNIFF="sniffCSS"
+BIN_DIFF="sniffCSS-diff"
+BIN_CHECK="sniffCSS-check"
+BIN_MCP="sniffCSS-mcp"
 INSTALL_DIR="${HOME}/.local/bin"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ err()   { printf "\e[31m  ✗\e[0m %s\n" "$*"; exit 1; }
 add_path_line() {
     local file="$1"
     local line='export PATH="${HOME}/.local/bin:${PATH}"'
-    local marker="# --- sniff-computed-style path ---"
+    local marker="# --- sniffCSS path ---"
 
     # Skip if file doesn't exist — nothing to do
     [[ -f "$file" ]] || return 0
@@ -109,9 +109,9 @@ check_chrome
 
 echo ""
 info "Pronto! Execute no terminal:"
-echo "  sniff-computed-style -u <URL> -s <selector> --stable-key data-testid --compact --stabilize"
-echo "  sniff-diff base.jsonl head.jsonl --tolerance 0.5"
-echo "  sniff-check --input snap.jsonl --uniform --rules"
-echo "  sniff-mcp   # servidor MCP (stdio) para agentes de IA"
+echo "  sniffCSS -u <URL> -s <selector> --stable-key data-testid --compact --stabilize"
+echo "  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5"
+echo "  sniffCSS-check --input snap.jsonl --uniform --rules"
+echo "  sniffCSS-mcp   # servidor MCP (stdio) para agentes de IA"
 echo ""
 info "Guia para IA: docs/ai-usage.md | Padrão ouro: docs/golden-run.md"

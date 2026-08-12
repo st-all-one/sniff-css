@@ -875,20 +875,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "sniff-check"
+name = "sniff-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "clap",
  "serde",
  "serde_json",
- "sniff-core",
- "sniff-diff",
  "thiserror",
 ]
 
 [[package]]
-name = "sniff-computed-style"
+name = "sniff-css"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -903,16 +899,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "sniff-core"
+name = "sniff-css-check"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "clap",
  "serde",
  "serde_json",
+ "sniff-core",
+ "sniff-css-diff",
  "thiserror",
 ]
 
 [[package]]
-name = "sniff-diff"
+name = "sniff-css-diff"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -920,6 +920,25 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "sniff-css-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sniff-cdp",
+ "sniff-core",
+ "sniff-css-check",
+ "sniff-css-diff",
+ "sniff-engine",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -935,25 +954,6 @@ dependencies = [
  "tokio",
  "tracing",
  "xxhash-rust",
-]
-
-[[package]]
-name = "sniff-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "sniff-cdp",
- "sniff-check",
- "sniff-core",
- "sniff-diff",
- "sniff-engine",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

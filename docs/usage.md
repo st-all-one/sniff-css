@@ -1,4 +1,4 @@
-# Uso da CLI (`sniff-computed-style`)
+# Uso da CLI (`sniffCSS`)
 
 Referência completa de captura. Para o pipeline de diff/checks e auditoria de
 acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
@@ -9,18 +9,18 @@ acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
 
 ```bash
 # Computed styles do botão (todas as categorias)
-sniff-computed-style --url http://localhost:3000 --selector ".btn-primary"
+sniffCSS --url http://localhost:3000 --selector ".btn-primary"
 
 # Apenas box-model + tipografia, com 1 nível de filhos
-sniff-computed-style --url http://localhost:3000 --selector ".card" \
+sniffCSS --url http://localhost:3000 --selector ".card" \
   --depth 1 --categories box-model,typography
 
 # Espera o app carregar (flag JS), captura pseudo-elemento e normaliza cores
-sniff-computed-style --url http://localhost:3000 --selector ".modal" \
+sniffCSS --url http://localhost:3000 --selector ".modal" \
   --wait app-flag:__APP_READY__:15000 --pseudo ::before
 
 # Conectar num browser já aberto (Chrome com --remote-debugging-port=9222)
-sniff-computed-style --url http://localhost:3000 --selector "header" \
+sniffCSS --url http://localhost:3000 --selector "header" \
   --connect ws://127.0.0.1:9222/devtools/browser/<id>
 ```
 

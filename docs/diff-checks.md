@@ -1,23 +1,23 @@
-# Diff determinístico (`sniff-diff`) e checks (`sniff-check`)
+# Diff determinístico (`sniffCSS-diff`) e checks (`sniffCSS-check`)
 
-Dois binários **sem IA**: reduzem dois snapshots ao que mudou (`sniff-diff`) e
-descobrem problemas num snapshot (`sniff-check`). O LLM só avalia o resultado.
+Dois binários **sem IA**: reduzem dois snapshots ao que mudou (`sniffCSS-diff`) e
+descobrem problemas num snapshot (`sniffCSS-check`). O LLM só avalia o resultado.
 
 ## Pipeline de diff
 
 ```bash
 # 1. Extração em dois momentos, com âncora estável
-sniff-computed-style -u URL -s ".widget" --stable-key data-testid > base.jsonl
+sniffCSS -u URL -s ".widget" --stable-key data-testid > base.jsonl
 # ... (deploy/tempo passa) ...
-sniff-computed-style -u URL -s ".widget" --stable-key data-testid > head.jsonl
+sniffCSS -u URL -s ".widget" --stable-key data-testid > head.jsonl
 
 # 2. Diff determinístico
-sniff-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
+sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 #   --ignore-props transform,opacity   # props voláteis não marcam o nó
 #   --no-structural                    # suprime ADDED/REMOVED (listas variáveis)
 
 # 3. Resumo em escala (centenas de páginas, zero tokens)
-sniff-diff base.jsonl head.jsonl --stats-only
+sniffCSS-diff base.jsonl head.jsonl --stats-only
 # nodes: 14 -> 14 | changed: 1 | added: 0 | removed: 0
 ```
 
@@ -52,11 +52,11 @@ sniff-diff base.jsonl head.jsonl --stats-only
 > ⚠️ **Determinismo**: use o **mesmo modo** nos dois lados (`--compact` + `--compact`,
 > ou full + full). O hash e o conteúdo dependem do modo.
 
-## Checks determinísticos (`sniff-check`)
+## Checks determinísticos (`sniffCSS-check`)
 
 ```bash
-sniff-check --input snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
-sniff-check --input snap.jsonl --rules                     # PASS/WARN/FAIL
+sniffCSS-check --input snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
+sniffCSS-check --input snap.jsonl --rules                     # PASS/WARN/FAIL
 ```
 
 - **`--uniform`**: entre instâncias irmãs do mesmo selector, computa a norma do
@@ -82,4 +82,4 @@ Saída JSONL com evidência + `__check_summary`:
 ```
 
 O resultado vira **evidência** para o `reason` da avaliação IA (veja
-[`eval-prompt.md`](eval-prompt.md) e [`sniff-eval.schema.json`](sniff-eval.schema.json)).
+[`eval-prompt.md`](eval-prompt.md) e [`sniffCSS-eval.schema.json`](sniffCSS-eval.schema.json)).

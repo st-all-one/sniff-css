@@ -3,7 +3,7 @@
 ## Visão geral
 
 ```
-CLI (sniff-cli) → SniffConfig → Sniffer (sniff-engine) → CdpSession (sniff-cdp) → Chrome
+CLI (sniff-css) → SniffConfig → Sniffer (sniff-engine) → CdpSession (sniff-cdp) → Chrome
                                         │
                                         └─ Runtime.evaluate (1 chamada JS) → snapshots → JSONL
 ```
@@ -121,17 +121,17 @@ Reduz tokens em ~55% em três frentes (implementadas em `output.rs`):
   (ex.: `data-testid`) como âncora ao montar `selector`/`path`, escapando aspas.
   Seletores estáveis são a chave do diffing entre deploys que regeneram `id`.
 
-## Pipeline de diff determinístico (sniff-diff)
+## Pipeline de diff determinístico (sniffCSS-diff)
 
 Separa o "o que mudou" (determinístico, sem IA) da avaliação de impacto (IA):
 
 ```
 base.jsonl ─┐
-            ├─ sniff-diff (match por selector + posição, tolerância) → delta.jsonl → IA
+            ├─ sniffCSS-diff (match por selector + posição, tolerância) → delta.jsonl → IA
 head.jsonl ─┘
 ```
 
-`crates/sniff-diff`:
+`crates/sniff-css-diff`:
 
 - **`model`** — parseia `jsonl` (árvore) e `jsonl-flat` (reconstrói floresta por
   `parent_id`); ignora linhas `__meta`. Nós com `parent_id` órfão viram raiz
@@ -146,30 +146,30 @@ head.jsonl ─┘
   páginas sem gastar tokens.
 
 A avaliação semântica (positiva/negativa) é responsabilidade do LLM: contrato em
-`docs/sniff-eval.schema.json`, template em `docs/eval-prompt.md`.
+`docs/sniffCSS-eval.schema.json`, template em `docs/eval-prompt.md`.
 
-## Servidor MCP (sniff-mcp)
+## Servidor MCP (sniffCSS-mcp)
 
-`crates/sniff-mcp` envolve engine + diff como tools MCP sobre stdio (`rmcp`):
+`crates/sniff-css-mcp` envolve engine + diff como tools MCP sobre stdio (`rmcp`):
 
-- **`sniff_page`** — um `ChromePool` (um Chrome headless + `Semaphore(3)`)
+- **`sniffCSS_page`** — um `ChromePool` (um Chrome headless + `Semaphore(3)`)
   executa o pipeline via `Sniffer::new_session` +
   `sniff_session_with_progress`; cada fase emite `notifications/progress`
   (`ProgressReporter` → `Peer::notify_progress`) e o JSONL final volta como
   resultado da tool. Sem block do pipeline: as notificações são enviadas
   assincronamente entre as fases. Por padrão o `SnapshotStore` persiste o
-  snapshot em `sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (escrita
+  snapshot em `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (escrita
   atômica, UTC por `SystemTime`, raiz via `SNIFF_SNAPSHOT_DIR`) e a tool
   retorna apenas o `__sniff` reference; `return:"jsonl"`/`persist:false`
   optam pelo comportamento inline.
-- **`diff_snapshots`** — aceita `base_path`/`head_path` (resolvidos pelo
+- **`sniffCSS_diff`** — aceita `base_path`/`head_path` (resolvidos pelo
   `SnapshotStore` com guarda anti path-traversal) ou `base_jsonl`/`head_jsonl`
   inline → `sniff_diff::load_file`/`load_str` + `diff_trees` + `write_delta`,
   com linha `__diff_summary` ao final.
-- **`run_checks`** — idem: `path` (persistido) ou `jsonl` inline.
-- **`list_snapshots`** — enumera os arquivos do `SnapshotStore`
+- **`sniffCSS_check`** — idem: `path` (persistido) ou `jsonl` inline.
+- **`sniffCSS_snapshots`** — enumera os arquivos do `SnapshotStore`
   (domain/target/path/created_at/size), para o agente escolher o par base/head.
-- **Recursos** — `sniff://prompts/eval`, `sniff://schemas/eval`
+- **Recursos** — `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`
   (`include_str!` das docs).
 - Transporte: `stdio()` (todos os clientes). Um browser morto é relançado
   transparentemente (detecção de erro de transporte no `ChromePool`).

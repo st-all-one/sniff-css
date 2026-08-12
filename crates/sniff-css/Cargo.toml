@@ -1,0 +1,22 @@
+[package]
+name = "sniff-css"
+description = "High-performance computed-style sniffer (sniffCSS) for AI-driven development"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sniffCSS"
+path = "src/main.rs"
+
+[dependencies]
+sniff-core = { path = "../sniff-core" }
+sniff-cdp = { path = "../sniff-cdp" }
+sniff-engine = { path = "../sniff-engine" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
