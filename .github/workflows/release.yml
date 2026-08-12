@@ -86,22 +86,31 @@ jobs:
           TARGET="${{ matrix.target }}"
           STAGING="staging"
           mkdir -p "$STAGING"
-          cp "target/$TARGET/release/sniffCSS"        "$STAGING/"
-          cp "target/$TARGET/release/sniffCSS-diff"   "$STAGING/"
-          cp "target/$TARGET/release/sniffCSS-check"  "$STAGING/"
-          cp "target/$TARGET/release/sniffCSS-mcp"    "$STAGING/"
+          # macOS lacks sha256sum; shasum -a 256 is the portable alternative.
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA="sha256sum"
+          else
+            SHA="shasum -a 256"
+          fi
           if [[ "$TARGET" == *-pc-windows-* ]]; then
-            mv "$STAGING/sniffCSS" "$STAGING/sniffCSS.exe"
-            mv "$STAGING/sniffCSS-diff" "$STAGING/sniffCSS-diff.exe"
-            mv "$STAGING/sniffCSS-check" "$STAGING/sniffCSS-check.exe"
-            mv "$STAGING/sniffCSS-mcp" "$STAGING/sniffCSS-mcp.exe"
+            # On Windows/MSYS, `sniffCSS` and `sniffCSS.exe` are the SAME file
+            # (MSYS appends .exe), so `mv` would be a no-op error. Copy straight
+            # to the .exe names instead.
+            cp "target/$TARGET/release/sniffCSS"        "$STAGING/sniffCSS.exe"
+            cp "target/$TARGET/release/sniffCSS-diff"   "$STAGING/sniffCSS-diff.exe"
+            cp "target/$TARGET/release/sniffCSS-check"  "$STAGING/sniffCSS-check.exe"
+            cp "target/$TARGET/release/sniffCSS-mcp"    "$STAGING/sniffCSS-mcp.exe"
             # Windows ships bsdtar; `-a` auto-detects zip by extension.
             ( cd "$STAGING" && tar -a -c -f "../sniff-css-${VERSION}-${TARGET}.zip" . )
-            ( cd "$STAGING" && sha256sum *.exe ) > "checksums-${TARGET}.sha256"
+            ( cd "$STAGING" && $SHA *.exe ) > "checksums-${TARGET}.sha256"
           else
+            cp "target/$TARGET/release/sniffCSS"        "$STAGING/sniffCSS"
+            cp "target/$TARGET/release/sniffCSS-diff"   "$STAGING/sniffCSS-diff"
+            cp "target/$TARGET/release/sniffCSS-check"  "$STAGING/sniffCSS-check"
+            cp "target/$TARGET/release/sniffCSS-mcp"    "$STAGING/sniffCSS-mcp"
             tar -czf "sniff-css-${VERSION}-${TARGET}.tar.gz" -C "$STAGING" \
               sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp
-            ( cd "$STAGING" && sha256sum sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp ) \
+            ( cd "$STAGING" && $SHA sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp ) \
               > "checksums-${TARGET}.sha256"
           fi
 
