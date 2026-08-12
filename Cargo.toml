@@ -14,7 +14,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+license = "CC0-1.0"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "net"] }

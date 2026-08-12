@@ -352,7 +352,8 @@ MCP inside the container (stdio; client launches via `docker exec -i`):
 `command: docker`, `args: [compose, -f, docker/docker-compose.yml, exec, -i, sniffcss, sniffCSS-mcp]`.
 Snapshots persist to `/config/sniffCSS` (volume `./chromium-config:/config`).
 `--connect` also accepts `http://host:port` (resolved via `/json/version`) and
-defaults to `SNIFF_CONNECT`.
+defaults to `SNIFF_CONNECT`. Full Docker docs (quickstart, compose for
+integration, MCP via Docker, env vars): `docs/docker.md`.
 
 ## Installation & releases
 

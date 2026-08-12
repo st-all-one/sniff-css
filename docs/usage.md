@@ -190,43 +190,11 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
 
 ## Docker
 
-O container **sniffCSS** (`docker/`) incorpora a toolchain completa +
-Chromium num ambiente independente do host, com foco em fidelidade:
+O container self-contained (Chromium + toolchain), quickstart, `docker-compose`
+otimizado para integração em projetos, **MCP via Docker** e variáveis de
+ambiente: veja [`docker.md`](docker.md).
 
-- Base `lscr.io/linuxserver/chromium` (pinada por digest), com **FullColor
-  4:4:4** habilitado por padrão (`SELKIES_H264_FULLCOLOR=true`) — cores reais
-  de 8 bits na GUI.
-- O Chromium da GUI (porta `3001`) é exposto via CDP em `127.0.0.1:9222`; o
-  `sniffCSS` e o `sniffCSS-mcp` **anexam ao mesmo browser** que você vê na tela
-  (máxima fidelidade: o que aparece na GUI é exatamente o que é capturado).
-- `SNIFF_CONNECT=http://127.0.0.1:9222` é o default — `sniffCSS -u URL -s SEL`
-  já conecta, sem flags extras.
-
-```bash
-docker compose -f docker/docker-compose.yml up -d
-# GUI:  http://localhost:3001   (Chromium com FullColor 4:4:4)
-
-# Captura conectando à GUI (computed styles reais do browser na tela):
-docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid
-
-# Diff / checks / MCP dentro do container:
-docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
-docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS-check --input snap.jsonl --rules
-
-# Servidor MCP (stdio) — configure no agente:
-#   command = docker
-#   args = [compose, -f, docker/docker-compose.yml, exec, -i, sniffcss, sniffCSS-mcp]
-```
-
-Os snapshots persistidos pelo MCP ficam em `/config/sniffCSS` (o volume
-`./chromium-config:/config`). Para rebuild, GPU (devices `/dev/dri` +
-`PIXELFLUX_WAYLAND=true`), ou variantes headless, veja o
-[`docker-compose.yml`](../docker/docker-compose.yml).
-
-### Distribuição e versões
+## Distribuição e versões
 
 - **Binários**: publicados no [GitHub Release](https://github.com/st-all-one/sniff-css/releases)
   vinculado à tag semver. O instalador oficial baixa o binário certo por
@@ -246,12 +214,7 @@ Os snapshots persistidos pelo MCP ficam em `/config/sniffCSS` (o volume
   x86_64.
 - **Imagem Docker**: `stallonels/sniffcss` (Docker Hub), multi-arch
   (linux/amd64 + linux/arm64), tag igual à do release (`latest` aponta para o
-  último).
-- **Como o Dockerfile obtém os binários**: por padrão **baixa os binários
-  pré-compilados do próprio Release** (`--build-arg VERSION=v0.1.0`) e verifica
-  o `sha256sums.txt` — não compila nada. Para desenvolvimento local sem Release
-  publicado, use `--build-arg BUILD_FROM_SOURCE=1` (compila do fonte):
-  `scripts/docker.sh build-source`.
+  último). Uso e integração em [`docker.md`](docker.md).
 - **Releases futuros**: `git tag vX.Y.Z && git push origin vX.Y.Z` dispara o
   workflow `.github/workflows/release.yml` (build multi-arquitetura + GitHub
   Release + push Docker Hub). Configure os secrets `DOCKERHUB_USERNAME`/
