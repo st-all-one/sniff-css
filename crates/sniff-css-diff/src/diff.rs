@@ -60,6 +60,9 @@ pub struct DiffStats {
     pub removed: usize,
     pub base_nodes: usize,
     pub head_nodes: usize,
+    /// Number of `__actions` interaction-effect entries that changed between
+    /// the two snapshots (UI-effect regression signal).
+    pub actions_changed: usize,
 }
 
 /// Diff two snapshot forests (pre-order deterministic output).
@@ -76,6 +79,145 @@ pub fn diff_trees(
     };
     diff_children(base, head, opts, &mut out, &mut stats);
     (out, stats)
+}
+
+/// Diff the `__actions` UI-effect maps of two snapshots. Reports one
+/// `ACTION_CHANGED` line per action whose effect/where data differs, so the
+/// same "what/where happened" can be regression-tested across deploys
+/// (e.g. "the modal still opened, but now 352px below the fold").
+pub fn diff_actions(
+    base: &[Value],
+    head: &[Value],
+    opts: &DiffOptions,
+    out: &mut Vec<DeltaLine>,
+    stats: &mut DiffStats,
+) {
+    let len = base.len().max(head.len());
+    for index in 0..len {
+        let b = base.get(index);
+        let h = head.get(index);
+        match (b, h) {
+            (Some(b), Some(h)) => {
+                let mut changes = Map::new();
+                compare_action_value(b, h, opts, "", &mut changes);
+                if changes.is_empty() {
+                    continue;
+                }
+                stats.actions_changed += 1;
+                out.push(DeltaLine {
+                    status: "ACTION_CHANGED",
+                    selector: format!("action[{index}]"),
+                    tag: None,
+                    path: None,
+                    depth: None,
+                    changes: Some(Value::Object(changes)),
+                    snapshot: None,
+                });
+            }
+            (Some(b), None) => {
+                stats.actions_changed += 1;
+                out.push(DeltaLine {
+                    status: "ACTION_REMOVED",
+                    selector: format!("action[{index}]"),
+                    tag: None,
+                    path: None,
+                    depth: None,
+                    changes: None,
+                    snapshot: Some(json_before_after(Some(b), None)),
+                });
+            }
+            (None, Some(h)) => {
+                stats.actions_changed += 1;
+                out.push(DeltaLine {
+                    status: "ACTION_ADDED",
+                    selector: format!("action[{index}]"),
+                    tag: None,
+                    path: None,
+                    depth: None,
+                    changes: None,
+                    snapshot: Some(json_before_after(None, Some(h))),
+                });
+            }
+            (None, None) => {}
+        }
+    }
+}
+
+/// Recursively collect leaf-level before/after diffs into `changes`, with
+/// numeric tolerance applied to coordinates (so subpixel jitter in rects/
+/// distances doesn't flag an action as changed). Key = joined path.
+fn compare_action_value(
+    base: &Value,
+    head: &Value,
+    opts: &DiffOptions,
+    prefix: &str,
+    changes: &mut Map<String, Value>,
+) {
+    match (base, head) {
+        (Value::Object(bm), Value::Object(hm)) => {
+            let mut keys: Vec<&String> = bm.keys().chain(hm.keys()).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            for k in keys {
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                match (bm.get(k), hm.get(k)) {
+                    (Some(b), Some(h)) => compare_action_value(b, h, opts, &key, changes),
+                    (Some(b), None) => {
+                        changes.insert(key.clone(), json_before_after(Some(b), None));
+                    }
+                    (None, Some(h)) => {
+                        changes.insert(key.clone(), json_before_after(None, Some(h)));
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        (Value::Array(ba), Value::Array(ha)) => {
+            let len = ba.len().max(ha.len());
+            for i in 0..len {
+                let key = format!("{prefix}[{i}]");
+                match (ba.get(i), ha.get(i)) {
+                    (Some(b), Some(h)) => compare_action_value(b, h, opts, &key, changes),
+                    (Some(b), None) => {
+                        changes.insert(key.clone(), json_before_after(Some(b), None));
+                    }
+                    (None, Some(h)) => {
+                        changes.insert(key.clone(), json_before_after(None, Some(h)));
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        (Value::Number(b), Value::Number(h)) => {
+            let bf = b.as_f64();
+            let hf = h.as_f64();
+            if b == h {
+                return;
+            }
+            let same = match (bf, hf) {
+                (Some(x), Some(y)) => opts.tolerance > 0.0 && (x - y).abs() <= opts.tolerance,
+                _ => false,
+            };
+            if !same {
+                changes.insert(
+                    prefix.to_string(),
+                    json_before_after(Some(base), Some(head)),
+                );
+            }
+        }
+        _ => {
+            if base != head {
+                changes.insert(
+                    prefix.to_string(),
+                    json_before_after(Some(base), Some(head)),
+                );
+            }
+        }
+    }
 }
 
 fn count_nodes(nodes: &[DiffNode]) -> usize {
@@ -777,5 +919,128 @@ mod tests {
         assert_eq!(stats.removed, 0);
         assert_eq!(stats.base_nodes, 1);
         assert_eq!(stats.head_nodes, 2);
+    }
+
+    fn action(index: u64, effect: &str, y: f64) -> Value {
+        serde_json::json!({
+            "index": index,
+            "action": "click",
+            "selector": "#open",
+            "effect": effect,
+            "target": {"path": "button#open", "onscreen": true},
+            "appeared": [{
+                "tag": "TABLE", "path": "body > table",
+                "rect": {"x": 0.0, "y": y, "width": 600.0, "height": 120.0},
+                "onscreen": y < 768.0,
+                "distance_from_action": 12.0,
+                "css_before": null,
+                "css_after": {"display": "table"}
+            }],
+            "removed": [],
+            "changed": []
+        })
+    }
+
+    #[test]
+    fn identical_actions_produce_no_delta() {
+        let base = vec![action(0, "revealed", 8.0)];
+        let head = vec![action(0, "revealed", 8.0)];
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &base,
+            &head,
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert!(
+            deltas.is_empty(),
+            "identical actions must not diff: {deltas:?}"
+        );
+        assert_eq!(stats.actions_changed, 0);
+    }
+
+    #[test]
+    fn moved_appeared_rect_is_an_action_regression() {
+        let base = vec![action(0, "revealed", 8.0)];
+        // The modal now opens 900px down — below the 768px viewport.
+        let head = vec![action(0, "revealed", 900.0)];
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &base,
+            &head,
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, "ACTION_CHANGED");
+        assert_eq!(deltas[0].selector, "action[0]");
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert!(
+            changes.get("appeared[0].rect.y").is_some(),
+            "rect.y must be reported: {changes}"
+        );
+        assert!(
+            changes.get("appeared[0].onscreen").is_some(),
+            "onscreen flip must be reported: {changes}"
+        );
+        assert_eq!(stats.actions_changed, 1);
+    }
+
+    #[test]
+    fn subpixel_action_movement_within_tolerance_is_ignored() {
+        let base = vec![action(0, "revealed", 8.0)];
+        let head = vec![action(0, "revealed", 8.3)];
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        let opts = DiffOptions {
+            tolerance: 0.5,
+            ..DiffOptions::default()
+        };
+        diff_actions(&base, &head, &opts, &mut deltas, &mut stats);
+        assert!(
+            deltas.is_empty(),
+            "subpixel movement must be ignored: {deltas:?}"
+        );
+    }
+
+    #[test]
+    fn effect_change_is_reported() {
+        let base = vec![action(0, "revealed", 8.0)];
+        let mut head = action(0, "no_effect", 8.0);
+        head["appeared"] = serde_json::json!([]);
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &base,
+            &[head],
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert_eq!(deltas.len(), 1);
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert_eq!(changes["effect"]["before"], "revealed");
+        assert_eq!(changes["effect"]["after"], "no_effect");
+        assert_eq!(stats.actions_changed, 1);
+    }
+
+    #[test]
+    fn missing_action_step_is_reported_as_added_removed() {
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &[],
+            &[action(0, "revealed", 8.0)],
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, "ACTION_ADDED");
+        assert_eq!(stats.actions_changed, 1);
     }
 }

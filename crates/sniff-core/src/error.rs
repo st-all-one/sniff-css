@@ -14,6 +14,9 @@ pub enum SniffError {
     #[error("invalid ready condition: {0}")]
     InvalidReadyCondition(String),
 
+    #[error("invalid action: {0}")]
+    InvalidAction(String),
+
     #[error("invalid output format: {0}")]
     InvalidOutputFormat(String),
 

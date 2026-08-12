@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Interaction + effects reveal test</title>
+<style>
+  #modal { display: none; background: #ffffff; border: 1px solid #d1d5db; padding: 16px; font-size: 14px; width: 320px; }
+  #open { background: #2563eb; color: #ffffff; border: 0; padding: 8px 16px; font-size: 16px; cursor: pointer; }
+  #mini-modal { display: none; background: #f3f4f6; border: 1px solid #9ca3af; padding: 8px; margin-top: 8px; }
+  #open-mini { background: #6b7280; color: #fff; border: 0; padding: 4px 8px; cursor: pointer; }
+  #mini-input { width: 200px; }
+  #suggestions { display: none; background: #eef2ff; border: 1px solid #c7d2fe; padding: 8px; width: 200px; }
+
+  .wrap { display: inline-block; margin-top: 8px; }
+  .wrap:hover #menu { display: block; }
+  #menu { display: none; background: #f9fafb; border: 1px solid #d1d5db; padding: 8px; width: 220px; }
+  #q { width: 220px; }
+  #results { display: none; background: #eef2ff; border: 1px solid #c7d2fe; padding: 8px; width: 220px; }
+
+  #open-table { background: #059669; color: #fff; border: 0; padding: 8px 16px; cursor: pointer; }
+  #open-calendar { background: #7c3aed; color: #fff; border: 0; padding: 8px 16px; cursor: pointer; }
+  #noop { background: #dc2626; color: #fff; border: 0; padding: 8px 16px; cursor: pointer; }
+  #table-anchor { margin-top: 2100px; }
+  #table { border-collapse: collapse; }
+  #table th, #table td { border: 1px solid #d1d5db; padding: 4px 8px; }
+  #calendar { position: absolute; top: 2400px; left: 8px; background: #fff; border: 1px solid #d1d5db; padding: 8px; }
+</style>
+<script>
+  function openTable() {
+    document.getElementById('table-wrap').innerHTML =
+      '<table id="table"><tr><th>Nome</th><th>Valor</th></tr><tr><td>A</td><td>1</td></tr></table>';
+  }
+  function openCalendar() {
+    var d = document.createElement('div');
+    d.id = 'calendar';
+    d.style.cssText = 'position:absolute;top:2400px;left:8px;background:#fff;border:1px solid #d1d5db;padding:8px';
+    d.textContent = 'Calendario distante do botao';
+    document.body.appendChild(d);
+  }
+</script>
+</head>
+<body>
+  <button id="open" onclick="document.getElementById('modal').style.display='block'">Abrir modal</button>
+  <div id="modal"><h2>Modal</h2>
+    <button id="open-mini" onclick="document.getElementById('mini-modal').style.display='block'">Abrir mini</button>
+    <div id="mini-modal">
+      <input id="mini-input" oninput="document.getElementById('suggestions').style.display='block'">
+      <div id="suggestions">Sugestoes de busca</div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <button id="user">Usuario</button>
+    <div id="menu">Menu revelado por hover</div>
+  </div>
+
+  <input id="q" oninput="document.getElementById('results').style.display='block'">
+  <div id="results">Sugestoes de busca</div>
+
+  <button id="open-table" onclick="openTable()">Abrir tabela</button>
+  <button id="open-calendar" onclick="openCalendar()">Abrir calendario</button>
+  <button id="noop">Nada acontece</button>
+
+  <div id="table-anchor"></div>
+  <div id="table-wrap"></div>
+</body>
+</html>

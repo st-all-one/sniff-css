@@ -6,7 +6,7 @@
 #
 # Uso:
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.1.0 sh
+#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.2.0 sh
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #
 # Variáveis de ambiente:
@@ -80,6 +80,46 @@ resolve_version() {
     echo "$effective"
 }
 
+# ── versão instalada / upgrade ───────────────────────────────────────────────
+
+# Versão atualmente instalada (saída `sniffCSS --version`, último campo), ou
+# string vazia quando ainda não há binário. O upgrade é feito por overwrite
+# (`install` substitui o binário antigo), então basta re-rodar o instalador.
+current_version() {
+    local bin="$INSTALL_DIR/sniffCSS"
+    [[ -x "$bin" ]] || return 0
+    "$bin" --version 2>/dev/null | awk '{print $NF}'
+}
+
+# Comparação semver simples (X.Y.Z); retorna 0 quando $1 > $2.
+version_gt() {
+    [[ "$1" == "$2" ]] && return 1
+    local IFS=. i
+    local a=($1) b=($2)
+    for i in 0 1 2; do
+        [[ "${a[$i]:-0}" -gt "${b[$i]:-0}" ]] && return 0
+        [[ "${a[$i]:-0}" -lt "${b[$i]:-0}" ]] && return 1
+    done
+    return 1
+}
+
+# Reporta upgrade / downgrade / já-atualizado antes de baixar nada.
+check_upgrade() {
+    local installed
+    installed="$(current_version)"
+    [[ -n "$installed" ]] || return 0
+
+    if [[ "$installed" == "${VERSION#v}" ]]; then
+        ok "sniffCSS ${VERSION} já instalado em ${INSTALL_DIR} — nada a fazer."
+        exit 0
+    fi
+    if version_gt "${VERSION#v}" "$installed"; then
+        info "Atualizando sniffCSS v${installed} → v${VERSION#v}"
+    else
+        warn "Versão mais nova instalada (v${installed}); instalando v${VERSION#v} (downgrade)."
+    fi
+}
+
 # ── PATH ─────────────────────────────────────────────────────────────────────
 
 add_path_line() {
@@ -127,6 +167,8 @@ info "Detectado: ${TARGET}"
 VERSION="$(resolve_version)"
 VERSION_NO_V="${VERSION#v}"
 info "Instalando sniffCSS ${VERSION} (${TARGET}) em ${INSTALL_DIR}/..."
+
+check_upgrade
 
 EXT="tar.gz"
 if [[ "$TARGET" == *-pc-windows-* ]]; then

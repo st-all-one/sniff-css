@@ -454,6 +454,7 @@ pub fn write_output<W: Write>(
                 emit_meta_line(writer, &global)?;
             }
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
+            emit_actions_line(writer, outcome.actions.as_ref())?;
             for snap in &outcome.snapshots {
                 let json = snapshot_to_json(snap, config, global.as_ref());
                 writeln!(
@@ -469,6 +470,7 @@ pub fn write_output<W: Write>(
                 emit_meta_line(writer, &global)?;
             }
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
+            emit_actions_line(writer, outcome.actions.as_ref())?;
             let mut nodes = Vec::new();
             for snap in &outcome.snapshots {
                 flatten(snap, &mut nodes);
@@ -490,7 +492,8 @@ pub fn write_output<W: Write>(
                 .iter()
                 .map(|s| snapshot_to_json(s, config, global.as_ref()))
                 .collect();
-            let document = if compact_meta || outcome.ax_tree.is_some() {
+            let document = if compact_meta || outcome.ax_tree.is_some() || outcome.actions.is_some()
+            {
                 let mut root = Map::new();
                 let mut meta = Map::new();
                 if let Some(vars) = global.as_ref()
@@ -503,6 +506,9 @@ pub fn write_output<W: Write>(
                 }
                 if let Some(ax_tree) = &outcome.ax_tree {
                     root.insert("__ax_tree".into(), ax_tree.clone());
+                }
+                if let Some(actions) = &outcome.actions {
+                    root.insert("__actions".into(), actions.clone());
                 }
                 root.insert("elements".into(), Value::Array(array));
                 Value::Object(root)
@@ -562,6 +568,21 @@ fn emit_ax_tree_line<W: Write>(writer: &mut W, ax_tree: Option<&Value>) -> Sniff
         let line = serde_json::to_string(&Value::Object({
             let mut m = Map::new();
             m.insert("__ax_tree".into(), tree.clone());
+            m
+        }))
+        .map_err(SniffError::from)?;
+        writeln!(writer, "{line}").map_err(io_err)?;
+    }
+    Ok(())
+}
+
+/// Emit the interaction UI-effect map as a single `__actions` line (only
+/// when actions were configured and `effects` was enabled).
+fn emit_actions_line<W: Write>(writer: &mut W, actions: Option<&Value>) -> SniffResult<()> {
+    if let Some(actions) = actions {
+        let line = serde_json::to_string(&Value::Object({
+            let mut m = Map::new();
+            m.insert("__actions".into(), actions.clone());
             m
         }))
         .map_err(SniffError::from)?;
@@ -708,6 +729,7 @@ mod tests {
             snapshots: snaps,
             global_css_variables: global,
             ax_tree: None,
+            actions: None,
         };
 
         let cfg = OutputConfig {
@@ -741,6 +763,7 @@ mod tests {
             snapshots: vec![sample_snapshot()],
             global_css_variables: global,
             ax_tree: None,
+            actions: None,
         };
         let cfg = OutputConfig {
             compact: true,
@@ -789,6 +812,7 @@ mod tests {
             snapshots: vec![snap],
             global_css_variables: None,
             ax_tree: None,
+            actions: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::JsonLinesFlat,
@@ -813,6 +837,7 @@ mod tests {
             snapshots: vec![sample_snapshot()],
             global_css_variables: Some(vec![("--x".to_string(), "1".to_string())]),
             ax_tree: None,
+            actions: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -957,6 +982,7 @@ mod tests {
             ax_tree: Some(serde_json::json!([
                 {"role": "group", "children": [{"role": "button"}]}
             ])),
+            actions: None,
         };
         let cfg = OutputConfig::default();
         let mut buf = Vec::new();
@@ -973,6 +999,7 @@ mod tests {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: Some(serde_json::json!([{"role": "main"}])),
+            actions: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -983,5 +1010,58 @@ mod tests {
         let v: Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(v["__ax_tree"][0]["role"], "main");
         assert_eq!(v["elements"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn actions_emitted_as_dedicated_line_in_jsonl() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: Some(serde_json::json!([
+                {
+                    "index": 0,
+                    "action": "click",
+                    "selector": "#open",
+                    "effect": "no_effect",
+                    "summary": "no DOM change within the settle window",
+                    "appeared": [],
+                    "removed": [],
+                    "changed": []
+                }
+            ])),
+        };
+        let cfg = OutputConfig::default();
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let actions_line = lines
+            .iter()
+            .find(|v| v.get("__actions").is_some())
+            .expect("__actions line present");
+        assert_eq!(actions_line["__actions"][0]["effect"], "no_effect");
+        assert_eq!(actions_line["__actions"][0]["index"], 0);
+    }
+
+    #[test]
+    fn json_mode_embeds_actions_document() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: Some(serde_json::json!([{"index": 0, "effect": "revealed"}])),
+        };
+        let cfg = OutputConfig {
+            format: OutputFormat::Json,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["__actions"][0]["effect"], "revealed");
     }
 }

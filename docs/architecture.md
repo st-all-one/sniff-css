@@ -76,6 +76,46 @@ configuração (`sniff-core::WaitStrategy`) executado pelo `waiter`:
 
 Isso mantém o motor simples, testável e 100% estático.
 
+### 3b. Ações de interação como dados
+
+Da mesma forma, as interações de usuário são um enum de configuração
+(`sniff-core::Action`: `Click`/`Hover`/`Type`) executado por
+`sniff_engine::action` via o domínio `Input` do CDP (`Input.dispatchMouseEvent`
+para click/hover, `Input.insertText` para type). Cada ação espera o próprio
+seletor aparecer (polling), rola até o centro (`scrollIntoView` + leitura do
+rect) e dispara um **evento confiável** — não um `el.click()` sintético, então
+`:hover`/`:active`/`pointer`/`mouse`/`click` disparam de verdade.
+
+Quando `config.actions` não está vazio, o `sniffer` pula o wait inicial e roda
+as ações em ordem após `navigate`/`stabilize`; o pipeline de waits (`waiter`)
+roda **depois**, contra o DOM pós-interação (ex.: o `.modal` que o clique abriu),
+e o `STABILIZE_JS` é reaplicado para congelar animações iniciadas pela
+interação (determinismo). O novo `Phase::Interacting` (progresso 0.35) alimenta
+os `notifications/progress` do MCP. Em passo quebrado, o erro ganha contexto da
+cadeia (`action #N ... failed` + passos anteriores).
+
+### 3c. Mapa de efeito de UI (`effects` / `__actions`)
+
+Para responder "o que houve a nível UI e onde", cada ação é dividida em
+`prepare` (espera alvo visível+tamanho, `scrollIntoView`, resolve path/rect/
+centro) e `perform` (dispatch + settle) — o `sniffer` captura um snapshot leve
+de página inteira entre as duas (`sniff_engine::effects::capture`, um único
+`Runtime.evaluate` sobre `querySelectorAll('*')` com uma assinatura de ~38 props
+visuais/layout) e difa em Rust (`effects::diff`). O report (`what` + `where`) é
+emitido na linha reservada `__actions`:
+
+- O que: `appeared`/`removed`/`changed`, classificação `effect` (`revealed`/
+  `hidden`/`changed`/`moved`/`no_effect`) e `summary` determinística.
+- Onde: `rect`, `onscreen`, `out_of_view.{above,below,left,right}`,
+  `distance_from_action` (px do ponto clicado) e `direction` (bússola).
+- `css_before`/`css_after`: assinatura curada dos elementos afetados.
+
+O `sniffCSS-diff`/`sniffCSS_diff` comparam os blocos `__actions` quando presentes
+(`diff_actions` em `sniff-css-diff`) com tolerância numérica nos rects →
+`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed` no resumo —
+vira teste de regressão de UI ("o modal continuou abrindo na tela, no mesmo
+lugar?").
+
 ### 4. Catálogo de propriedades
 
 `sniff-core::properties` define 8 categorias com ~250 propriedades padrão da

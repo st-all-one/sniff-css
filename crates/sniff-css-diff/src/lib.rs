@@ -12,7 +12,7 @@ pub mod error;
 pub mod model;
 pub mod output;
 
-pub use diff::{DeltaLine, DiffOptions, DiffStats, diff_trees};
+pub use diff::{DeltaLine, DiffOptions, DiffStats, diff_actions, diff_trees};
 pub use error::{DiffError, DiffResult};
-pub use model::{DiffNode, load_file, load_str};
+pub use model::{DiffDocument, DiffNode, load_file, load_file_doc, load_str, load_str_doc};
 pub use output::write_delta;

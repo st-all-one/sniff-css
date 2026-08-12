@@ -4,7 +4,7 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use clap::Parser;
-use sniff_css_diff::{DiffOptions, diff_trees, load_file, write_delta};
+use sniff_css_diff::{DiffOptions, diff_actions, diff_trees, load_file_doc, write_delta};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,19 +33,32 @@ struct Cli {
     /// Only print summary statistics, not the delta lines.
     #[arg(long, default_value_t = false)]
     stats_only: bool,
+
+    /// Also compare the `__actions` UI-effect maps (what/where each
+    /// interaction revealed) when both snapshots carry them. ON by default;
+    /// use --no-actions to diff only the node tree.
+    #[arg(long, default_value_t = true)]
+    actions: bool,
+
+    /// Disable `__actions` UI-effect comparison.
+    #[arg(long = "no-actions", default_value_t = false)]
+    no_actions: bool,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let base = load_file(&cli.base)?;
-    let head = load_file(&cli.head)?;
+    let base = load_file_doc(&cli.base)?;
+    let head = load_file_doc(&cli.head)?;
 
     let opts = DiffOptions {
         tolerance: cli.tolerance,
         ignore_props: cli.ignore_props,
         ignore_structural: cli.no_structural,
     };
-    let (deltas, stats) = diff_trees(&base, &head, &opts);
+    let (mut deltas, mut stats) = diff_trees(&base.nodes, &head.nodes, &opts);
+    if cli.actions && !cli.no_actions {
+        diff_actions(&base.actions, &head.actions, &opts, &mut deltas, &mut stats);
+    }
 
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -53,8 +66,13 @@ fn main() -> anyhow::Result<()> {
         write_delta(&mut out, &deltas)?;
     }
     eprintln!(
-        "nodes: {} -> {} | changed: {} | added: {} | removed: {}",
-        stats.base_nodes, stats.head_nodes, stats.changed, stats.added, stats.removed
+        "nodes: {} -> {} | changed: {} | added: {} | removed: {} | actions_changed: {}",
+        stats.base_nodes,
+        stats.head_nodes,
+        stats.changed,
+        stats.added,
+        stats.removed,
+        stats.actions_changed
     );
     Ok(())
 }

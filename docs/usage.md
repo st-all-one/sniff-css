@@ -33,6 +33,13 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 # A mesma coisa usando a variável de ambiente (padrão do container Docker).
 SNIFF_CONNECT=http://127.0.0.1:9222 sniffCSS --url http://localhost:3000 \
   --selector "header"
+
+# Revelar elementos que só existem após uma interação (modal, dropdown, menu):
+# a ação roda antes da captura; o pipeline de waits roda depois do clique.
+sniffCSS --url http://localhost:3000 --selector ".modal" \
+  --click "#open-modal"
+sniffCSS --url http://localhost:3000 --selector ".search-results" \
+  --type "#q:shoes" --wait "network-idle:800:30000"
 ```
 
 ## Opções principais
@@ -52,6 +59,12 @@ SNIFF_CONNECT=http://127.0.0.1:9222 sniffCSS --url http://localhost:3000 \
 | `--props a,b` | Propriedades custom adicionais | — |
 | `--pseudo ::before,::after` | Pseudo-elementos | — |
 | `--wait spec` | Estratégias de espera (repetível) | pipeline padrão |
+| `--click sel[:t[:settle]]` | Clique real no centro de `sel` antes de capturar (repetível) — revela modais/dropdowns | — |
+| `--hover sel[:t[:settle]]` | `mouseMoved` para `sel` antes de capturar (repetível) — revela menus de `:hover` | — |
+| `--type sel:text` | Foca `sel` e digita `text` antes de capturar (repetível) — revela type-ahead | — |
+| `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` (repetível) | — |
+| `--effects` | Emitir a linha `__actions` com o mapa de efeito de UI por interação (o que apareceu/sumiu/mudou e onde) | **`on` com ações** (use `--no-effects`) |
+| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (maiores áreas primeiro) | `10` |
 | `--no-visible` | Incluir elementos invisíveis | — |
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
@@ -92,6 +105,57 @@ Formato: `nome:arg1:arg2[:timeout_ms]`
 | `app-flag` | `app-flag:__APP_READY__:15000` |
 | `delay` | `delay:2000` |
 
+### Ações de interação
+
+Cada ação espera o próprio alvo aparecer, rola até o centro e dispara um
+**evento confiável** (`Input.dispatchMouseEvent` para click/hover,
+`Input.insertText` para type) — não um `el.click()` sintético, então
+`:hover`/`:active`/`pointer`/`mouse`/`click` disparam de verdade. Com ações, o
+pipeline de waits roda **depois** delas, contra o DOM pós-interação (ex.: o
+`.modal` que o clique abriu), e o `--stabilize` é reaplicado para snapshots
+determinísticos.
+
+| Ação | Exemplo | Observação |
+|---|---|---|
+| `click` | `click:#open-modal:5000:200` | espera `#open-modal` (5s), clica, espera 200ms |
+| `hover` | `hover:#user-menu` | move o ponteiro para o centro de `#user-menu` |
+| `type` | `type:#q:shoes` | foca `#q` e insere `shoes` (anexa; não limpa o campo) |
+
+> Os atalhos `--click`/`--hover`/`--type` aplicam nessa ordem de grupo
+> (clicks → hovers → types). Para fluxos mistos **intercalados** (ex.: clicar,
+> digitar, clicar num resultado), use `--action` que preserva a ordem exata.
+
+### Mapa de efeito de UI (`__actions`)
+
+Com ações configuradas, cada interação gera uma entrada na linha reservada
+`__actions` do JSONL (default ON; `--no-effects` omite). A entrada compara um
+snapshot de página inteira antes/depois da ação e responde **o que** mudou e
+**onde**:
+
+- `effect`: `revealed` / `hidden` / `changed` / `moved` / `no_effect` — o
+  `no_effect` marca interação que não mudou nada (provável falha de lógica;
+  suba `settle_ms`/`--wait` se o efeito for assíncrono).
+- `appeared` / `removed` / `changed`: elementos com `tag`, `path`, `rect`,
+  `onscreen`, `out_of_view.{above,below,left,right}` (px além de cada borda da
+  viewport), `distance_from_action` e `direction` (posição relativa ao ponto da
+  ação), `css_before`/`css_after` (assinatura curada de ~38 props visuais) e
+  `css_changed`.
+- `summary`: resumo determinístico (ex.: `"1 element(s) appeared · biggest:
+  TABLE 1430px below — 2146px from click"`).
+
+Exemplo:
+
+```bash
+sniffCSS --url "$URL" --selector ".modal" --click "#open" \
+  | jq 'select(has("__actions")) | .__actions[0] | {effect, summary}'
+```
+
+O `sniffCSS-diff` compara os blocos `__actions` entre base/head quando ambos
+existem, emitindo `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` (regressão
+de UI) e somando em `actions_changed`.
+
+### Solução de problemas
+
 Pipeline padrão: `selector` (10s) → `network-idle` (30s) → `element-ready` (10s,
 visible + has-size). Erros são claros:
 
@@ -99,6 +163,9 @@ visible + has-size). Erros são claros:
 - Elemento presente mas sem satisfazer as condições (ex.: primeiro slide de um
   carrossel oculto) → timeout com dica (`try a delay:N wait or a longer
   element-ready timeout`).
+- Elemento com `display:none` que só aparece após um clique → use `--click`/
+  `--hover`/`--type` (ou `--action`); sem a ação, o `element-ready` falha com
+  timeout porque o alvo existe mas nunca fica visível.
 - Spec de wait malformado → mensagem com o formato esperado
   (`element-ready:<selector>:<cond1,cond2>[:<timeout_ms>]`).
 

@@ -16,6 +16,8 @@ Things to remember when using sniffCSS:
 - `--stabilize` freezes animations/transitions (emulates prefers-reduced-motion + cancels running animations) for deterministic snapshots of dynamic pages. Default ON; disable with `--no-stabilize`.
 - `--stable-key data-testid` makes selectors stable across deploys that regenerate ids (e.g. `button[data-testid="submit"]` instead of `button#react-aria-123`).
 - Wait strategies are composable: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default pipeline: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
+- **Interactions reveal action-only elements**: `--click sel[:timeout[:settle]]`, `--hover sel[:timeout[:settle]]`, `--type sel:text` (repeatable) and `--action <spec>` (ordered, for mixed click/hover/type flows) perform real trusted input events (`Input.dispatchMouseEvent` / `Input.insertText`) before capture. Each action waits for its own target and scrolls it into view; the wait pipeline then runs against the post-interaction DOM (e.g. a `.modal` opened by the click), and `--stabilize` is re-applied for deterministic snapshots. Without the action, a `display:none` target fails with an `element-ready` timeout. Ordered chains (modal → mini-modal → input) list each step's selector; a broken step errors with its index, selector and prior steps.
+- **UI-effect map (`__actions`)**: with actions set (default ON; `--no-effects`/`effects:false` to omit, `--effects-limit N` to cap), each action emits an entry in a reserved `__actions` line mapping what/where it changed: `effect` (`revealed`/`hidden`/`changed`/`moved`/`no_effect`), `appeared`/`removed`/`changed` with `rect`, `onscreen`, `out_of_view.{above,below,left,right}`, `distance_from_action`, `direction`, `css_before`/`css_after` (curated ~38-property visual signature) and a deterministic `summary`. `no_effect` flags an interaction that changed nothing. `sniffCSS-diff`/`sniffCSS_diff` compare the `__actions` blocks when both sides have them → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed` (UI regression: "did the modal still open on-screen at the same spot?").
 
 ## Docs
 
@@ -29,6 +31,7 @@ Core flags:
 - `--props a,b`: extra CSS properties beyond the catalog.
 - `--pseudo ::before,::after`: capture pseudo-element styles.
 - `--wait <spec>`: repeatable wait strategy (`delay:ms`, `network-idle:idle[:timeout]`, `fonts-loaded[:timeout]`, `selector:sel[:timeout]`, `element-ready:sel:cond1,cond2[:timeout]`, `app-flag:flag[:timeout]`).
+- Interactions (repeatable): `--click sel[:timeout[:settle]]` (real click at center), `--hover sel[:timeout[:settle]]` (mouseMoved), `--type sel:text` (focus + insertText). Ordered mixed flows: `--action click:sel[:timeout[:settle]]` · `--action hover:sel[:timeout[:settle]]` · `--action type:sel:text`.
 - Element filters: `--no-visible` (include invisible), `--min-width`, `--min-height`, `--exclude sel`.
 - Output: `--output jsonl|jsonl-flat|json`, `--pretty`, `--no-rect/--no-path/--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`.
 - Browser: `--chrome PATH`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport WxH` (default `1366x768`).
@@ -113,6 +116,8 @@ Full list with defaults:
 - `--url` (required), `--selector` (required)
 - `--depth` (default 0), `--categories` (default `all`), `--props`, `--pseudo`
 - `--wait` (repeatable), `--min-width`, `--min-height`, `--exclude`, `--no-visible`
+- `--action` (repeatable, ordered: `click:sel[:t[:s]]`, `hover:sel[:t[:s]]`, `type:sel:text`), `--click`, `--hover`, `--type` (repeatable convenience shorthands)
+- `--effects` (default ON with actions; `--no-effects` to omit the `__actions` map), `--effects-limit N` (default 10)
 - `--output` (default `jsonl`), `--pretty`, `--compact` (default ON), `--no-compact`
 - `--no-rect`, `--no-path`, `--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`
 - `--chrome`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport` (default `1366x768`)
@@ -130,9 +135,9 @@ Full list with defaults:
 
 Five tools over stdio:
 
-- `sniffCSS_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, full, persist, return). Defaults are the AI-optimized set: compact, custom_props, stabilize, contrast and include_ax all ON; pass `full:true` for full-fidelity or set any flag `false` to opt out. By default persists the snapshot to `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (root via `SNIFF_SNAPSHOT_DIR`) and returns only a tiny `__sniff` reference (path, url, selector, nodes); `return:"jsonl"` returns the full JSONL inline. Emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
+- `sniffCSS_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, actions, viewport, format, stabilize, contrast, include_ax, ax_tree, effects, effects_limit, full, persist, return). Defaults are the AI-optimized set: compact, custom_props, stabilize, contrast and include_ax all ON; pass `full:true` for full-fidelity or set any flag `false` to opt out. `actions` (default `[]`) takes an ordered array of `{type: "click"|"hover"|"type", selector, text?, timeout_ms?, settle_ms?}` to reveal action-only elements (e.g. `[{"type":"click","selector":"#open-modal"}]` before capturing the `.modal`); chained flows just list each step. With actions set, the snapshot carries a `__actions` UI-effect map (default ON via `effects`, capped by `effects_limit`). By default persists the snapshot to `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (root via `SNIFF_SNAPSHOT_DIR`) and returns only a tiny `__sniff` reference (path, url, selector, nodes, actions); `return:"jsonl"` returns the full JSONL inline. Emits `notifications/progress` per phase (acquiring browser slot → navigating → performing interactions (click/hover/type) when actions → waiting → extracting → capturing accessibility tree → formatting N nodes).
 - `sniffCSS_snapshots` — list persisted snapshots (domain/target/path/created_at/size), newest first; filters domain/target/limit.
-- `sniffCSS_diff` — deterministic diff via persisted `base_path`/`head_path` (preferred, keeps JSONL out of the LLM context) or inline `base_jsonl`/`head_jsonl` (+ tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
+- `sniffCSS_diff` — deterministic diff via persisted `base_path`/`head_path` (preferred, keeps JSONL out of the LLM context) or inline `base_jsonl`/`head_jsonl` (+ tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`. When both sides carry `__actions`, those blocks are compared too → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`.
 - `sniffCSS_check` — deterministic checks over a persisted `path` or inline `jsonl` (uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
 - `sniffCSS_categories` — accepted categories.
 
@@ -142,7 +147,7 @@ Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniff
 
 `docker/` ships the whole toolchain + Chromium in a container independent of the host (fidelity-first: `docker compose -f docker/docker-compose.yml up -d`). The GUI Chromium runs on `http://localhost:3001` with FullColor 4:4:4 (true 8-bit color) and a CDP port on loopback; `SNIFF_CONNECT=http://127.0.0.1:9222` is the default, so `sniffCSS`/`sniffCSS-mcp` attach to the same browser that is displayed. Run tools with `docker compose -f docker/docker-compose.yml exec sniffcss sniffCSS ...`; run the MCP server with `docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp` (stdio; `SNIFF_SNAPSHOT_DIR=/config/sniffCSS` persists captures on the `./chromium-config:/config` volume). Full Docker docs (quickstart, compose for integration, MCP via Docker, env vars): `docs/docker.md`.
 
-The Docker Hub image is `stallonels/sniffcss` (multi-arch linux/amd64 + linux/arm64), tagged like the GitHub Release (`latest` points at the last one). The `docker/Dockerfile` **downloads the prebuilt binaries from the matching GitHub Release** (`--build-arg VERSION=v0.1.0`) and verifies the `sha256sums.txt` — no compilation at image build; use `--build-arg BUILD_FROM_SOURCE=1` (`scripts/docker.sh build-source`) for local dev without a published Release.
+The Docker Hub image is `stallonels/sniffcss` (multi-arch linux/amd64 + linux/arm64), tagged like the GitHub Release (`latest` points at the last one). The `docker/Dockerfile` **downloads the prebuilt binaries from the matching GitHub Release** (`--build-arg VERSION=v0.2.0`) and verifies the `sha256sums.txt` — no compilation at image build; use `--build-arg BUILD_FROM_SOURCE=1` (`scripts/docker.sh build-source`) for local dev without a published Release.
 
 ### Installation & releases
 
@@ -150,7 +155,7 @@ Prebuilt binaries for **Linux (glibc + musl static), macOS and Windows** are pub
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.1.0 sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.2.0 sh
 ```
 
 Overridables: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`. New releases: `git tag vX.Y.Z && git push origin vX.Y.Z` runs `.github/workflows/release.yml` (build matrix → GitHub Release + sha256sums → Docker Hub push). Requires `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets (`scripts/set-secrets.sh`). Cross-compiled musl targets use `cross` with image digests pinned in `Cross.toml`. Linux `rust-version` MSRV is 1.88.
@@ -202,6 +207,16 @@ sniffCSS -u "$URL" -s "main" --depth 2 --full > raw.jsonl
 ```bash
 sniffCSS -u "$URL" -s "body" --depth 4 --wait network-idle:800:60000 > snap.jsonl
 sniffCSS-diff base.jsonl head.jsonl --tolerance 1.0
+```
+
+- Elements that only exist after an interaction (modal/dropdown/menu):
+
+```bash
+sniffCSS -u "$URL" -s ".modal" --click "#open-modal"            # click to reveal
+sniffCSS -u "$URL" -s ".menu-panel" --hover "#user-menu"        # hover to reveal
+sniffCSS -u "$URL" -s ".search-results" --type "#q:shoes"       # type to reveal
+sniffCSS -u "$URL" -s ".result" --action "click:#open:5000" \
+  --action "type:#q:shoes" --action "click:.result-item"        # ordered mixed flow
 ```
 
 - Accessibility audit summary: contrast fails, missing names, heading structure:

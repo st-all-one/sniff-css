@@ -1,6 +1,8 @@
 //! Orchestration: browser lifecycle, page sessions and the sniffing flow.
 
+use crate::action;
 use crate::ax;
+use crate::effects;
 use crate::extractor::{self, SniffOutcome};
 use crate::waiter;
 use sniff_cdp::browser::BrowserProcess;
@@ -8,7 +10,7 @@ use sniff_cdp::client::CdpClient;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_cdp::session::CdpSession;
 use sniff_core::contrast;
-use sniff_core::{SniffConfig, SniffError, SniffResult};
+use sniff_core::{Action, SniffConfig, SniffError, SniffResult};
 use std::time::Duration;
 
 /// A coarse phase of the sniffing pipeline, used to report progress to
@@ -17,6 +19,9 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Navigating,
+    /// Performing user interactions (click/hover/type) that reveal
+    /// elements only present after an action.
+    Interacting,
     Waiting,
     Extracting,
     /// Capturing the accessibility tree (only when requested).
@@ -31,6 +36,7 @@ impl Phase {
     pub fn progress(&self) -> f64 {
         match self {
             Phase::Navigating => 0.2,
+            Phase::Interacting => 0.35,
             Phase::Waiting => 0.4,
             Phase::Extracting => 0.7,
             Phase::Accessibility => 0.8,
@@ -168,9 +174,62 @@ where
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
     on_progress(Phase::Waiting).await;
-    waiter::wait_for_page(session, config).await?;
+    let mut action_reports: Vec<serde_json::Value> = Vec::new();
+    if config.actions.is_empty() {
+        waiter::wait_for_page(session, config).await?;
+    } else {
+        // Reveal elements that only exist after an interaction: each
+        // action waits for its own target and performs the interaction;
+        // the wait pipeline then targets the post-interaction DOM (e.g. a
+        // `.modal` the click just opened).
+        on_progress(Phase::Interacting).await;
+        for (index, act) in config.actions.iter().enumerate() {
+            let target = action::prepare(session, act)
+                .await
+                .map_err(|e| chain_error(index, act, &config.actions, e))?;
+            let before = if config.effects {
+                Some(effects::capture(session, config.stable_key.as_deref()).await?)
+            } else {
+                None
+            };
+            action::perform(session, act, &target)
+                .await
+                .map_err(|e| chain_error(index, act, &config.actions, e))?;
+            let after = if config.effects {
+                Some(effects::capture(session, config.stable_key.as_deref()).await?)
+            } else {
+                None
+            };
+            if let (Some(before), Some(after)) = (before, after) {
+                action_reports.push(effects::diff(
+                    &before,
+                    &after,
+                    &target,
+                    act,
+                    index,
+                    config.effects_limit,
+                ));
+            }
+        }
+        // Freeze animations/transitions started by the interaction so the
+        // captured state stays deterministic across runs. The injected
+        // `animation/transition: none !important` style already covers
+        // elements the actions created; this also cancels running ones.
+        if config.stabilize {
+            session
+                .evaluate(STABILIZE_JS, false)
+                .await
+                .map_err(|e| SniffError::Cdp(e.to_string()))?;
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        on_progress(Phase::Waiting).await;
+        waiter::wait_for_page(session, config).await?;
+    }
     on_progress(Phase::Extracting).await;
     let mut outcome = extractor::extract(session, config).await?;
+    if !action_reports.is_empty() {
+        outcome.actions = Some(serde_json::Value::Array(action_reports));
+    }
     if outcome.snapshots.is_empty() {
         return Err(SniffError::NoMatch {
             selector: config.selector.clone(),
@@ -199,4 +258,31 @@ where
     let nodes: usize = outcome.snapshots.iter().map(|s| s.node_count()).sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)
+}
+
+/// Enrich an action failure with chain context so a broken sequence names
+/// the exact step and its predecessors (e.g. "the mini-modal trigger never
+/// appeared after the modal opened").
+fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: SniffError) -> SniffError {
+    let describe = |a: &Action| match a {
+        Action::Click { selector, .. } => format!("click:{selector}"),
+        Action::Hover { selector, .. } => format!("hover:{selector}"),
+        Action::Type { selector, text, .. } => format!("type:{selector}:{text}"),
+    };
+    let prior = chain[..index]
+        .iter()
+        .map(describe)
+        .collect::<Vec<_>>()
+        .join(" → ");
+    SniffError::Other(format!(
+        "action #{index} ({}) failed: {cause}. Prior steps: {} — if the target depends on the \
+         previous step, raise its timeout_ms (wait for target) and settle_ms (post-action render); \
+         verify the previous step actually revealed it.",
+        describe(failed),
+        if prior.is_empty() {
+            "(none, first step)".to_string()
+        } else {
+            prior
+        },
+    ))
 }

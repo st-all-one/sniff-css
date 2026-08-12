@@ -529,6 +529,11 @@ pub struct SniffOutcome {
     /// Full accessibility subtree (CDP `Accessibility` domain) for the
     /// matched elements, when `ax_tree` capture was requested.
     pub ax_tree: Option<Value>,
+    /// UI-effect map for the configured interaction actions (the reserved
+    /// `__actions` output area): per action, what appeared/disappeared/
+    /// changed and where. `None` when there were no actions or `effects`
+    /// is disabled.
+    pub actions: Option<Value>,
 }
 
 /// Run the extraction pass and convert the returned JSON to snapshots.
@@ -653,6 +658,7 @@ fn parse_results(value: &Value, _config: &SniffConfig) -> SniffResult<SniffOutco
         snapshots,
         global_css_variables,
         ax_tree: None,
+        actions: None,
     })
 }
 

@@ -15,7 +15,7 @@ curl --proto '=https' --tlsv1.2 -sSf \
 Baixa o binário certo para seu sistema (Linux glibc/musl, macOS Apple Silicon,
 Windows), verifica o checksum e instala em `~/.local/bin`.
 
-- Versão específica: `... install.sh | VERSION=v0.1.0 sh`
+- Versão específica: `... install.sh | VERSION=v0.2.0 sh`
 - Compilar do fonte: `cargo build --release` (ver `scripts/install.sh`)
 - Container self-contained (Chromium incluso): [`docs/docker.md`](docs/docker.md)
 
@@ -30,6 +30,16 @@ sniffCSS -u http://localhost:3000 -s ".btn-primary"
 # Subárvore, só box-model + tipografia
 sniffCSS -u http://localhost:3000 -s ".card" \
   --depth 1 --categories box-model,typography
+
+# Revelar elementos que só existem após uma ação (modal, dropdown, menu)
+sniffCSS -u http://localhost:3000 -s ".modal" --click "#open-modal"
+sniffCSS -u http://localhost:3000 -s ".search-results" --type "#q:shoes"
+
+# Map what happened at the UI level: what appeared, where (on/off-screen,
+# px from the action point), and whether the interaction did anything
+sniffCSS -u http://localhost:3000 -s ".modal" --click "#open-modal" \
+  | jq 'select(has("__actions")) | .__actions[0] | {effect, summary}'
+# -> {"effect":"revealed","summary":"... 1 element(s) appeared · biggest: DIV on-screen — 12px from click"}
 
 # Diff determinístico entre duas versões
 sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5

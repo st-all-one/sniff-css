@@ -45,6 +45,21 @@ pub struct SniffConfig {
     /// `Accessibility` domain) for the matched elements and emit it as
     /// the `__ax_tree` document. Implies `output.include_ax`.
     pub ax_tree: bool,
+    /// Ordered user interactions performed on the page before extraction,
+    /// to reveal elements that only exist after an action (modals,
+    /// dropdowns, hover menus, type-ahead suggestions). When non-empty,
+    /// the wait pipeline runs *after* the actions, targeting the
+    /// post-interaction DOM.
+    pub actions: Vec<Action>,
+    /// Map the UI effects of each action (before/after snapshots of the
+    /// whole page) into a reserved `__actions` output area: what appeared/
+    /// disappeared/changed and where (rect, on-screen, out-of-view offset,
+    /// distance from the action point). Default ON when `actions` is set;
+    /// disable with `--no-effects`.
+    pub effects: bool,
+    /// Cap on how many appeared/removed/changed elements each action entry
+    /// in `__actions` reports (largest areas first).
+    pub effects_limit: usize,
 }
 
 impl Default for SniffConfig {
@@ -71,6 +86,9 @@ impl Default for SniffConfig {
             // animations/transitions unless explicitly disabled.
             stabilize: true,
             ax_tree: false,
+            actions: Vec::new(),
+            effects: true,
+            effects_limit: 10,
         }
     }
 }
@@ -159,6 +177,45 @@ pub enum ReadyCondition {
     HasSize,
     /// `opacity >= threshold`.
     Opacity(f64),
+}
+
+/// A single user interaction performed on the page before extraction,
+/// used to reveal elements that only exist after an action (modals,
+/// dropdowns, hover menus, type-ahead suggestions).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Action {
+    /// Wait for `selector`, scroll it into view and click its center with
+    /// a real trusted mouse event (`Input.dispatchMouseEvent`), triggering
+    /// the full `pointer`/`mouse`/`click` chain and `:active` state.
+    Click {
+        selector: String,
+        timeout_ms: u64,
+        settle_ms: u64,
+    },
+    /// Wait for `selector`, scroll it into view and move the pointer to its
+    /// center (`Input.dispatchMouseEvent` `mouseMoved`), revealing CSS
+    /// `:hover` menus and tooltips.
+    Hover {
+        selector: String,
+        timeout_ms: u64,
+        settle_ms: u64,
+    },
+    /// Wait for `selector`, focus it and insert `text`
+    /// (`Input.insertText`), revealing search/type-ahead dropdowns.
+    Type {
+        selector: String,
+        text: String,
+        timeout_ms: u64,
+        settle_ms: u64,
+    },
+}
+
+impl Action {
+    /// Default timeout for an action target to become ready (ms).
+    pub const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+    /// Default settle time after an action (ms), letting the interaction
+    /// and any resulting layout settle before the next step.
+    pub const DEFAULT_SETTLE_MS: u64 = 150;
 }
 
 /// Element filter applied after matching the selector.
@@ -372,6 +429,84 @@ pub fn parse_wait_strategy(spec: &str) -> Result<WaitStrategy, SniffError> {
     }
 }
 
+/// Parse an `name:arg:arg` interaction action spec.
+///
+/// Formats: `click:<selector>[:<timeout_ms>[:<settle_ms>]]` |
+/// `hover:<selector>[:<timeout_ms>[:<settle_ms>]]` |
+/// `type:<selector>:<text>` (text may contain colons).
+pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
+    // splitn(3) keeps `type` text (which may itself contain `:`) intact.
+    let mut parts = spec.splitn(3, ':');
+    let name = parts.next().unwrap_or("").trim();
+    let selector = parts.next().unwrap_or("").trim().to_string();
+
+    let err = |e: String| {
+        SniffError::InvalidAction(format!(
+            "{e} — action format: click:<selector>[:<timeout_ms>[:<settle_ms>]] | \
+             hover:<selector>[:<timeout_ms>[:<settle_ms>]] | \
+             type:<selector>:<text>"
+        ))
+    };
+    let take_ms = |value: Option<&str>, what: &str| -> Result<u64, SniffError> {
+        match value {
+            Some(t) => t.parse().map_err(|_| {
+                err(format!(
+                    "invalid {what} (expected milliseconds) for `{name}` action"
+                ))
+            }),
+            None => Ok(Action::DEFAULT_TIMEOUT_MS),
+        }
+    };
+
+    match name {
+        "click" | "hover" => {
+            if selector.is_empty() {
+                return Err(err("missing selector".into()));
+            }
+            let rest = parts.next().unwrap_or("");
+            let mut toks = rest.split(':').map(str::trim).filter(|s| !s.is_empty());
+            let timeout_ms = take_ms(toks.next(), "timeout_ms")?;
+            let settle_ms = match toks.next() {
+                Some(t) => t.parse().map_err(|_| {
+                    err(format!(
+                        "invalid settle_ms (expected milliseconds) for `{name}` action"
+                    ))
+                })?,
+                None => Action::DEFAULT_SETTLE_MS,
+            };
+            Ok(if name == "click" {
+                Action::Click {
+                    selector,
+                    timeout_ms,
+                    settle_ms,
+                }
+            } else {
+                Action::Hover {
+                    selector,
+                    timeout_ms,
+                    settle_ms,
+                }
+            })
+        }
+        "type" => {
+            if selector.is_empty() {
+                return Err(err("missing selector".into()));
+            }
+            let text = parts.next().unwrap_or("").trim().to_string();
+            if text.is_empty() {
+                return Err(err("missing text for `type` action".into()));
+            }
+            Ok(Action::Type {
+                selector,
+                text,
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            })
+        }
+        other => Err(err(format!("unknown action `{other}`"))),
+    }
+}
+
 fn parse_ready_condition(input: &str) -> Result<ReadyCondition, SniffError> {
     let trimmed = input.trim();
     match trimmed {
@@ -494,6 +629,78 @@ mod tests {
         assert!(err.contains("wait format: delay:<ms>"), "got: {err}");
         let err = parse_wait_strategy("bogus:1").unwrap_err().to_string();
         assert!(err.contains("wait format:"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_action_click_with_defaults() {
+        assert_eq!(
+            parse_action("click:#open-modal").unwrap(),
+            Action::Click {
+                selector: "#open-modal".into(),
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_action_hover_with_timeout_and_settle() {
+        assert_eq!(
+            parse_action("hover:.menu:5000:300").unwrap(),
+            Action::Hover {
+                selector: ".menu".into(),
+                timeout_ms: 5000,
+                settle_ms: 300,
+            }
+        );
+        // settle optional after timeout.
+        assert_eq!(
+            parse_action("hover:.menu:5000").unwrap(),
+            Action::Hover {
+                selector: ".menu".into(),
+                timeout_ms: 5000,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_action_type_keeps_colons_in_text() {
+        assert_eq!(
+            parse_action("type:#q:filter https://x?a=b").unwrap(),
+            Action::Type {
+                selector: "#q".into(),
+                text: "filter https://x?a=b".into(),
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_action_errors_hint_format() {
+        let err = parse_action("click").unwrap_err().to_string();
+        assert!(
+            err.contains("action format: click:<selector>"),
+            "got: {err}"
+        );
+        let err = parse_action("hover::5000").unwrap_err().to_string();
+        assert!(err.contains("missing selector"), "got: {err}");
+        let err = parse_action("type:#q:").unwrap_err().to_string();
+        assert!(err.contains("missing text"), "got: {err}");
+        let err = parse_action("dblclick:#x").unwrap_err().to_string();
+        assert!(err.contains("unknown action `dblclick`"), "got: {err}");
+        let err = parse_action("click:#x:abc").unwrap_err().to_string();
+        assert!(err.contains("invalid timeout_ms"), "got: {err}");
+    }
+
+    #[test]
+    fn default_has_no_actions() {
+        let cfg = SniffConfig::default();
+        assert!(cfg.actions.is_empty());
+        // Effects are ON by default (mapped when actions are present).
+        assert!(cfg.effects);
+        assert_eq!(cfg.effects_limit, 10);
     }
 
     #[test]

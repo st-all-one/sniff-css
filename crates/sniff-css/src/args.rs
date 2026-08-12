@@ -1,7 +1,7 @@
 //! CLI argument parsing and mapping to [`SniffConfig`].
 
 use clap::Parser;
-use sniff_core::config::{OutputFormat, parse_categories, parse_wait_strategy};
+use sniff_core::config::{OutputFormat, parse_action, parse_categories, parse_wait_strategy};
 use sniff_core::{ElementFilter, OutputConfig, SniffConfig, SniffResult, Viewport, WaitStrategy};
 
 /// High-performance computed-style sniffer for AI-driven development.
@@ -46,6 +46,33 @@ pub struct Cli {
     /// Defaults to selector + network-idle + element-ready.
     #[arg(long, action = clap::ArgAction::Append)]
     pub wait: Vec<String>,
+
+    /// Interaction action, repeatable and ORDERED. Format:
+    ///   click:<selector>[:<timeout_ms>[:<settle_ms>]] |
+    ///   hover:<selector>[:<timeout_ms>[:<settle_ms>]] |
+    ///   type:<selector>:<text>
+    /// Reveals elements that only exist after an action (modals, dropdowns,
+    /// hover menus, type-ahead suggestions). Each action waits for its own
+    /// target to appear; the wait pipeline then runs after the actions,
+    /// targeting the post-interaction DOM. Prefer this over --click/--hover/
+    /// --type when mixing action kinds in a specific order.
+    #[arg(long = "action", action = clap::ArgAction::Append)]
+    pub actions: Vec<String>,
+
+    /// Click a selector before capture (repeatable). Shorthand for
+    /// `--action click:<selector>[:<timeout_ms>[:<settle_ms>]]`.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub click: Vec<String>,
+
+    /// Hover a selector before capture (repeatable). Shorthand for
+    /// `--action hover:<selector>[:<timeout_ms>[:<settle_ms>]]`.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub hover: Vec<String>,
+
+    /// Type text into a selector before capture (repeatable). Shorthand for
+    /// `--action type:<selector>:<text>`.
+    #[arg(long, action = clap::ArgAction::Append)]
+    pub r#type: Vec<String>,
 
     /// Keep only visible elements (default true; use --no-visible).
     #[arg(long = "no-visible", default_value_t = false)]
@@ -151,6 +178,23 @@ pub struct Cli {
     #[arg(long = "no-stabilize", default_value_t = false)]
     pub no_stabilize: bool,
 
+    /// Map the UI effects of each interaction into a reserved `__actions`
+    /// output area (what appeared/disappeared/changed and where: rect,
+    /// on-screen, out-of-view offset, distance from the action point).
+    /// ON by default when actions are configured; use `--no-effects` to
+    /// omit the map.
+    #[arg(long, default_value_t = true)]
+    pub effects: bool,
+
+    /// Disable the `__actions` UI-effect map.
+    #[arg(long = "no-effects", default_value_t = false)]
+    pub no_effects: bool,
+
+    /// Cap on how many appeared/removed/changed elements each `__actions`
+    /// entry reports (largest areas first).
+    #[arg(long = "effects-limit", default_value_t = 10)]
+    pub effects_limit: usize,
+
     /// Path to the Chrome/Chromium binary.
     #[arg(long)]
     pub chrome: Option<String>,
@@ -199,6 +243,28 @@ impl Cli {
                 .iter()
                 .map(|spec| parse_wait_strategy(spec))
                 .collect::<SniffResult<Vec<_>>>()?
+        };
+
+        // Ordered interactions. `--action` is the ordered, full-control form
+        // (for mixed click/hover/type flows); the convenience flags map to
+        // click -> hover -> type group order when --action is absent.
+        let actions = if !self.actions.is_empty() {
+            self.actions
+                .iter()
+                .map(|spec| parse_action(spec))
+                .collect::<SniffResult<Vec<_>>>()?
+        } else {
+            let mut out = Vec::new();
+            for spec in &self.click {
+                out.push(parse_action(&format!("click:{spec}"))?);
+            }
+            for spec in &self.hover {
+                out.push(parse_action(&format!("hover:{spec}"))?);
+            }
+            for spec in &self.r#type {
+                out.push(parse_action(&format!("type:{spec}"))?);
+            }
+            out
         };
 
         let compact = self.compact && !self.no_compact && !self.full;
@@ -253,6 +319,9 @@ impl Cli {
             stable_key: self.stable_key,
             stabilize,
             ax_tree: self.ax_tree,
+            actions,
+            effects: self.effects && !self.no_effects,
+            effects_limit: self.effects_limit,
         })
     }
 }
@@ -260,6 +329,7 @@ impl Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sniff_core::Action;
     use sniff_core::ReadyCondition;
     use sniff_core::properties::StyleCategory;
 
@@ -333,6 +403,10 @@ mod tests {
             props: vec![],
             pseudo: vec![],
             wait: vec![],
+            actions: vec![],
+            click: vec![],
+            hover: vec![],
+            r#type: vec![],
             no_visible: false,
             min_width: None,
             min_height: None,
@@ -356,6 +430,9 @@ mod tests {
             ax_tree: false,
             stabilize: true,
             no_stabilize: false,
+            effects: true,
+            no_effects: false,
+            effects_limit: 10,
             chrome: None,
             connect: None,
             viewport: None,
@@ -396,6 +473,10 @@ mod tests {
             props: vec![],
             pseudo: vec![],
             wait: vec![],
+            actions: vec![],
+            click: vec![],
+            hover: vec![],
+            r#type: vec![],
             no_visible: false,
             min_width: None,
             min_height: None,
@@ -419,6 +500,9 @@ mod tests {
             ax_tree: false,
             stabilize: true,
             no_stabilize: false,
+            effects: true,
+            no_effects: false,
+            effects_limit: 10,
             chrome: None,
             connect: None,
             viewport: None,
@@ -433,6 +517,94 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_ordered_actions() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".modal",
+            "--action",
+            "click:#open:5000",
+            "--action",
+            "type:#q:hello world",
+            "--action",
+            "hover:.submenu:2000:100",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.actions.len(), 3);
+        assert!(
+            matches!(&cfg.actions[0], Action::Click { selector, timeout_ms, .. }
+            if selector == "#open" && *timeout_ms == 5000)
+        );
+        assert!(matches!(&cfg.actions[1], Action::Type { text, .. } if text == "hello world"));
+        assert!(
+            matches!(&cfg.actions[2], Action::Hover { timeout_ms, settle_ms, .. }
+            if *timeout_ms == 2000 && *settle_ms == 100)
+        );
+    }
+
+    #[test]
+    fn cli_convenience_click_flag_maps_to_action() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".modal",
+            "--click",
+            "#open",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.actions.len(), 1);
+        assert!(matches!(&cfg.actions[0], Action::Click { selector, .. } if selector == "#open"));
+    }
+
+    #[test]
+    fn cli_actions_absent_by_default() {
+        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
+            .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.actions.is_empty());
+    }
+
+    #[test]
+    fn cli_effects_default_on_and_tunable() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".modal",
+            "--click",
+            "#open",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.effects, "effects must be ON by default");
+        assert_eq!(cfg.effects_limit, 10);
+
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".modal",
+            "--click",
+            "#open",
+            "--no-effects",
+            "--effects-limit",
+            "3",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(!cfg.effects);
+        assert_eq!(cfg.effects_limit, 3);
+    }
+
+    #[test]
     fn full_mode_disables_all_optimizations() {
         let mut cli = Cli {
             url: "http://localhost:3000".into(),
@@ -442,6 +614,10 @@ mod tests {
             props: vec![],
             pseudo: vec![],
             wait: vec![],
+            actions: vec![],
+            click: vec![],
+            hover: vec![],
+            r#type: vec![],
             no_visible: false,
             min_width: None,
             min_height: None,
@@ -465,6 +641,9 @@ mod tests {
             ax_tree: false,
             stabilize: true,
             no_stabilize: false,
+            effects: true,
+            no_effects: false,
+            effects_limit: 10,
             chrome: None,
             connect: None,
             viewport: None,
@@ -496,6 +675,10 @@ mod tests {
             props: vec![],
             pseudo: vec![],
             wait: vec![],
+            actions: vec![],
+            click: vec![],
+            hover: vec![],
+            r#type: vec![],
             no_visible: false,
             min_width: None,
             min_height: None,
@@ -519,6 +702,9 @@ mod tests {
             ax_tree: false,
             stabilize: true,
             no_stabilize: false,
+            effects: true,
+            no_effects: false,
+            effects_limit: 10,
             chrome: None,
             connect: None,
             viewport: None,
@@ -550,6 +736,10 @@ mod tests {
             props: vec![],
             pseudo: vec![],
             wait: vec![],
+            actions: vec![],
+            click: vec![],
+            hover: vec![],
+            r#type: vec![],
             no_visible: false,
             min_width: None,
             min_height: None,
@@ -573,6 +763,9 @@ mod tests {
             ax_tree: false,
             stabilize: true,
             no_stabilize: false,
+            effects: true,
+            no_effects: false,
+            effects_limit: 10,
             chrome: None,
             connect: None,
             viewport: None,

@@ -23,6 +23,11 @@ Para que duas runs sejam comparáveis, os seguintes parâmetros devem ser
 | default otimizado | `compact`+`custom-props`+`stabilize`+`contrast`+`ax` (todos já ON) | Mesmo modo = mesmo hash/conteúdo. Não misture default com `--full`. |
 | `--stable-key data-testid` | sempre que houver | Seletores estáveis entre deploys. |
 | Wait strategy | mesmo em ambas | `network-idle`/`element-ready`/`delay` devem esperar o mesmo estado. |
+| Ações (`--click`/`--hover`/`--type`/`--action`, MCP `actions`) | mesmas em ambas | A interação define o estado revelado; runs com e sem ação capturam coisas diferentes. |
+
+> `__actions` (o mapa de efeito de UI) é **aditiva**: ligada/desligada num lado
+> só não quebra o diff de nós — só deixa de comparar `__actions` se um dos
+> lados não o tiver.
 
 ## 2. Pipeline completo (CLI)
 
@@ -82,6 +87,9 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 | Feed/lista com contagem variável | `--no-structural` no diff (só CHANGED). |
 | Cards repetidos (grid) | `sniffCSS-check --uniform` acha o card estranho. |
 | Conteúdo que some após load | capture a subárvore estável: `--selector footer --depth 2` ou `--wait delay:N`. |
+| Elementos revelados por ação (modal/dropdown/menu) | `--click "#open"` (ou `--hover`/`--type`; no MCP, `actions`). O mesmo alvo `display:none` falha com timeout de `element-ready` sem a ação. |
+| Regressão de UI entre deploys | `sniffCSS-diff` compara os blocos `__actions` quando ambos os lados têm ações → deltas `ACTION_CHANGED` (o modal abriu fora da tela? `onscreen: false`?) + `actions_changed` no resumo. |
+| Interações encadeadas (modal → mini-modal → input) | `--action` ordenado, um passo por seletor; cada passo gera sua entrada em `__actions` (before = estado do passo anterior). |
 
 ## 4. Falha de job (CI)
 

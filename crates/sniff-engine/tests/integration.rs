@@ -7,8 +7,8 @@
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::config::{OutputFormat, parse_categories};
 use sniff_core::{
-    AccessibilityGrade, ElementFilter, OutputConfig, ReadyCondition, SniffConfig, SniffResult,
-    WaitStrategy,
+    AccessibilityGrade, Action, ElementFilter, OutputConfig, ReadyCondition, SniffConfig,
+    SniffError, SniffResult, WaitStrategy,
 };
 use sniff_engine::Sniffer;
 use std::sync::OnceLock;
@@ -92,6 +92,9 @@ fn base_config(url: &str, selector: &str) -> SniffConfig {
         stable_key: None,
         stabilize: false,
         ax_tree: false,
+        actions: Vec::new(),
+        effects: true,
+        effects_limit: 10,
     }
 }
 
@@ -629,6 +632,303 @@ async fn captures_ax_facet_and_ax_tree() -> SniffResult<()> {
     assert!(
         tree_text.contains("heading"),
         "subtree contains roles: {tree_text}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn click_action_reveals_modal_before_capture() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#modal");
+    config.actions = vec![Action::Click {
+        selector: "#open".into(),
+        timeout_ms: 10_000,
+        settle_ms: 150,
+    }];
+    let outcome = sniffer.sniff(&config).await?;
+    assert_eq!(outcome.snapshots.len(), 1);
+    let modal = &outcome.snapshots[0];
+    assert_eq!(modal.tag, "DIV");
+    let noticeable = modal.noticeable.expect("noticeability requested");
+    assert!(
+        noticeable.display_visible,
+        "modal must be visible after the click action"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hidden_modal_without_click_action_times_out() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let config = base_config(&fixture_path("interaction.html"), "#modal");
+    let err = sniffer.sniff(&config).await.unwrap_err();
+    assert!(
+        matches!(err, SniffError::Timeout(_) | SniffError::NoMatch { .. }),
+        "expected a timeout/no-match for a display:none target without an action, got {err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hover_action_reveals_menu_before_capture() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#menu");
+    config.actions = vec![Action::Hover {
+        selector: "#user".into(),
+        timeout_ms: 10_000,
+        settle_ms: 150,
+    }];
+    let outcome = sniffer.sniff(&config).await?;
+    let menu = &outcome.snapshots[0];
+    let noticeable = menu.noticeable.expect("noticeability requested");
+    assert!(
+        noticeable.display_visible,
+        "hover menu must be visible after the hover action"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn type_action_reveals_results_before_capture() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#results");
+    config.actions = vec![Action::Type {
+        selector: "#q".into(),
+        text: "shoes".into(),
+        timeout_ms: 10_000,
+        settle_ms: 150,
+    }];
+    let outcome = sniffer.sniff(&config).await?;
+    let results = &outcome.snapshots[0];
+    let noticeable = results.noticeable.expect("noticeability requested");
+    assert!(
+        noticeable.display_visible,
+        "type-ahead results must be visible after the type action"
+    );
+    Ok(())
+}
+
+fn click(selector: &str) -> Action {
+    Action::Click {
+        selector: selector.into(),
+        timeout_ms: 10_000,
+        settle_ms: 200,
+    }
+}
+
+fn effect_entry(
+    outcome: &sniff_engine::extractor::SniffOutcome,
+    index: usize,
+) -> &serde_json::Value {
+    &outcome.actions.as_ref().unwrap().as_array().unwrap()[index]
+}
+
+#[tokio::test]
+async fn effects_map_reveals_offscreen_table_and_where() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#table");
+    config.actions = vec![click("#open-table")];
+    let outcome = sniffer.sniff(&config).await?;
+
+    let report = effect_entry(&outcome, 0);
+    assert_eq!(report["effect"], "revealed", "table click must reveal UI");
+    let appeared = report["appeared"].as_array().unwrap();
+    let table = appeared
+        .iter()
+        .find(|a| a["tag"] == "TABLE")
+        .expect("TABLE in appeared");
+    assert_eq!(table["onscreen"], false, "table is below the fold");
+    let below = table["out_of_view"]["below"].as_f64().unwrap();
+    assert!(
+        below > 100.0,
+        "table must be well below the viewport, got {below}"
+    );
+    assert!(
+        table["distance_from_action"].as_f64().unwrap() > 100.0,
+        "table is far from the click point"
+    );
+    assert!(report["summary"].as_str().unwrap().contains("TABLE"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn effects_map_reports_far_calendar_with_direction() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#calendar");
+    config.actions = vec![click("#open-calendar")];
+    let outcome = sniffer.sniff(&config).await?;
+
+    let report = effect_entry(&outcome, 0);
+    assert_eq!(report["effect"], "revealed");
+    let appeared = report["appeared"].as_array().unwrap();
+    let cal = appeared
+        .iter()
+        .find(|a| a["path"] == "div#calendar")
+        .expect("calendar appeared");
+    assert_eq!(
+        cal["onscreen"], false,
+        "calendar is off-screen at the page bottom"
+    );
+    let dist = cal["distance_from_action"].as_f64().unwrap();
+    assert!(
+        dist > 500.0,
+        "calendar must be far from the open button, got {dist}"
+    );
+    assert!(
+        cal["direction"].as_str().unwrap().contains("below"),
+        "direction should point below, got {}",
+        cal["direction"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn effects_map_marks_no_effect_interaction() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#noop");
+    config.actions = vec![click("#noop")];
+    let outcome = sniffer.sniff(&config).await?;
+
+    let report = effect_entry(&outcome, 0);
+    assert_eq!(
+        report["effect"], "no_effect",
+        "a no-op button must be flagged"
+    );
+    assert!(report["appeared"].as_array().unwrap().is_empty());
+    assert!(report["changed"].as_array().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn effects_map_tracks_chained_modal_minimodal_input() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#suggestions");
+    config.actions = vec![
+        click("#open"),
+        click("#open-mini"),
+        Action::Type {
+            selector: "#mini-input".into(),
+            text: "2024-08-12".into(),
+            timeout_ms: 10_000,
+            settle_ms: 200,
+        },
+    ];
+    let outcome = sniffer.sniff(&config).await?;
+    let suggestions = &outcome.snapshots[0];
+    assert!(
+        suggestions
+            .noticeable
+            .as_ref()
+            .expect("noticeability requested")
+            .display_visible,
+        "chained suggestions must be visible at the end"
+    );
+
+    let actions = outcome.actions.as_ref().unwrap().as_array().unwrap();
+    assert_eq!(actions.len(), 3, "one __actions entry per chain step");
+    assert_eq!(actions[0]["effect"], "revealed", "step 0 opens the modal");
+    assert_eq!(
+        actions[1]["effect"], "revealed",
+        "step 1 opens the mini-modal"
+    );
+    assert_eq!(
+        actions[2]["effect"], "revealed",
+        "step 2 reveals suggestions"
+    );
+    assert_eq!(actions[0]["selector"], "#open");
+    assert_eq!(actions[2]["action"], "type");
+    Ok(())
+}
+
+#[tokio::test]
+async fn effects_map_disabled_when_effects_false() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#modal");
+    config.actions = vec![click("#open")];
+    config.effects = false;
+    let outcome = sniffer.sniff(&config).await?;
+    assert!(
+        outcome.actions.is_none(),
+        "no __actions map when effects is disabled"
+    );
+    assert_eq!(outcome.snapshots.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn broken_chain_error_names_the_step() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("interaction.html"), "#modal");
+    config.actions = vec![click("#open"), click("#does-not-exist")];
+    let err = sniffer.sniff(&config).await.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("action #1") && msg.contains("click:#does-not-exist"),
+        "error must name the failing step: {msg}"
+    );
+    assert!(
+        msg.contains("Prior steps") && msg.contains("click:#open"),
+        "error must list prior steps: {msg}"
     );
     Ok(())
 }

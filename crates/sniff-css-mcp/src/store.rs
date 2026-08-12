@@ -322,6 +322,9 @@ mod tests {
             stable_key: None,
             stabilize: false,
             ax_tree: false,
+            actions: Vec::new(),
+            effects: true,
+            effects_limit: 10,
         }
     }
 

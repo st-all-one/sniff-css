@@ -6,7 +6,9 @@
 //! any CLI surface so it can be reused by binaries, watch modes or
 //! servers.
 
+pub mod action;
 pub mod ax;
+pub mod effects;
 pub mod extractor;
 pub mod output;
 pub mod sniffer;

@@ -201,6 +201,63 @@ impl CdpSession {
         self.evaluate(expression, false).await
     }
 
+    /// Dispatch a real trusted mouse click at viewport coordinates
+    /// (`Input.dispatchMouseEvent`), triggering the full `pointer`/
+    /// `mouse`/`click` chain and `:active` state. Coordinates are
+    /// relative to the top-left of the visible viewport.
+    pub async fn input_click(&self, x: f64, y: f64) -> Result<()> {
+        self.input_hover(x, y).await?;
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mousePressed",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": 1,
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseReleased",
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": 0,
+                "clickCount": 1,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Move the pointer to viewport coordinates (`Input.dispatchMouseEvent`
+    /// `mouseMoved`), revealing CSS `:hover` menus and tooltips.
+    pub async fn input_hover(&self, x: f64, y: f64) -> Result<()> {
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseMoved",
+                "x": x,
+                "y": y,
+                "buttons": 0,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Insert text into the currently focused editable element
+    /// (`Input.insertText`).
+    pub async fn input_insert_text(&self, text: &str) -> Result<()> {
+        self.call("Input.insertText", json!({ "text": text }))
+            .await?;
+        Ok(())
+    }
+
     /// Close this session's target.
     pub async fn close(&self) -> Result<()> {
         self.call_no_params("Page.close").await?;

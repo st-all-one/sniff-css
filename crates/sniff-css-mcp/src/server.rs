@@ -25,7 +25,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use sniff_core::config::{OutputFormat, parse_categories, parse_wait_strategy};
+use sniff_core::config::{Action, OutputFormat, parse_categories, parse_wait_strategy};
 use sniff_core::{ElementFilter, OutputConfig, SniffConfig, SniffError, Viewport, WaitStrategy};
 use sniff_engine::write_output;
 
@@ -69,6 +69,28 @@ impl SniffMcpServer {
 // Tool parameters
 // ---------------------------------------------------------------------------
 
+/// A single user interaction (`click` | `hover` | `type`) run on the page
+/// before capture, to reveal elements that only exist after an action
+/// (modals, dropdowns, hover menus, type-ahead suggestions). Actions run
+/// in array order; each one waits for its target to appear, then the wait
+/// pipeline runs afterwards against the post-interaction DOM.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ActionInput {
+    /// Action kind: `click`, `hover` or `type`.
+    pub r#type: String,
+    /// CSS selector of the element to interact with.
+    pub selector: String,
+    /// Text to insert for `type` actions (required when `type`).
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Milliseconds to wait for the target to appear (default 10000).
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Milliseconds to settle after the action (default 150).
+    #[serde(default)]
+    pub settle_ms: Option<u64>,
+}
+
 /// Parameters for the `sniffCSS_page` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SniffPageRequest {
@@ -100,6 +122,26 @@ pub struct SniffPageRequest {
     /// Wait strategies, e.g. `["network-idle:1200:60000"]`.
     #[serde(default)]
     pub wait: Vec<String>,
+    /// Ordered user interactions run before capture to reveal elements that
+    /// only exist after an action (modals, dropdowns, hover menus, type-ahead
+    /// suggestions). Each entry is `{type: "click"|"hover"|"type", selector,
+    /// text?, timeout_ms?, settle_ms?}`; e.g. `[{"type":"click",
+    /// "selector":"#open-modal"}]` opens a modal before capturing its `.modal`.
+    /// Actions run in array order; chained flows (modal → mini-modal → input)
+    /// work by giving each step's selector.
+    #[serde(default)]
+    pub actions: Vec<ActionInput>,
+    /// Map the UI effects of each action into a reserved `__actions` area in
+    /// the snapshot: what appeared/disappeared/changed and where (rect,
+    /// on-screen, out-of-view offset, distance from the action point), plus a
+    /// `no_effect` marker when an interaction changed nothing. Defaults to
+    /// `true` when `actions` is set.
+    #[serde(default = "default_true")]
+    pub effects: bool,
+    /// Cap on how many appeared/removed/changed elements each `__actions`
+    /// entry reports (largest areas first). Defaults to 10.
+    #[serde(default)]
+    pub effects_limit: Option<usize>,
     /// Emulated viewport as `WxH`.
     #[serde(default = "default_viewport")]
     pub viewport: String,
@@ -248,12 +290,20 @@ impl SniffMcpServer {
                        snapshot never enters the LLM context. Each node carries readable fields (tag, \
                        selector, path, rect, metrics, styles grouped by category) plus \
                        is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
-                       already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
-                       stabilize (freeze animations for deterministic snapshots), contrast (measured \
-                       WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
-                       capture full-fidelity output (disables all five at once), or set any flag to \
-                       false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
-                       that stay matchable across deploys."
+                        already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
+                        stabilize (freeze animations for deterministic snapshots), contrast (measured \
+                        WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
+                        capture full-fidelity output (disables all five at once), or set any flag to \
+                        false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
+                        that stay matchable across deploys. For elements that only exist after an \
+                        interaction, pass actions=[{type:\"click\", selector:\"#open-modal\"}, ...] \
+                        (click/hover/type, ordered — chains like modal → mini-modal → input just list \
+                        each step's selector) to reveal modals, dropdowns, hover menus and \
+                        type-ahead panels before the wait pipeline runs and capture happens. When \
+                        actions are set, the snapshot also carries a __actions UI-effect map (default \
+                        ON; effects:false to omit): per action, what appeared/disappeared/changed and \
+                        where — rect, on-screen flag, out-of-view offset, distance from the action \
+                        point — plus a no_effect marker when the interaction changed nothing."
     )]
     pub async fn sniff_css_page(
         &self,
@@ -310,6 +360,7 @@ impl SniffMcpServer {
                         "url": request.url,
                         "selector": request.selector,
                         "nodes": outcome.snapshots.len(),
+                        "actions": outcome.actions.as_ref().and_then(|a| a.as_array()).map(|a| a.len()),
                     }
                 });
                 serde_json::to_string(&reference)
@@ -325,7 +376,11 @@ impl SniffMcpServer {
         description = "Deterministically diff two sniffCSS_page snapshots and return only what changed: \
                        CHANGED nodes with before/after values per property (styles, pseudo, aria, \
                        contrast, ax, rect, metrics, is_user_noticeable), ADDED/REMOVED nodes with \
-                       their full snapshot, plus a final __diff_summary line. Snapshots are best \
+                       their full snapshot, plus a final __diff_summary line. When both snapshots carry \
+                       a __actions UI-effect map (captures with actions), it is also compared: \
+                       ACTION_CHANGED/ACTION_ADDED/ACTION_REMOVED lines surface interaction regressions \
+                       (effect, appeared rect/onscreen/out-of-view, distance from the action point) and \
+                       actions_changed counts them in the summary. Snapshots are best \
                        passed as persisted base_path/head_path (from a sniffCSS_page __sniff reference) \
                        so the full JSONL stays out of the tool call; base_jsonl/head_jsonl inline \
                        strings still work. tolerance ignores subpixel jitter in the same unit; \
@@ -358,7 +413,8 @@ impl SniffMcpServer {
             ignore_props: request.ignore_props,
             ignore_structural: request.ignore_structural,
         };
-        let (deltas, stats) = sniff_css_diff::diff_trees(&base, &head, &opts);
+        let (mut deltas, mut stats) = sniff_css_diff::diff_trees(&base.nodes, &head.nodes, &opts);
+        sniff_css_diff::diff_actions(&base.actions, &head.actions, &opts, &mut deltas, &mut stats);
 
         let mut buf = Vec::new();
         sniff_css_diff::write_delta(&mut buf, &deltas)
@@ -370,6 +426,7 @@ impl SniffMcpServer {
                 "changed": stats.changed,
                 "added": stats.added,
                 "removed": stats.removed,
+                "actions_changed": stats.actions_changed,
             }
         });
         serde_json::to_writer(&mut buf, &summary)
@@ -408,7 +465,7 @@ impl SniffMcpServer {
         let mut uniformity_outliers = 0usize;
 
         if request.rules {
-            let lines = sniff_css_check::rules::run_rules(&nodes);
+            let lines = sniff_css_check::rules::run_rules(&nodes.nodes);
             rule_count = lines.len();
             let (pass, warn, fail) = sniff_css_check::rules::summarize(&lines);
             sniff_css_check::rules::write_checks(&mut buf, &lines)
@@ -417,7 +474,8 @@ impl SniffMcpServer {
         }
 
         if request.uniform {
-            let report = sniff_css_check::uniformity::check_uniformity(&nodes, request.tolerance);
+            let report =
+                sniff_css_check::uniformity::check_uniformity(&nodes.nodes, request.tolerance);
             uniformity_instances = report.instances;
             uniformity_outliers = report.outliers.len();
             for outlier in &report.outliers {
@@ -581,6 +639,11 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
     let categories = parse_categories(&request.categories).map_err(|e| e.to_string())?;
     let format = OutputFormat::parse_cli(&request.format).map_err(|e| e.to_string())?;
     let viewport = Viewport::parse_cli(&request.viewport).map_err(|e| e.to_string())?;
+    let actions = request
+        .actions
+        .iter()
+        .map(action_from_input)
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(SniffConfig {
         url: request.url.clone(),
@@ -611,7 +674,44 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
         stable_key: request.stable_key.clone(),
         stabilize: request.stabilize && !request.full,
         ax_tree: request.ax_tree,
+        actions,
+        effects: request.effects,
+        effects_limit: request.effects_limit.unwrap_or(10),
     })
+}
+
+/// Map an MCP action input to an engine [`Action`].
+fn action_from_input(input: &ActionInput) -> Result<Action, String> {
+    let timeout_ms = input.timeout_ms.unwrap_or(Action::DEFAULT_TIMEOUT_MS);
+    let settle_ms = input.settle_ms.unwrap_or(Action::DEFAULT_SETTLE_MS);
+    let selector = input.selector.clone();
+    match input.r#type.as_str() {
+        "click" => Ok(Action::Click {
+            selector,
+            timeout_ms,
+            settle_ms,
+        }),
+        "hover" => Ok(Action::Hover {
+            selector,
+            timeout_ms,
+            settle_ms,
+        }),
+        "type" => {
+            let text = input
+                .text
+                .clone()
+                .ok_or_else(|| "type action requires `text`".to_string())?;
+            Ok(Action::Type {
+                selector,
+                text,
+                timeout_ms,
+                settle_ms,
+            })
+        }
+        other => Err(format!(
+            "unknown action type `{other}` (expected click | hover | type)"
+        )),
+    }
 }
 
 /// Load a snapshot for diff/check from an optional persisted path, falling
@@ -621,15 +721,15 @@ fn load_snapshot(
     path: Option<&str>,
     inline: &str,
     label: &str,
-) -> Result<Vec<sniff_css_diff::DiffNode>, String> {
+) -> Result<sniff_css_diff::DiffDocument, String> {
     if let Some(path) = path {
         let abs = store
             .resolve(Path::new(path))
             .map_err(|e| format!("invalid {label} path `{path}`: {e}"))?;
-        sniff_css_diff::load_file(&abs)
+        sniff_css_diff::load_file_doc(&abs)
             .map_err(|e| format!("cannot load {label} snapshot `{path}`: {e}"))
     } else {
-        sniff_css_diff::load_str(inline).map_err(|e| format!("invalid {label} JSONL: {e}"))
+        sniff_css_diff::load_str_doc(inline).map_err(|e| format!("invalid {label} JSONL: {e}"))
     }
 }
 
@@ -637,6 +737,9 @@ fn load_snapshot(
 fn phase_message(phase: &sniff_engine::Phase) -> String {
     match phase {
         sniff_engine::Phase::Navigating => "navigating to page".to_string(),
+        sniff_engine::Phase::Interacting => {
+            "performing interactions (click/hover/type)".to_string()
+        }
         sniff_engine::Phase::Waiting => "waiting for page readiness".to_string(),
         sniff_engine::Phase::Extracting => "extracting computed styles".to_string(),
         sniff_engine::Phase::Accessibility => "capturing accessibility tree".to_string(),
@@ -681,6 +784,9 @@ mod tests {
             persist: true,
             return_mode: "reference".into(),
             full: false,
+            actions: vec![],
+            effects: true,
+            effects_limit: None,
         }
     }
 
@@ -769,6 +875,68 @@ mod tests {
     }
 
     #[test]
+    fn build_config_maps_ordered_actions() {
+        let mut req = request();
+        req.actions = serde_json::from_value(serde_json::json!([
+            { "type": "click", "selector": "#open-modal", "timeout_ms": 5000 },
+            { "type": "type", "selector": "#q", "text": "shoes" },
+            { "type": "hover", "selector": ".submenu", "settle_ms": 100 }
+        ]))
+        .unwrap();
+        let cfg = build_sniff_config(&req).unwrap();
+        assert_eq!(cfg.actions.len(), 3);
+        assert!(
+            matches!(&cfg.actions[0], Action::Click { selector, timeout_ms, settle_ms }
+            if selector == "#open-modal" && *timeout_ms == 5000
+               && *settle_ms == Action::DEFAULT_SETTLE_MS)
+        );
+        assert!(matches!(&cfg.actions[1], Action::Type { text, .. } if text == "shoes"));
+        assert!(matches!(&cfg.actions[2], Action::Hover { settle_ms, .. } if *settle_ms == 100));
+    }
+
+    #[test]
+    fn build_config_defaults_actions_empty() {
+        let cfg = build_sniff_config(&request()).unwrap();
+        assert!(cfg.actions.is_empty());
+        // Effects map is ON by default.
+        assert!(cfg.effects);
+        assert_eq!(cfg.effects_limit, 10);
+    }
+
+    #[test]
+    fn build_config_wires_effects_flags() {
+        let mut req = request();
+        req.effects = false;
+        req.effects_limit = Some(3);
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(!cfg.effects);
+        assert_eq!(cfg.effects_limit, 3);
+    }
+
+    #[test]
+    fn action_from_input_rejects_unknown_and_missing_text() {
+        let err = action_from_input(&ActionInput {
+            r#type: "dblclick".into(),
+            selector: "#x".into(),
+            text: None,
+            timeout_ms: None,
+            settle_ms: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("unknown action type `dblclick`"), "got: {err}");
+
+        let err = action_from_input(&ActionInput {
+            r#type: "type".into(),
+            selector: "#q".into(),
+            text: None,
+            timeout_ms: None,
+            settle_ms: None,
+        })
+        .unwrap_err();
+        assert!(err.contains("requires `text`"), "got: {err}");
+    }
+
+    #[test]
     fn phase_messages_are_ordered_and_readable() {
         assert_eq!(
             phase_message(&sniff_engine::Phase::Formatting { nodes: 7 }),
@@ -778,7 +946,15 @@ mod tests {
             phase_message(&sniff_engine::Phase::Accessibility),
             "capturing accessibility tree"
         );
+        assert_eq!(
+            phase_message(&sniff_engine::Phase::Interacting),
+            "performing interactions (click/hover/type)"
+        );
         assert_eq!(sniff_engine::Phase::Extracting.progress(), 0.7);
+        // Interacting sits between navigating (0.2) and the final wait (0.4)
+        // so progress stays monotonic in both action and no-action flows.
+        assert!(sniff_engine::Phase::Interacting.progress() > 0.2);
+        assert!(sniff_engine::Phase::Interacting.progress() < 0.4);
     }
 
     #[test]
@@ -825,8 +1001,9 @@ mod tests {
             "{\"id\":1,\"tag\":\"DIV\",\"selector\":\"div.card\",\"depth\":0,\"children\":[]}\n";
 
         // Without a path, inline JSONL is parsed.
-        let nodes = load_snapshot(&store, None, base, "base").unwrap();
-        assert_eq!(nodes.len(), 1);
+        let doc = load_snapshot(&store, None, base, "base").unwrap();
+        assert_eq!(doc.nodes.len(), 1);
+        assert!(doc.actions.is_empty());
 
         // A rejected path errors with a clear message.
         let err = load_snapshot(&store, Some("../escape.jsonl"), base, "base").unwrap_err();
@@ -839,8 +1016,8 @@ mod tests {
         std::fs::create_dir_all(&dir).ok();
         let file = dir.join("loaded.jsonl");
         std::fs::write(&file, base).ok();
-        let nodes = load_snapshot(&store, Some("loaded.jsonl"), "", "base").unwrap();
-        assert_eq!(nodes.len(), 1);
+        let doc = load_snapshot(&store, Some("loaded.jsonl"), "", "base").unwrap();
+        assert_eq!(doc.nodes.len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

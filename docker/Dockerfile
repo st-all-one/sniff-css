@@ -9,7 +9,7 @@
 # o que compila do fonte no stage `builder` (com a toolchain Rust embarcada).
 #
 # Variáveis:
-#   ARG VERSION           tag do release (ex.: v0.1.0) — default latest
+#   ARG VERSION           tag do release (ex.: v0.2.0) — default latest
 #   ARG TARGETARCH        definido pelo buildx (amd64/arm64)
 #   ARG BUILD_FROM_SOURCE 0 (download do Release) ou 1 (build do fonte)
 

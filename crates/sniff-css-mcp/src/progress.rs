@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn progress_values_are_monotonic() {
-        let phases = [0.2f64, 0.4, 0.7, 0.8, 0.9];
+        let phases = [0.2f64, 0.35, 0.4, 0.7, 0.8, 0.9];
         let mut prev = -1.0;
         for p in phases {
             assert!(p > prev);

@@ -124,11 +124,50 @@ fn build_forest(flat: &[(u64, Option<u64>, DiffNode)]) -> Vec<DiffNode> {
     roots.iter().map(|&i| build(i, flat, &children)).collect()
 }
 
+/// A parsed snapshot: the node forest plus any `__actions` UI-effect map
+/// (per-interaction before/after reports) that the capture carried.
+#[derive(Debug, Clone, Default)]
+pub struct DiffDocument {
+    pub nodes: Vec<DiffNode>,
+    pub actions: Vec<Value>,
+}
+
+/// Load a snapshot JSONL file into a [`DiffDocument`].
+pub fn load_file_doc(path: &Path) -> DiffResult<DiffDocument> {
+    let content = std::fs::read_to_string(path)?;
+    load_str_doc(&content)
+}
+
+/// Parse snapshot JSONL from an in-memory string into a [`DiffDocument`].
+pub fn load_str_doc(content: &str) -> DiffResult<DiffDocument> {
+    let nodes = load_str(content)?;
+    let actions = extract_actions(content);
+    Ok(DiffDocument { nodes, actions })
+}
+
+/// Collect the `__actions` UI-effect reports embedded in the JSONL.
+fn extract_actions(content: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(arr) = v.get("__actions").and_then(Value::as_array) {
+            out.extend(arr.iter().cloned());
+        }
+    }
+    out
+}
+
 /// Load a snapshot JSONL file, returning one root node per matched element.
 ///
-/// Both `jsonl` (tree) and `jsonl-flat` inputs are supported; `__meta`
-/// lines are ignored. The file must be internally consistent (all tree
-/// lines or all flat lines).
+/// Both `jsonl` (tree) and `jsonl-flat` inputs are supported; `__meta`,
+/// `__ax_tree` and `__actions` lines are ignored. The file must be
+/// internally consistent (all tree lines or all flat lines).
 pub fn load_file(path: &Path) -> DiffResult<Vec<DiffNode>> {
     let content = std::fs::read_to_string(path)?;
     load_str(&content)
@@ -147,7 +186,8 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             continue;
         }
         let v: Value = serde_json::from_str(line)?;
-        if v.get("__meta").is_some() || v.get("__ax_tree").is_some() {
+        if v.get("__meta").is_some() || v.get("__ax_tree").is_some() || v.get("__actions").is_some()
+        {
             continue;
         }
         let tree = v.get("children").is_some();
@@ -288,5 +328,22 @@ mod tests {
         });
         let content = format!("{}\n{}\n", line(&tree), line(&flat));
         assert!(matches!(load_str(&content), Err(DiffError::MixedLayout)));
+    }
+
+    #[test]
+    fn doc_loading_collects_actions_and_skips_them_for_nodes() {
+        let action_line = serde_json::json!({
+            "__actions": [{"index": 0, "action": "click", "effect": "revealed"}]
+        });
+        let node: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.card", "children": []
+        });
+        let content = format!("{}\n{}\n", line(&action_line), line(&node));
+        let doc = load_str_doc(&content).unwrap();
+        assert_eq!(doc.nodes.len(), 1, "nodes must ignore the __actions line");
+        assert_eq!(doc.actions.len(), 1);
+        assert_eq!(doc.actions[0]["effect"], "revealed");
+        // Plain load_str also skips the __actions line.
+        assert_eq!(load_str(&content).unwrap().len(), 1);
     }
 }

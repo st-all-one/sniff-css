@@ -95,6 +95,10 @@ sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
 | `-c, --categories` | Category subset (default `all`) |
 | `--props a,b` / `--pseudo ::before` | Extra props / pseudo-elements |
 | `--wait spec` | Repeatable: `delay:ms`, `network-idle:idle[:t]`, `element-ready:sel:cond[:t]`, `fonts-loaded[:t]`, `app-flag:flag[:t]`, `selector:sel[:t]` |
+| `--click sel[:t[:settle]]` / `--hover sel[:t[:settle]]` / `--type sel:text` | Repeatable interactions run before capture to reveal elements that only exist after an action (modals, dropdowns, hover menus, type-ahead). Each waits for its target, scrolls it into view and dispatches a real trusted input event; the wait pipeline then runs against the post-interaction DOM. |
+| `--action spec` | Ordered, full-control form for mixed flows: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` (repeatable). Prefer over the three convenience flags when ordering across kinds matters. |
+| `--effects` / `--no-effects` | **default ON when actions are set** — emit a reserved `__actions` line mapping each action's UI effect: what appeared/disappeared/changed and where (rect, on-screen, out-of-view offset, distance from the action point), plus `no_effect` when the interaction changed nothing. |
+| `--effects-limit N` | Cap on how many appeared/removed/changed elements each `__actions` entry lists (largest areas first; default `10`). |
 | `--compact` | **default ON** — ~55% fewer tokens (dedup + suppress defaults + scoped css_variables) |
 | `--custom-props` | **default ON** — all CSS variables (`--*`), global in `__meta` |
 | `--stabilize` | **default ON** — freeze animations/transitions for deterministic snapshots |
@@ -184,9 +188,9 @@ disk and never enters the tool call or the returned content.
 
 | Tool | Inputs | Returns |
 |------|--------|---------|
-| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, **full** (default `false`), **persist** (default `true`), **return** (default `"reference"`) | `{"__sniff": {path, url, selector, nodes}}` by default; full JSONL with `return:"jsonl"` (+ `notifications/progress` per phase) |
+| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects** (default `true`), **effects_limit** (default `10`), **full** (default `false`), **persist** (default `true`), **return** (default `"reference"`) | `{"__sniff": {path, url, selector, nodes, actions}}` by default; full JSONL (incl. `__actions`) with `return:"jsonl"` (+ `notifications/progress` per phase) |
 | `sniffCSS_snapshots` | domain, target, limit (all optional) | JSONL lines: `{domain, target, path, created_at, size}`, newest first |
-| `sniffCSS_diff` | **base_path, head_path** (preferred) or base_jsonl, head_jsonl; tolerance, ignore_props, ignore_structural | CHANGED/ADDED/REMOVED delta + `__diff_summary` |
+| `sniffCSS_diff` | **base_path, head_path** (preferred) or base_jsonl, head_jsonl; tolerance, ignore_props, ignore_structural | CHANGED/ADDED/REMOVED delta + `__action_*` UI-effect deltas + `__diff_summary` (incl. `actions_changed`) |
 | `sniffCSS_check` | **path** (preferred) or jsonl; uniform, rules, tolerance | PASS/WARN/FAIL lines + outliers + `__check_summary` |
 | `sniffCSS_categories` | — | accepted categories |
 
@@ -306,6 +310,82 @@ sniffCSS -u "$URL" -s ".btn-primary" --categories visual,typography \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'
 ```
 
+### Reveal elements that only exist after an interaction
+
+Capture a modal/dropdown/menu that is `display:none` (or absent) until a
+button is clicked, hovered or typed into:
+
+```bash
+# open a modal, then capture it (each action waits for its own target first)
+sniffCSS -u "$URL" -s ".modal" --click "#open-modal"
+# hover-revealed menu
+sniffCSS -u "$URL" -s ".menu-panel" --hover "#user-menu"
+# type-ahead panel
+sniffCSS -u "$URL" -s ".search-results" --type "#q:shoes" --wait "network-idle:800"
+# ordered mixed flow (click opens, type filters, click selects) via --action
+sniffCSS -u "$URL" -s ".result" \
+  --action "click:#open-modal:5000" \
+  --action "type:#q:shoes" \
+  --action "click:.result-item"
+```
+
+The wait pipeline (selector + network-idle + element-ready on the capture
+selector) runs *after* the actions, so it targets the post-interaction DOM.
+The `--stabilize` freeze is re-applied after the actions for deterministic
+snapshots. The MCP equivalent passes an ordered `actions` array to
+`sniffCSS_page`:
+
+```json
+{"actions": [{"type": "click", "selector": "#open-modal"},
+             {"type": "type", "selector": "#q", "text": "shoes"}]}
+```
+
+### Map what happened at the UI level (`__actions`)
+
+When actions are configured, each one gets a UI-effect entry in a reserved
+`__actions` line of the JSONL (default ON; `--no-effects` to omit). Each entry
+captures a whole-page before/after snapshot around the interaction and answers
+**what** changed and **where**:
+
+```json
+{"__actions": [{
+  "index": 0, "action": "click", "selector": "#open-table",
+  "target": {"path": "button#open-table", "rect": {...}, "onscreen": true},
+  "effect": "revealed",
+  "summary": "8 element(s) appeared · biggest: TABLE 1430px below — 2146px from click",
+  "appeared": [{
+    "tag": "TABLE", "path": "table#table",
+    "rect": {"x": 8, "y": 2143, "width": 113, "height": 55},
+    "onscreen": false, "out_of_view": {"below": 1430},
+    "distance_from_action": 2146, "direction": "below-left",
+    "css_before": null, "css_after": {"display": "table", ...}
+  }],
+  "removed":  [{"tag": "...", "css_before": {...}, "css_after": null}],
+  "changed":  [{"tag": "...", "rect_before": {...}, "rect_after": {...},
+                "visible_before": false, "visible_after": true,
+                "css_changed": ["display", "background-color"],
+                "css_before": {...}, "css_after": {...}}]
+}]}
+```
+
+- `effect` is `revealed` / `hidden` / `changed` / `moved` / **`no_effect`**
+  (the interaction changed nothing — a possible logic failure; the summary
+  suggests raising `settle_ms`/`--wait` for async effects).
+- `onscreen` + `out_of_view.{above,below,left,right}` (px beyond each viewport
+  edge) + `distance_from_action` + `direction` locate *where* the change
+  happened — e.g. a table that appeared 1430px below the fold, or a calendar
+  that opened 2400px from its trigger.
+- `css_before`/`css_after` are a curated ~38-property visual/layout signature
+  of the affected element; `css_changed` lists the differing properties.
+- Chained flows (modal → mini-modal → input) produce **one entry per step**,
+  each with the previous step's state as its `before`.
+
+**UI-effect regression diff:** `sniffCSS-diff` (and MCP `sniffCSS_diff`)
+compare the `__actions` blocks when both sides carry them, emitting
+`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` lines (e.g.
+`appeared[0].rect.y: 8 → 900`, `onscreen: true → false`,
+`effect: revealed → no_effect`) and counting them in `actions_changed`.
+
 ---
 
 ## Common Patterns
@@ -365,7 +445,7 @@ checksums, installs to `~/.local/bin`):
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.1.0 sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.2.0 sh
 ```
 
 Env overrides: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.
@@ -402,6 +482,10 @@ pinned in `Cross.toml`; MSRV 1.88. Changes tracked in `CHANGELOG.md`.
 - Link accessible name from inner `img alt` is not yet derived (verify before reporting).
 - Contrast over background images is always `unknown` (cannot measure without pixels).
 - Hidden panels (carousels/tabs) are still in the AX tree → grade `AA`, `display_visible:true`.
+- Interaction actions are scoped to the main frame (elements inside `<iframe>` are not clickable).
+- `type` inserts text (appends to the focused element); it does not clear the field first.
+- CLI action specs split on `:`, so selectors containing colons (`.btn:hover`, `[data-x="a:b"]`) must go through the MCP `actions` object (`selector` field) instead of `--click`/`--hover`/`--type` strings.
+- `__actions` lists are capped (`--effects-limit`, default 10) and reflow-caused "changed" entries can flood a busy page — raise the settle between chain steps and read the `summary`/biggest entry first.
 
 ---
 

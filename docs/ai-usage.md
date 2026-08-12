@@ -48,6 +48,25 @@ Controle fino **opcional** (sempre sobrepõe o default):
 | `--stable-key data-testid` | Seletores estáveis entre deploys → diff confiável. |
 | `--depth N` | Subárvore controlada; `0` = só o elemento. |
 
+Interações para revelar elementos dependentes de ação (modais, dropdowns,
+menus de hover, sugestões de busca) — cada ação espera o próprio alvo, rola até
+o centro e dispara um evento confiável; o pipeline de waits roda depois contra
+o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
+
+| Flag | Efeito |
+|---|---|
+| `--click sel[:timeout[:settle]]` | Clique real no centro de `sel` (modais, dropdowns). Repetível. |
+| `--hover sel[:timeout[:settle]]` | `mouseMoved` para `sel` (menus de `:hover`). Repetível. |
+| `--type sel:text` | Foca `sel` e digita `text` (type-ahead). Repetível. |
+| `--action spec` | Forma ordenada p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>`. Repetível. |
+| `--effects` / `--no-effects` | **default ON com ações** — mapa `__actions` por interação (o que apareceu/sumiu/mudou e onde; `no_effect` quando nada mudou). |
+| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (default `10`). |
+
+> Com `--action` ordenado, cadeias funcionam naturalmente (modal → mini-modal →
+> input): cada passo espera o próprio alvo e gera a própria entrada em
+> `__actions`, com o before = estado do passo anterior. Em passo quebrado, o
+> erro nomeia o índice, o seletor e os passos anteriores.
+
 Flags de a11y extras (continuam opt-in, adicionam facetas):
 
 | Flag | Facet emitido |
@@ -185,18 +204,30 @@ Preferencial para agentes: exponha `sniffCSS-mcp` como servidor MCP (stdio) em v
 de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece:
 
 1. **`sniffCSS_page`** — captura (args: url, selector, depth, categories, compact,
-   custom_props, stable_key, pseudo, wait, viewport, format, stabilize,
-   contrast, include_ax, ax_tree, full, persist, return).
+   custom_props, stable_key, pseudo, wait, actions, viewport, format, stabilize,
+   contrast, include_ax, ax_tree, effects, effects_limit, full, persist, return).
    Os defaults já são os otimizados: `compact`, `custom_props`, `stabilize`,
    `contrast` e `include_ax` vêm ligados — passe `full:true` para full-fidelity
    ou qualquer flag como `false` para desligar individualmente.
+   Para elementos que só existem após uma ação, passe `actions` (array **ordenado**
+   de `{type: "click"|"hover"|"type", selector, text?, timeout_ms?, settle_ms?}`);
+   cada ação espera o próprio alvo, interage de verdade (evento confiável via
+   `Input.dispatchMouseEvent`/`Input.insertText`) e o pipeline de waits roda depois
+   contra o DOM pós-interação. Ex.: `[{"type":"click","selector":"#open-modal"}]`
+   abre um modal antes de capturar o `.modal`. Cadeias (modal → mini-modal →
+   input) listam cada passo em ordem. Com `actions` setado, o snapshot carrega a
+   linha `__actions` (default ON; `effects:false` omite): **por passo**, o que
+   apareceu/sumiu/mudou de estilo e **onde** — rect, on-screen, offset
+   fora-da-viewport, distância do ponto da ação — além de `no_effect` quando a
+   interação não mudou nada.
    Por padrão **persiste** o snapshot em
    `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
    e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
    (~200 tokens). Use `return:"jsonl"` para obter o JSONL inline
    (`persist:false` desativa a gravação).
    Durante a execução envia `notifications/progress` por fase:
-   `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
+   `acquiring browser slot` → `navigating` → `performing interactions
+   (click/hover/type)` (se `actions`) → `waiting` → `extracting` →
    `capturing accessibility tree` (se `include_ax`/`ax_tree`) → `formatting N nodes`.
 2. **`sniffCSS_snapshots`** — lista os snapshots persistidos (domain/target/path/
    created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use
@@ -204,6 +235,10 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
 3. **`sniffCSS_diff`** — diff determinístico de dois snapshots
    (args: **base_path/head_path** — o modo otimizado — ou base_jsonl/head_jsonl,
    tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
+   Quando os dois lados carregam `__actions`, eles também são comparados:
+   deltas `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` (regressão de UI —
+   ex.: `appeared[0].rect.y: 8 → 900`, `onscreen: true → false`,
+   `effect: revealed → no_effect`) contados em `actions_changed`.
 4. **`sniffCSS_check`** — checks determinísticos offline sobre um snapshot
    (args: **path** ou jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
 5. **`sniffCSS_categories`** — categorias aceitas.
@@ -342,7 +377,12 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
    resolvido via `/json/version`; `ws://` direto também funciona) evita subir outro
    Chrome e captura exatamente o que você está vendo. No container Docker isso é o
    default via `SNIFF_CONNECT` (anexa ao Chromium da GUI).
-8. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_user_noticeable`
+8. **Elementos que só existem após interação** — um alvo com `display:none`
+   (modal/dropdown/menu) falha com timeout de `element-ready` mesmo existindo no
+   DOM. Use `--click "#open"` (ou `--hover`/`--type`, ou `--action` para fluxos
+   ordenados; no MCP, `actions`): a ação revela o elemento e o pipeline de waits
+   roda depois contra o DOM pós-interação.
+9. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_user_noticeable`
    são parte valiosa do sinal de CLS/visibilidade.
 
 ## Referência rápida
@@ -355,6 +395,8 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
 | Achatado | `--output jsonl-flat` |
 | Estabilizar animações | já ON; desligue com `--no-stabilize` |
 | A11y medida | já ON (`contrast` + `ax`); subárvore AX com `--ax-tree` |
+| Revelar elementos por interação | `--click #open` · `--hover #menu` · `--type #q:shoes` · `--action click:#open` |
+| Mapa de efeito de UI (`__actions`) | automático com ações; `--no-effects` omite · `--effects-limit N` |
 | Auditoria a11y completa | `docs/accessibility.md` |
 | Resumo de mudanças | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
 | Ignorar props voláteis | `sniffCSS-diff ... --ignore-props transform,opacity` |
