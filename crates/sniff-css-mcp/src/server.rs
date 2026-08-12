@@ -171,9 +171,9 @@ pub struct SniffPageRequest {
     /// Defaults to `false`.
     #[serde(default)]
     pub full: bool,
-    /// Persist the snapshot to disk as `sniffCSS/[domain]/[path]-[selector]-
-    /// [UTC].jsonl` (root overridable via `SNIFF_SNAPSHOT_DIR`). Defaults to
-    /// `true` so diff/check can run on paths instead of inline JSONL.
+    /// Persist the snapshot to disk as `sniffCSS/[domain]/[UTC]-[path]-
+    /// [selector].jsonl` (root overridable via `SNIFF_SNAPSHOT_DIR`). Defaults
+    /// to `true` so diff/check can run on paths instead of inline JSONL.
     #[serde(default = "default_true")]
     pub persist: bool,
     /// What to return: `reference` (default) returns only a tiny
@@ -283,7 +283,7 @@ impl SniffMcpServer {
         name = "sniffCSS_page",
         description = "Capture the real computed CSS styles of elements on a page and return them as \
                        JSONL. By default the snapshot is persisted to disk as \
-                       sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl and the tool returns only a \
+                       sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns only a \
                        tiny __sniff reference (path, url, selector, node count) — pass return=\"jsonl\" \
                        to get the full snapshot inline instead. Feed two persisted captures to \
                        sniffCSS_diff via base_path/head_path (or sniffCSS_check via path) so the full \

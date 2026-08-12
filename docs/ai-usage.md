@@ -221,7 +221,7 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    fora-da-viewport, distância do ponto da ação — além de `no_effect` quando a
    interação não mudou nada.
    Por padrão **persiste** o snapshot em
-   `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+   `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
    e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
    (~200 tokens). Use `return:"jsonl"` para obter o JSONL inline
    (`persist:false` desativa a gravação).

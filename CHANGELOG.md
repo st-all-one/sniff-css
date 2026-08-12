@@ -4,6 +4,19 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [0.2.1] — 2026-08-12
+
+### Changed
+
+- **Nome dos snapshots persistidos pelo MCP** — o padrão passou de
+  `[path]-[selector]-[UTC].jsonl` para `[UTC]-[path]-[selector].jsonl`. O
+  timestamp UTC agora vem na frente do nome, então as execuções de um mesmo
+  alvo ficam **ordenadas cronologicamente** no diretório
+  `sniffCSS/[domain]/` (a execução mais recente é o último arquivo, e a busca
+  pelo snapshot mais novo de um target fica trivial). A escrita continua
+  atômica e `list_snapshots`/diff/check seguem operando por caminho; snapshots
+  antigos (sufixo de UTC) deixam de aparecer em `list_snapshots`.
+
 ## [0.2.0] — 2026-08-12
 
 ### Added

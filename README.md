@@ -15,7 +15,7 @@ curl --proto '=https' --tlsv1.2 -sSf \
 Baixa o binário certo para seu sistema (Linux glibc/musl, macOS Apple Silicon,
 Windows), verifica o checksum e instala em `~/.local/bin`.
 
-- Versão específica: `... install.sh | VERSION=v0.2.0 sh`
+- Versão específica: `... install.sh | VERSION=v0.2.1 sh`
 - Compilar do fonte: `cargo build --release` (ver `scripts/install.sh`)
 - Container self-contained (Chromium incluso): [`docs/docker.md`](docs/docker.md)
 

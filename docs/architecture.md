@@ -201,7 +201,7 @@ A avaliação semântica (positiva/negativa) é responsabilidade do LLM: contrat
   (`ProgressReporter` → `Peer::notify_progress`) e o JSONL final volta como
   resultado da tool. Sem block do pipeline: as notificações são enviadas
   assincronamente entre as fases. Por padrão o `SnapshotStore` persiste o
-  snapshot em `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` (escrita
+  snapshot em `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (escrita
   atômica, UTC por `SystemTime`, raiz via `SNIFF_SNAPSHOT_DIR`) e a tool
   retorna apenas o `__sniff` reference; `return:"jsonl"`/`persist:false`
   optam pelo comportamento inline.

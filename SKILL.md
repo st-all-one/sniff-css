@@ -178,9 +178,9 @@ sniffCSS-check --input snap.jsonl --rules                     # PASS/WARN/FAIL
 ### Snapshot store (default behavior)
 
 Every `sniffCSS_page` call **persists** the snapshot to
-`sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl` — relative to the server's
+`sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` — relative to the server's
 working directory (the project root the MCP server was launched from), or the
-`SNIFF_SNAPSHOT_DIR` env var when set. The UTC stamp orders files
+`SNIFF_SNAPSHOT_DIR` env var when set. The leading UTC stamp orders files
 chronologically, so "latest capture for a target" = last file in its directory.
 
 The store is why diff/check can run **path-first**: the full JSONL stays on
@@ -445,7 +445,7 @@ checksums, installs to `~/.local/bin`):
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.2.0 sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.2.1 sh
 ```
 
 Env overrides: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.

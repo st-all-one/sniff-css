@@ -65,7 +65,7 @@ sniffCSS-check --input snapshots/head.jsonl --uniform --rules
 ## 2b. Pipeline MCP (mesmo contrato, zero JSONL no contexto)
 
 O MCP segue o mesmo pipeline, mas o snapshot fica no disco
-(`sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl`) e só a referência trafega:
+(`sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl`) e só a referência trafega:
 
 ```text
 1. sniffCSS_page  (url, selector, mesmos flags, persist default ON)

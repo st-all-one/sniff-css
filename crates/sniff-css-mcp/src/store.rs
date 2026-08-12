@@ -1,10 +1,11 @@
 //! On-disk snapshot store backing the MCP tools.
 //!
-//! Sniffs are persisted as `sniffCSS/[domain]/[path]-[selector]-[UTC].jsonl`
+//! Sniffs are persisted as `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl`
 //! relative to the server's working directory (or `SNIFF_SNAPSHOT_DIR` when
 //! set), so diff/check tools can operate on **paths** instead of round-tripping
-//! full snapshots through the LLM context. The UTC stamp sorts the filenames
-//! chronologically, making the "latest snapshot for a target" trivially findable.
+//! full snapshots through the LLM context. The leading UTC stamp sorts the
+//! filenames chronologically, making executions of any target trivially
+//! ordered and the "latest snapshot" easy to find.
 
 use std::fs;
 use std::io::Write;
@@ -190,13 +191,14 @@ fn path_of(url: &str) -> String {
     }
 }
 
-/// `[path]-[selector]-[UTC].jsonl`.
+/// `[UTC]-[path]-[selector].jsonl` — leading timestamp so file listings sort
+/// chronologically across executions of the same target.
 fn snapshot_file_name(config: &SniffConfig) -> String {
     format!(
         "{}-{}-{}.jsonl",
+        utc_now(),
         path_of(&config.url),
         slug(&config.selector, 40),
-        utc_now()
     )
 }
 
@@ -225,19 +227,18 @@ fn slug(raw: &str, max: usize) -> String {
     out
 }
 
-/// Split `[target]-YYYYMMDDTHHMMSSZ.jsonl` into its parts.
+/// Split `YYYYMMDDTHHMMSSZ-[target].jsonl` into its parts.
 fn parse_snapshot_name(name: &str) -> Option<(String, String)> {
     let stem = name.strip_suffix(".jsonl")?;
-    let created = stem.strip_suffix('Z')?;
-    let created = created.get(created.len().checked_sub(15)?..)?;
+    let created = stem.get(..15)?;
     if !is_timestamp(created) {
         return None;
     }
-    let target = stem.get(..stem.len().checked_sub(17)?)?;
-    if target.is_empty() {
+    let rest = stem.get(15..)?.strip_prefix('Z')?.strip_prefix('-')?;
+    if rest.is_empty() {
         return None;
     }
-    Some((target.to_string(), format!("{created}Z")))
+    Some((rest.to_string(), format!("{created}Z")))
 }
 
 fn is_timestamp(s: &str) -> bool {
@@ -346,17 +347,17 @@ mod tests {
         let cfg = config("http://localhost:3000/foo/bar", "[data-testid=\"widget\"]");
         let name = snapshot_file_name(&cfg);
         let stripped = name
-            .strip_suffix(".jsonl")
+            .strip_prefix(&format!("{}-", utc_now()))
             .unwrap()
-            .strip_suffix(&format!("-{}", utc_now()))
+            .strip_suffix(".jsonl")
             .unwrap();
         assert_eq!(stripped, "foo_bar-data-testid_widget");
-        assert_eq!(name.len(), stripped.len() + 1 + 16 + 6);
+        assert_eq!(name.len(), 16 + 1 + stripped.len() + 6);
     }
 
     #[test]
     fn parse_snapshot_name_roundtrip() {
-        let (target, ts) = parse_snapshot_name("foo_bar-card-20260812T101530Z.jsonl").unwrap();
+        let (target, ts) = parse_snapshot_name("20260812T101530Z-foo_bar-card.jsonl").unwrap();
         assert_eq!(target, "foo_bar-card");
         assert_eq!(ts, "20260812T101530Z");
         assert!(parse_snapshot_name("foo_card.jsonl").is_none());
