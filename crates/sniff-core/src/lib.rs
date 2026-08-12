@@ -8,6 +8,7 @@ pub mod config;
 pub mod contrast;
 pub mod error;
 pub mod properties;
+pub mod snapshot;
 pub mod types;
 
 pub use config::*;

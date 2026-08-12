@@ -10,7 +10,7 @@ use sniff_core::{
     AccessibilityGrade, Action, ElementFilter, OutputConfig, ReadyCondition, SniffConfig,
     SniffError, SniffResult, WaitStrategy,
 };
-use sniff_engine::Sniffer;
+use sniff_engine::{Sniffer, write_output};
 use std::sync::OnceLock;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
@@ -90,11 +90,14 @@ fn base_config(url: &str, selector: &str) -> SniffConfig {
         }),
         include_custom_properties: false,
         stable_key: None,
+        attributes: vec![],
         stabilize: false,
         ax_tree: false,
         actions: Vec::new(),
         effects: true,
         effects_limit: 10,
+        screenshot: false,
+        screenshot_full_page: false,
     }
 }
 
@@ -930,5 +933,91 @@ async fn broken_chain_error_names_the_step() -> SniffResult<()> {
         msg.contains("Prior steps") && msg.contains("click:#open"),
         "error must list prior steps: {msg}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn attributes_capture_verifies_form_field_names() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("forms.html"), "form#sucesu-form");
+    config.depth = 3;
+    config.attributes = vec!["name".to_string(), "value".to_string()];
+    let outcome = sniffer.sniff(&config).await?;
+    let root = &outcome.snapshots[0];
+
+    // Walk the tree collecting every input's `name` attribute.
+    let mut names: Vec<(String, String)> = Vec::new();
+    fn collect(snap: &sniff_core::types::ElementSnapshot, out: &mut Vec<(String, String)>) {
+        if snap.tag == "INPUT"
+            && let Some(attrs) = &snap.attributes
+        {
+            for (k, v) in attrs {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+        for child in &snap.children {
+            collect(child, out);
+        }
+    }
+    collect(root, &mut names);
+
+    let attrs: Vec<(String, String)> = names.iter().filter(|(k, _)| k == "name").cloned().collect();
+    assert!(
+        attrs
+            .iter()
+            .any(|(_, v)| v == "parameters[items][0][title]"),
+        "expected indexed name in attrs, got {attrs:?}"
+    );
+    assert!(
+        attrs
+            .iter()
+            .any(|(_, v)| v == "parameters[items][1][title]"),
+        "expected second indexed name in attrs, got {attrs:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn summary_and_screenshot_are_produced_on_demand() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("fixture.html"), ".card");
+    config.depth = 1;
+    config.screenshot = true;
+    config.screenshot_full_page = true;
+    let outcome = sniffer.sniff(&config).await?;
+
+    // Screenshot: non-empty PNG magic bytes.
+    let png = outcome
+        .screenshot
+        .as_ref()
+        .expect("screenshot bytes requested and captured");
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "must be a PNG");
+
+    // Summary: token-lean digest, no styles.
+    let mut buf = Vec::new();
+    let summary_cfg = OutputConfig {
+        format: OutputFormat::Summary,
+        ..config.output.clone()
+    };
+    write_output(&mut buf, &outcome, &summary_cfg)?;
+    let text = String::from_utf8(buf).expect("utf8");
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 2, "root + children, got {lines:?}");
+    let root: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(root["tag"], "DIV");
+    assert!(root.get("styles").is_none(), "summary omits styles");
+    assert_eq!(root["rect"]["width"].as_f64(), Some(332.0));
     Ok(())
 }

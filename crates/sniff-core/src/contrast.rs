@@ -484,6 +484,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -523,6 +524,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -551,6 +553,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -594,6 +597,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -622,6 +626,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Visual,
@@ -649,6 +654,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Visual,
@@ -690,6 +696,7 @@ mod tests {
             contrast: None,
             effective_background: Some("#f8f9fa".into()),
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -727,6 +734,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Typography,
@@ -755,6 +763,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![(
                     crate::properties::StyleCategory::Visual,

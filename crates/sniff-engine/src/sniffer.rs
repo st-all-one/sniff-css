@@ -255,6 +255,17 @@ where
         outcome.ax_tree = capture.tree;
     }
 
+    if config.screenshot {
+        // Capture the final page state (post-stabilize/post-actions) as a
+        // PNG; the decoded bytes are surfaced to the caller to persist.
+        outcome.screenshot = Some(
+            session
+                .capture_screenshot(config.screenshot_full_page)
+                .await
+                .map_err(|e| SniffError::Cdp(e.to_string()))?,
+        );
+    }
+
     let nodes: usize = outcome.snapshots.iter().map(|s| s.node_count()).sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)

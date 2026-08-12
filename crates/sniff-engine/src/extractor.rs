@@ -480,6 +480,15 @@ const EXTRACT_JS: &str = r#"
     if (opts.includeContrast) {
       node.effectiveBackground = effectiveBackground(el);
     }
+    if (opts.attributes && opts.attributes.length) {
+      const attrs = {};
+      let any = false;
+      for (let i = 0; i < opts.attributes.length; i++) {
+        const v = el.getAttribute(opts.attributes[i]);
+        if (v !== null) { attrs[opts.attributes[i]] = v; any = true; }
+      }
+      if (any) node.attributes = attrs;
+    }
     node.styles = buildStyles(el, cs);
     if (pseudo.length) {
       node.pseudo = buildPseudo(el);
@@ -534,6 +543,8 @@ pub struct SniffOutcome {
     /// changed and where. `None` when there were no actions or `effects`
     /// is disabled.
     pub actions: Option<Value>,
+    /// Decoded PNG bytes of the page when `config.screenshot` is set.
+    pub screenshot: Option<Vec<u8>>,
 }
 
 /// Run the extraction pass and convert the returned JSON to snapshots.
@@ -570,6 +581,7 @@ fn build_args(config: &SniffConfig) -> Value {
         "normalizeColors": config.output.normalize_colors,
         "customProps": config.include_custom_properties,
         "stableKey": config.stable_key,
+        "attributes": config.attributes,
     });
     json!({
         "selector": config.selector,
@@ -659,6 +671,7 @@ fn parse_results(value: &Value, _config: &SniffConfig) -> SniffResult<SniffOutco
         global_css_variables,
         ax_tree: None,
         actions: None,
+        screenshot: None,
     })
 }
 
@@ -692,6 +705,11 @@ fn parse_node(v: &Value) -> ElementSnapshot {
         aria: v.get("aria").map(parse_aria),
         contrast: None,
         ax: None,
+        attributes: v.get("attributes").and_then(Value::as_object).map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        }),
         styles: parse_styles(v.get("styles").unwrap_or(&Value::Null)),
         pseudo: v
             .get("pseudo")

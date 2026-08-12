@@ -276,6 +276,7 @@ mod tests {
             aria: None,
             contrast: None,
             ax: None,
+            attributes: None,
             children: vec![],
         }
     }

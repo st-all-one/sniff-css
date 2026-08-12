@@ -16,13 +16,60 @@ use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
 use crate::extractor::SniffOutcome;
 
+/// Curated property allow-list for the summary (`--summary`/`--output slim`)
+/// digest: the props that answer "what does this look like / is it laid out"
+/// without the full computed-style payload.
+const SLIM_PROPS: &[&str] = &[
+    "display",
+    "position",
+    "z-index",
+    "flex-direction",
+    "flex-wrap",
+    "gap",
+    "align-items",
+    "justify-content",
+    "width",
+    "height",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "padding",
+    "padding-top",
+    "padding-bottom",
+    "margin",
+    "border-radius",
+    "box-sizing",
+    "overflow-x",
+    "overflow-y",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "line-height",
+    "text-align",
+    "color",
+    "background-color",
+    "opacity",
+    "visibility",
+    "transform",
+    "transform-origin",
+    "cursor",
+    "pointer-events",
+    "animation-name",
+    "animation-duration",
+    "transition-property",
+    "transition-duration",
+];
+
 /// Render a snapshot (with its subtree) as a JSON object.
 pub fn snapshot_to_json(
     snap: &ElementSnapshot,
     config: &OutputConfig,
     global_vars: Option<&HashMap<String, String>>,
+    defaults: Option<&Map<String, Value>>,
 ) -> Value {
-    node_to_json(snap, config, global_vars, true)
+    node_to_json(snap, config, global_vars, defaults, true)
 }
 
 /// Render a single node as a JSON object; when `tree`, includes children.
@@ -30,6 +77,7 @@ fn node_to_json(
     snap: &ElementSnapshot,
     config: &OutputConfig,
     global_vars: Option<&HashMap<String, String>>,
+    defaults: Option<&Map<String, Value>>,
     tree: bool,
 ) -> Value {
     let mut obj = Map::new();
@@ -90,6 +138,19 @@ fn node_to_json(
     if let Some(ax) = &snap.ax {
         obj.insert("ax".into(), serde_json::to_value(ax).unwrap_or(Value::Null));
     }
+    if let Some(attrs) = &snap.attributes
+        && !attrs.is_empty()
+    {
+        obj.insert(
+            "attrs".into(),
+            Value::Object(
+                attrs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                    .collect(),
+            ),
+        );
+    }
     let pseudo_value = if snap.pseudo.is_empty() {
         None
     } else {
@@ -112,6 +173,18 @@ fn node_to_json(
             Value::String(style_hash(&styles_value, pseudo_value.as_ref())),
         );
     }
+    let styles_value = if let Some(defaults) = defaults
+        && config.compact
+        && config.group_by_category
+    {
+        let mut sobj = styles_value;
+        if let Some(m) = sobj.as_object_mut() {
+            dedup_styles(m, defaults);
+        }
+        sobj
+    } else {
+        styles_value
+    };
     obj.insert("styles".into(), styles_value);
     if let Some(pseudo) = pseudo_value {
         obj.insert("pseudo".into(), pseudo);
@@ -122,7 +195,7 @@ fn node_to_json(
             Value::Array(
                 snap.children
                     .iter()
-                    .map(|c| node_to_json(c, config, global_vars, true))
+                    .map(|c| node_to_json(c, config, global_vars, defaults, true))
                     .collect(),
             ),
         );
@@ -447,16 +520,24 @@ pub fn write_output<W: Write>(
         .global_css_variables
         .as_ref()
         .map(|vars| vars.iter().cloned().collect::<HashMap<_, _>>());
+    // Compact constant-prop dedup: props whose value is identical across
+    // every captured node are hoisted once to `__meta.style_defaults` and
+    // omitted from each node's `styles`, slashing the JSONL by ~80% while
+    // the diff/check tools merge the defaults back in (lossless). Only for
+    // the grouped tree formats where the emission is per-category.
+    let defaults = if config.compact && config.group_by_category {
+        compute_style_defaults(outcome, config)
+    } else {
+        Map::new()
+    };
 
     match config.format {
         OutputFormat::JsonLines => {
-            if config.compact {
-                emit_meta_line(writer, &global)?;
-            }
+            emit_meta_line(writer, &global, &defaults)?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             for snap in &outcome.snapshots {
-                let json = snapshot_to_json(snap, config, global.as_ref());
+                let json = snapshot_to_json(snap, config, global.as_ref(), Some(&defaults));
                 writeln!(
                     writer,
                     "{}",
@@ -466,9 +547,7 @@ pub fn write_output<W: Write>(
             }
         }
         OutputFormat::JsonLinesFlat => {
-            if config.compact {
-                emit_meta_line(writer, &global)?;
-            }
+            emit_meta_line(writer, &global, &defaults)?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             let mut nodes = Vec::new();
@@ -476,7 +555,7 @@ pub fn write_output<W: Write>(
                 flatten(snap, &mut nodes);
             }
             for node in nodes {
-                let json = node_to_json(node, config, global.as_ref(), false);
+                let json = node_to_json(node, config, global.as_ref(), Some(&defaults), false);
                 writeln!(
                     writer,
                     "{}",
@@ -490,9 +569,12 @@ pub fn write_output<W: Write>(
             let array: Vec<Value> = outcome
                 .snapshots
                 .iter()
-                .map(|s| snapshot_to_json(s, config, global.as_ref()))
+                .map(|s| snapshot_to_json(s, config, global.as_ref(), Some(&defaults)))
                 .collect();
-            let document = if compact_meta || outcome.ax_tree.is_some() || outcome.actions.is_some()
+            let document = if compact_meta
+                || !defaults.is_empty()
+                || outcome.ax_tree.is_some()
+                || outcome.actions.is_some()
             {
                 let mut root = Map::new();
                 let mut meta = Map::new();
@@ -500,6 +582,9 @@ pub fn write_output<W: Write>(
                     && !vars.is_empty()
                 {
                     meta.insert("css_variables".into(), vars_to_json(vars));
+                }
+                if !defaults.is_empty() {
+                    meta.insert("style_defaults".into(), Value::Object(defaults.clone()));
                 }
                 if !meta.is_empty() {
                     root.insert("__meta".into(), Value::Object(meta));
@@ -522,9 +607,258 @@ pub fn write_output<W: Write>(
             }
             writeln!(writer).map_err(io_err)?;
         }
+        OutputFormat::Summary => {
+            // Token-lean digest with the diagnostic facets an AI needs:
+            // structural skeleton (tag/selector/path/depth/rect/visible) +
+            // a curated css subset + compact contrast + compact aria. The
+            // css subset shares the compact constant-prop dedup: page-wide
+            // constants are hoisted to a leading `__meta` line
+            // (`style_defaults`) and omitted per node.
+            let mut nodes = Vec::new();
+            for snap in &outcome.snapshots {
+                flatten(snap, &mut nodes);
+            }
+            let mut per_node_css: Vec<Map<String, Value>> = Vec::new();
+            for node in &nodes {
+                let css = slim_css(&node.styles, config);
+                if !css.is_empty() {
+                    per_node_css.push(css);
+                }
+            }
+            let css_defaults = if config.compact && per_node_css.len() >= 2 {
+                flat_defaults(&per_node_css)
+            } else {
+                Map::new()
+            };
+            if !css_defaults.is_empty() {
+                let meta_line = serde_json::to_string(&Value::Object({
+                    let mut m = Map::new();
+                    let mut meta = Map::new();
+                    meta.insert("style_defaults".into(), Value::Object(css_defaults.clone()));
+                    m.insert("__meta".into(), Value::Object(meta));
+                    m
+                }))
+                .map_err(SniffError::from)?;
+                writeln!(writer, "{meta_line}").map_err(io_err)?;
+            }
+            for node in nodes {
+                let mut obj = Map::new();
+                obj.insert("id".into(), Value::from(node.id));
+                if let Some(pid) = node.parent_id {
+                    obj.insert("parent_id".into(), Value::from(pid));
+                }
+                obj.insert("tag".into(), Value::String(node.tag.clone()));
+                obj.insert("selector".into(), Value::String(node.selector.clone()));
+                obj.insert("path".into(), Value::String(node.path.clone()));
+                obj.insert("depth".into(), Value::from(node.depth));
+                if let Some(rect) = node.rect {
+                    obj.insert(
+                        "rect".into(),
+                        json_rect(rect.x, rect.y, rect.width, rect.height),
+                    );
+                }
+                if let Some(noticeable) = &node.noticeable {
+                    obj.insert("visible".into(), Value::Bool(noticeable.display_visible));
+                    obj.insert(
+                        "grade".into(),
+                        serde_json::to_value(noticeable.accessibility_grade).unwrap_or(Value::Null),
+                    );
+                }
+                if config.include_contrast
+                    && let Some(c) = &node.contrast
+                {
+                    let mut cc = Map::new();
+                    cc.insert("ratio".into(), Value::from(c.ratio));
+                    cc.insert(
+                        "aa".into(),
+                        serde_json::to_value(c.aa).unwrap_or(Value::Null),
+                    );
+                    cc.insert(
+                        "aaa".into(),
+                        serde_json::to_value(c.aaa).unwrap_or(Value::Null),
+                    );
+                    obj.insert("contrast".into(), Value::Object(cc));
+                }
+                if let Some(a) = &node.aria {
+                    let mut ac = Map::new();
+                    ac.insert(
+                        "role".into(),
+                        a.role
+                            .as_ref()
+                            .map(|r| Value::String(r.clone()))
+                            .unwrap_or(Value::Null),
+                    );
+                    ac.insert(
+                        "name".into(),
+                        a.name
+                            .as_ref()
+                            .map(|n| Value::String(n.clone()))
+                            .unwrap_or(Value::Null),
+                    );
+                    ac.insert("focusable".into(), Value::Bool(a.focusable));
+                    obj.insert("aria".into(), Value::Object(ac));
+                }
+                let mut css = slim_css(&node.styles, config);
+                if !css_defaults.is_empty() {
+                    dedup_flat(&mut css, &css_defaults);
+                }
+                if !css.is_empty() {
+                    obj.insert("css".into(), Value::Object(css));
+                }
+                writeln!(
+                    writer,
+                    "{}",
+                    serde_json::to_string(&Value::Object(obj)).map_err(SniffError::from)?
+                )
+                .map_err(io_err)?;
+            }
+        }
     }
     writer.flush().map_err(io_err)?;
     Ok(())
+}
+
+/// Extract the curated `css` subset for the summary digest: the SLIM_PROPS
+/// allow-list values present in the (compacted) computed styles.
+fn slim_css(styles: &ComputedStyles, config: &OutputConfig) -> Map<String, Value> {
+    let mut css = Map::new();
+    for (category, props) in &styles.groups {
+        if matches!(*category, StyleCategory::Variables | StyleCategory::Custom) {
+            continue;
+        }
+        let filtered = if config.compact {
+            compact_group(*category, props)
+        } else {
+            props.clone()
+        };
+        for p in filtered {
+            if SLIM_PROPS.contains(&p.name.as_str()) {
+                css.insert(p.name, Value::String(p.value));
+            }
+        }
+    }
+    css
+}
+
+/// Per-node compacted styles as `category -> {prop -> value}` (excluding the
+/// variable/custom groups, which are already scoped globally).
+fn compacted_styles(styles: &ComputedStyles, config: &OutputConfig) -> Map<String, Value> {
+    let mut out = Map::new();
+    for (category, props) in &styles.groups {
+        if matches!(*category, StyleCategory::Variables | StyleCategory::Custom) {
+            continue;
+        }
+        let filtered = if config.compact {
+            compact_group(*category, props)
+        } else {
+            props.clone()
+        };
+        if filtered.is_empty() {
+            continue;
+        }
+        let mut m = Map::new();
+        for p in filtered {
+            m.insert(p.name, Value::String(p.value));
+        }
+        // Merge duplicate category groups (defensive: the extractor never
+        // emits two groups of the same category, but the map insert below
+        // must not silently drop props if it ever does).
+        match out.get_mut(category.key()) {
+            Some(Value::Object(existing)) => {
+                for (k, v) in m {
+                    existing.insert(k, v);
+                }
+            }
+            _ => {
+                out.insert(category.key().to_string(), Value::Object(m));
+            }
+        }
+    }
+    out
+}
+
+/// Compute the compact constant-prop defaults across the whole tree: a
+/// `{category: {prop: value}}` map of props whose value is identical in every
+/// captured node, so the emitter can hoist them once and diff can merge them
+/// back losslessly.
+fn compute_style_defaults(outcome: &SniffOutcome, config: &OutputConfig) -> Map<String, Value> {
+    let mut nodes: Vec<&ElementSnapshot> = Vec::new();
+    for snap in &outcome.snapshots {
+        flatten(snap, &mut nodes);
+    }
+    if nodes.len() < 2 {
+        return Map::new();
+    }
+    let per_node: Vec<Map<String, Value>> = nodes
+        .iter()
+        .map(|n| compacted_styles(&n.styles, config))
+        .collect();
+    category_defaults(&per_node)
+}
+
+/// Hoist props that share an identical value across every node, grouped by
+/// category: returns `{category: {prop: value}}`.
+fn category_defaults(per_node: &[Map<String, Value>]) -> Map<String, Value> {
+    let first = &per_node[0];
+    let mut defaults: Map<String, Value> = Map::new();
+    for (cat, props) in first {
+        let Some(pmap) = props.as_object() else {
+            continue;
+        };
+        let cat_defaults: Map<String, Value> = pmap
+            .iter()
+            .filter(|(prop, val)| {
+                per_node
+                    .iter()
+                    .all(|m| m.get(cat).and_then(|c| c.get(*prop)) == Some(*val))
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !cat_defaults.is_empty() {
+            defaults.insert(cat.clone(), Value::Object(cat_defaults));
+        }
+    }
+    defaults
+}
+
+/// Hoist props that share an identical value across every node in the flat
+/// summary `css` subset: returns `{prop: value}`.
+fn flat_defaults(per_node: &[Map<String, Value>]) -> Map<String, Value> {
+    let first = &per_node[0];
+    first
+        .iter()
+        .filter(|(prop, val)| per_node.iter().all(|m| m.get(*prop) == Some(*val)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Remove hoisted default props from a node's serialized `styles` object
+/// (`category -> {prop: value}`), returning the deduplicated value. Props
+/// whose value equals the global default are omitted (reconstructed by the
+/// diff/check tools merging `__meta.style_defaults` back in).
+fn dedup_styles(value: &mut Map<String, Value>, defaults: &Map<String, Value>) {
+    for (cat, cat_defaults) in defaults {
+        let Some(cat_obj) = value.get_mut(cat).and_then(|v| v.as_object_mut()) else {
+            continue;
+        };
+        let Some(dmap) = cat_defaults.as_object() else {
+            continue;
+        };
+        for (prop, dval) in dmap {
+            if cat_obj.get(prop) == Some(dval) {
+                cat_obj.remove(prop);
+            }
+        }
+    }
+}
+
+/// Remove hoisted default props from the flat summary `css` subset.
+fn dedup_flat(value: &mut Map<String, Value>, defaults: &Map<String, Value>) {
+    for (prop, dval) in defaults {
+        if value.get(prop) == Some(dval) {
+            value.remove(prop);
+        }
+    }
 }
 
 fn vars_to_json(vars: &HashMap<String, String>) -> Value {
@@ -539,25 +873,33 @@ fn vars_to_json(vars: &HashMap<String, String>) -> Value {
     )
 }
 
-/// In compact mode with custom properties, emit the global `css_variables`
-/// map once as a `__meta` line so descendant nodes can omit it.
+/// In compact mode, emit the global `css_variables` map and the compact
+/// constant-prop `style_defaults` once as a `__meta` line so descendant
+/// nodes can omit them.
 fn emit_meta_line<W: Write>(
     writer: &mut W,
     global: &Option<HashMap<String, String>>,
+    defaults: &Map<String, Value>,
 ) -> SniffResult<()> {
+    let mut meta = Map::new();
     if let Some(vars) = global
         && !vars.is_empty()
     {
-        let mut meta = Map::new();
         meta.insert("css_variables".into(), vars_to_json(vars));
-        let line = serde_json::to_string(&Value::Object({
-            let mut m = Map::new();
-            m.insert("__meta".into(), Value::Object(meta));
-            m
-        }))
-        .map_err(SniffError::from)?;
-        writeln!(writer, "{line}").map_err(io_err)?;
     }
+    if !defaults.is_empty() {
+        meta.insert("style_defaults".into(), Value::Object(defaults.clone()));
+    }
+    if meta.is_empty() {
+        return Ok(());
+    }
+    let line = serde_json::to_string(&Value::Object({
+        let mut m = Map::new();
+        m.insert("__meta".into(), Value::Object(meta));
+        m
+    }))
+    .map_err(SniffError::from)?;
+    writeln!(writer, "{line}").map_err(io_err)?;
     Ok(())
 }
 
@@ -636,6 +978,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles {
                 groups: vec![
                     (
@@ -671,7 +1014,7 @@ mod tests {
             compact: false,
             ..OutputConfig::default()
         };
-        let json = snapshot_to_json(&snap, &cfg, None);
+        let json = snapshot_to_json(&snap, &cfg, None, None);
         assert_eq!(json["id"], 1);
         assert_eq!(json["tag"], "SPAN");
         assert_eq!(json["depth"], 1);
@@ -686,7 +1029,7 @@ mod tests {
             compact: true,
             ..OutputConfig::default()
         };
-        let json = snapshot_to_json(&snap, &cfg, None);
+        let json = snapshot_to_json(&snap, &cfg, None, None);
         let box_model = &json["styles"]["box_model"];
         // Logical duplicates of physical ones are removed.
         assert!(box_model.get("margin-block-start").is_none());
@@ -711,7 +1054,7 @@ mod tests {
             compact: true,
             ..OutputConfig::default()
         };
-        let json = snapshot_to_json(&snap, &cfg, Some(&global));
+        let json = snapshot_to_json(&snap, &cfg, Some(&global), None);
         let vars = &json["styles"]["css_variables"];
         // Inherited value equal to global is dropped; override stays.
         assert!(vars.get("--tenant-primary").is_none());
@@ -730,6 +1073,7 @@ mod tests {
             global_css_variables: global,
             ax_tree: None,
             actions: None,
+            screenshot: None,
         };
 
         let cfg = OutputConfig {
@@ -764,6 +1108,7 @@ mod tests {
             global_css_variables: global,
             ax_tree: None,
             actions: None,
+            screenshot: None,
         };
         let cfg = OutputConfig {
             compact: true,
@@ -802,6 +1147,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![],
@@ -813,6 +1159,7 @@ mod tests {
             global_css_variables: None,
             ax_tree: None,
             actions: None,
+            screenshot: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::JsonLinesFlat,
@@ -832,12 +1179,219 @@ mod tests {
     }
 
     #[test]
+    fn summary_emits_token_lean_structural_digest() {
+        let child = ElementSnapshot {
+            id: 2,
+            parent_id: Some(1),
+            tag: "B".into(),
+            selector: "span > b".into(),
+            path: "body > span.icon > b".into(),
+            depth: 2,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            attributes: None,
+            styles: ComputedStyles::default(),
+            pseudo: vec![],
+            children: vec![],
+        };
+        let mut snap = sample_snapshot();
+        snap.aria = Some(sniff_core::types::AriaInfo {
+            role: Some("button".into()),
+            name: Some("Salvar".into()),
+            focusable: true,
+            ..Default::default()
+        });
+        snap.contrast = Some(sniff_core::types::ContrastInfo {
+            ratio: 5.17,
+            foreground: "#2563eb".into(),
+            background: "#ffffff".into(),
+            large: false,
+            aa: sniff_core::types::TriState::Pass,
+            aaa: sniff_core::types::TriState::Fail,
+            unknown_reason: None,
+        });
+        snap.children.push(child);
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![snap],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let cfg = OutputConfig {
+            format: OutputFormat::Summary,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let root: Value = serde_json::from_str(lines[0]).unwrap();
+        let child_v: Value = serde_json::from_str(lines[1]).unwrap();
+        // Structural fields: tag/selector/path/depth/rect + visible/grade.
+        assert_eq!(root["tag"], "SPAN");
+        assert_eq!(root["selector"], "span.icon");
+        assert_eq!(root["path"], "body > button.btn > span.icon");
+        assert_eq!(root["depth"], 1);
+        assert_eq!(root["visible"], true);
+        assert_eq!(root["grade"], "AAA");
+        assert_eq!(root["rect"]["width"].as_f64(), Some(32.0));
+        assert!(
+            root.get("styles").is_none(),
+            "summary must omit full styles"
+        );
+        // Diagnostic facets: curated css subset + compact contrast + aria.
+        assert_eq!(root["css"]["font-size"], "16px");
+        assert_eq!(root["css"]["width"], "32px");
+        assert_eq!(root["contrast"]["ratio"], 5.17);
+        assert_eq!(root["contrast"]["aa"], "pass");
+        assert_eq!(root["aria"]["role"], "button");
+        assert_eq!(root["aria"]["name"], "Salvar");
+        assert_eq!(root["aria"]["focusable"], true);
+        assert_eq!(child_v["parent_id"], 1);
+        assert_eq!(child_v["tag"], "B");
+    }
+
+    #[test]
+    fn compact_dedups_constant_props_to_meta_and_diff_restores_them() {
+        // Two siblings sharing identical typography: font-size/font-weight
+        // must be hoisted to __meta.style_defaults and omitted per node.
+        let mk = |id: u64, width: &str, height: &str| ElementSnapshot {
+            id,
+            parent_id: Some(1),
+            tag: "DIV".into(),
+            selector: format!("div.card:nth-child({id})"),
+            path: format!("body > main > div.card#{id}"),
+            depth: 1,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            attributes: None,
+            styles: ComputedStyles {
+                groups: vec![
+                    (
+                        StyleCategory::BoxModel,
+                        vec![cp("width", width), cp("height", height)],
+                    ),
+                    (
+                        StyleCategory::Typography,
+                        vec![cp("font-size", "16px"), cp("font-weight", "400")],
+                    ),
+                ],
+            },
+            pseudo: vec![],
+            children: vec![],
+        };
+        let mut root = ElementSnapshot {
+            id: 1,
+            parent_id: None,
+            tag: "MAIN".into(),
+            selector: "main".into(),
+            path: "body > main".into(),
+            depth: 0,
+            rect: None,
+            metrics: None,
+            noticeable: None,
+            aria: None,
+            effective_background: None,
+            contrast: None,
+            ax: None,
+            attributes: None,
+            styles: ComputedStyles {
+                groups: vec![(
+                    StyleCategory::Typography,
+                    vec![cp("font-size", "16px"), cp("font-weight", "400")],
+                )],
+            },
+            pseudo: vec![],
+            children: vec![mk(2, "100px", "50px"), mk(3, "200px", "80px")],
+        };
+        // The root shares the same font-size/font-weight; only width/height
+        // vary per node, so they are the sole per-node props.
+        root.children[0]
+            .styles
+            .groups
+            .push((StyleCategory::Typography, vec![cp("text-align", "center")]));
+
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![root],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let cfg = OutputConfig {
+            compact: true,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let meta: Value = serde_json::from_str(lines[0]).unwrap();
+        let defaults = &meta["__meta"]["style_defaults"];
+        assert!(
+            defaults.get("typography").is_some(),
+            "constant typography props must be hoisted, got {defaults}"
+        );
+        assert_eq!(defaults["typography"]["font-size"], "16px");
+        assert_eq!(defaults["typography"]["font-weight"], "400");
+
+        let tree: Value = serde_json::from_str(lines[1]).unwrap();
+        // The root node omits the hoisted font props.
+        assert!(tree["styles"]["typography"].get("font-size").is_none());
+        // A child with a differing value keeps it inline (dedup is exact).
+        assert_eq!(
+            tree["children"][0]["styles"]["typography"]["text-align"],
+            "center"
+        );
+        assert_eq!(tree["children"][0]["styles"]["box_model"]["width"], "100px");
+        // The hash still covers the full styles (font-size included).
+        assert_eq!(tree["computed_style_hash"].as_str().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn compact_single_node_keeps_styles_inline() {
+        // With a lone node there is nothing constant to hoist — styles stay.
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let cfg = OutputConfig {
+            compact: true,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        // No __meta style_defaults line: single node → nothing hoisted.
+        assert!(lines.len() == 1 || !lines[0].contains("style_defaults"));
+        let node: Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
+        assert_eq!(node["styles"]["typography"]["font-size"], "16px");
+    }
+
+    #[test]
     fn json_array_wraps_global_meta_in_compact_mode() {
         let outcome = crate::extractor::SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: Some(vec![("--x".to_string(), "1".to_string())]),
             ax_tree: None,
             actions: None,
+            screenshot: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -859,7 +1413,7 @@ mod tests {
             accessibility_grade: AccessibilityGrade::Aa,
         });
         let cfg = OutputConfig::default();
-        let json = snapshot_to_json(&snap, &cfg, None);
+        let json = snapshot_to_json(&snap, &cfg, None, None);
         assert_eq!(json["is_user_noticeable"]["display_visible"], true);
         assert_eq!(json["is_user_noticeable"]["accessibility_grade"], "AA");
         assert_eq!(json["computed_style_hash"].as_str().unwrap().len(), 16);
@@ -877,7 +1431,7 @@ mod tests {
             include_visibility: false,
             ..OutputConfig::default()
         };
-        let json = snapshot_to_json(&snap, &cfg, None);
+        let json = snapshot_to_json(&snap, &cfg, None, None);
         assert!(json.get("computed_style_hash").is_none());
         assert!(json.get("is_user_noticeable").is_none());
     }
@@ -886,8 +1440,8 @@ mod tests {
     fn style_hash_is_deterministic_and_sensitive_to_changes() {
         let a = sample_snapshot();
         let cfg = OutputConfig::default();
-        let h1 = snapshot_to_json(&a, &cfg, None)["computed_style_hash"].clone();
-        let h2 = snapshot_to_json(&a, &cfg, None)["computed_style_hash"].clone();
+        let h1 = snapshot_to_json(&a, &cfg, None, None)["computed_style_hash"].clone();
+        let h2 = snapshot_to_json(&a, &cfg, None, None)["computed_style_hash"].clone();
         assert_eq!(h1, h2, "identical styles must hash identically");
 
         let mut b = a;
@@ -897,7 +1451,7 @@ mod tests {
                 vec![cp("width", "33px"), cp("padding-top", "8px")],
             )],
         };
-        let hb = snapshot_to_json(&b, &cfg, None)["computed_style_hash"].clone();
+        let hb = snapshot_to_json(&b, &cfg, None, None)["computed_style_hash"].clone();
         assert_ne!(h1, hb, "style change must change the hash");
 
         let mut c = sample_snapshot();
@@ -907,7 +1461,7 @@ mod tests {
                 groups: vec![(StyleCategory::BoxModel, vec![cp("content", "\"x\"")])],
             },
         });
-        let hc = snapshot_to_json(&c, &cfg, None)["computed_style_hash"].clone();
+        let hc = snapshot_to_json(&c, &cfg, None, None)["computed_style_hash"].clone();
         assert_ne!(h1, hc, "pseudo styles must be covered by the hash");
     }
 
@@ -921,6 +1475,7 @@ mod tests {
                 ..OutputConfig::default()
             },
             None,
+            None,
         );
         let compact = snapshot_to_json(
             &snap,
@@ -928,6 +1483,7 @@ mod tests {
                 compact: true,
                 ..OutputConfig::default()
             },
+            None,
             None,
         );
         assert_ne!(full["computed_style_hash"], compact["computed_style_hash"]);
@@ -964,7 +1520,7 @@ mod tests {
             include_ax: true,
             ..OutputConfig::default()
         };
-        let json = snapshot_to_json(&snap, &cfg, None);
+        let json = snapshot_to_json(&snap, &cfg, None, None);
         assert_eq!(json["aria"]["role"], "button");
         assert_eq!(json["aria"]["focusable"], true);
         assert_eq!(json["contrast"]["ratio"], 4.54);
@@ -983,6 +1539,7 @@ mod tests {
                 {"role": "group", "children": [{"role": "button"}]}
             ])),
             actions: None,
+            screenshot: None,
         };
         let cfg = OutputConfig::default();
         let mut buf = Vec::new();
@@ -1000,6 +1557,7 @@ mod tests {
             global_css_variables: None,
             ax_tree: Some(serde_json::json!([{"role": "main"}])),
             actions: None,
+            screenshot: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -1030,6 +1588,7 @@ mod tests {
                     "changed": []
                 }
             ])),
+            screenshot: None,
         };
         let cfg = OutputConfig::default();
         let mut buf = Vec::new();
@@ -1054,6 +1613,7 @@ mod tests {
             global_css_variables: None,
             ax_tree: None,
             actions: Some(serde_json::json!([{"index": 0, "effect": "revealed"}])),
+            screenshot: None,
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,

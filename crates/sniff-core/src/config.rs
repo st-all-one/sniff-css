@@ -36,6 +36,11 @@ pub struct SniffConfig {
     /// (e.g. `data-testid`) over the DOM `id` as the stable anchor, so
     /// the output can be matched across deploys that change generated ids.
     pub stable_key: Option<String>,
+    /// Extra DOM attributes to capture verbatim per node (`getAttribute`),
+    /// e.g. `["name"]` to validate form field reindexing
+    /// (`name="parameters[items][0][title]"`). Emitted under each node's
+    /// `attrs` map. Opt-in; empty by default.
+    pub attributes: Vec<String>,
     /// Freeze animations and transitions before capture: pauses running
     /// animations, injects `animation/transition: none !important` and
     /// emulates `prefers-reduced-motion: reduce`, making the captured
@@ -60,6 +65,14 @@ pub struct SniffConfig {
     /// Cap on how many appeared/removed/changed elements each action entry
     /// in `__actions` reports (largest areas first).
     pub effects_limit: usize,
+    /// Capture a PNG of the page (`Page.captureScreenshot`) at the end of
+    /// the pipeline, after stabilization, waits and interactions. The
+    /// decoded bytes land in `SniffOutcome::screenshot`; the caller decides
+    /// where to persist them. Deterministic snapshots are unaffected.
+    pub screenshot: bool,
+    /// When `screenshot` is set, capture the full scrollable document
+    /// instead of only the visible viewport.
+    pub screenshot_full_page: bool,
 }
 
 impl Default for SniffConfig {
@@ -82,6 +95,7 @@ impl Default for SniffConfig {
             // The AI-optimized default: capture design tokens too.
             include_custom_properties: true,
             stable_key: None,
+            attributes: Vec::new(),
             // Deterministic snapshots are the tool's contract: freeze
             // animations/transitions unless explicitly disabled.
             stabilize: true,
@@ -89,6 +103,8 @@ impl Default for SniffConfig {
             actions: Vec::new(),
             effects: true,
             effects_limit: 10,
+            screenshot: false,
+            screenshot_full_page: false,
         }
     }
 }
@@ -314,15 +330,26 @@ pub enum OutputFormat {
     JsonLinesFlat,
     /// A single JSON array.
     Json,
+    /// Token-lean per-node digest: one line per node with the structural
+    /// skeleton `{tag, selector, path, depth, rect, visible}` plus the
+    /// diagnostic facets an AI actually needs to answer "what does this
+    /// look like / is it accessible": a curated `css` subset (display,
+    /// position, colors, font-size/weight, overflow, ...), a compact
+    /// `contrast` (`{ratio, aa, aaa}`) and a compact `aria`
+    /// (`{role, name, focusable}`) — the intermediate fidelity between the
+    /// bare DOM skeleton and the full computed-style payload. Still ~10x
+    /// smaller than the full snapshot.
+    Summary,
 }
 
 impl OutputFormat {
-    /// Parse a CLI value (`jsonl`, `jsonl-flat`, `json`).
+    /// Parse a CLI value (`jsonl`, `jsonl-flat`, `json`, `summary`/`slim`).
     pub fn parse_cli(input: &str) -> Result<Self, SniffError> {
         match input.trim().to_ascii_lowercase().as_str() {
             "jsonl" | "ndjson" => Ok(Self::JsonLines),
             "jsonl-flat" | "ndjson-flat" => Ok(Self::JsonLinesFlat),
             "json" => Ok(Self::Json),
+            "summary" | "slim" => Ok(Self::Summary),
             other => Err(SniffError::InvalidOutputFormat(other.to_string())),
         }
     }
@@ -566,6 +593,10 @@ mod tests {
             OutputFormat::JsonLinesFlat
         );
         assert_eq!(OutputFormat::parse_cli("json").unwrap(), OutputFormat::Json);
+        assert_eq!(
+            OutputFormat::parse_cli("summary").unwrap(),
+            OutputFormat::Summary
+        );
         assert!(OutputFormat::parse_cli("yaml").is_err());
     }
 

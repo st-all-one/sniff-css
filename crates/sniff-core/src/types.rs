@@ -2,6 +2,7 @@
 
 use crate::properties::StyleCategory;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A computed style value for a single CSS property.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +99,10 @@ pub struct ElementSnapshot {
     /// captured via the CDP `Accessibility` domain. `None` when AX
     /// capture is disabled.
     pub ax: Option<AxInfo>,
+    /// Verbatim DOM attributes requested via `SniffConfig::attributes`
+    /// (e.g. `name`, `data-id`), captured in-page with `getAttribute`.
+    /// `None` when no attributes were requested or none matched.
+    pub attributes: Option<BTreeMap<String, String>>,
     /// Captured computed styles.
     pub styles: ComputedStyles,
     /// Styles captured for pseudo-elements (`::before`, ...).
@@ -282,6 +287,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![],
@@ -300,6 +306,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: ComputedStyles::default(),
             pseudo: vec![],
             children: vec![child],

@@ -3,8 +3,10 @@
 //! Parses the JSONL produced by `sniffCSS` into a lightweight
 //! [`DiffNode`] tree, accepting both `jsonl` (tree: one root per line with
 //! nested `children`) and `jsonl-flat` (one node per line with
-//! `id`/`parent_id`) inputs. `__meta` lines (global css_variables) are
-//! skipped.
+//! `id`/`parent_id`) inputs. `__meta` lines (global css_variables and the
+//! compact `style_defaults` hoist map) are parsed; `style_defaults` are
+//! merged back into every node's `styles` so the diff always sees the full
+//! effective values (lossless reconstruction of the compact dedup).
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -31,6 +33,7 @@ pub struct DiffNode {
     pub aria: Option<Value>,
     pub contrast: Option<Value>,
     pub ax: Option<Value>,
+    pub attributes: Option<Value>,
     pub children: Vec<DiffNode>,
 }
 
@@ -64,6 +67,7 @@ impl DiffNode {
             aria: v.get("aria").cloned(),
             contrast: v.get("contrast").cloned(),
             ax: v.get("ax").cloned(),
+            attributes: v.get("attrs").cloned(),
             children,
         }
     }
@@ -179,6 +183,7 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
     let mut roots: Vec<DiffNode> = Vec::new();
     let mut flat: Vec<(u64, Option<u64>, DiffNode)> = Vec::new();
     let mut mode: Option<bool> = None;
+    let mut style_defaults: Map<String, Value> = Map::new();
 
     for line in content.lines() {
         let line = line.trim();
@@ -186,8 +191,15 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             continue;
         }
         let v: Value = serde_json::from_str(line)?;
-        if v.get("__meta").is_some() || v.get("__ax_tree").is_some() || v.get("__actions").is_some()
-        {
+        if v.get("__meta").is_some() {
+            if let Some(meta) = v.get("__meta")
+                && let Some(d) = meta.get("style_defaults").and_then(Value::as_object)
+            {
+                style_defaults = d.clone();
+            }
+            continue;
+        }
+        if v.get("__ax_tree").is_some() || v.get("__actions").is_some() {
             continue;
         }
         let tree = v.get("children").is_some();
@@ -209,9 +221,43 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
     }
 
     if mode == Some(false) {
-        Ok(build_forest(&flat))
+        let mut forest = build_forest(&flat);
+        for root in &mut forest {
+            apply_style_defaults(root, &style_defaults);
+        }
+        Ok(forest)
     } else {
+        for root in &mut roots {
+            apply_style_defaults(root, &style_defaults);
+        }
         Ok(roots)
+    }
+}
+
+/// Merge the compact `__meta.style_defaults` map back into a node's styles:
+/// any `category.prop` that the emitter hoisted (omitted from the node) is
+/// restored with its global default value, so the diff/check sees the full
+/// effective styles. Node-specific values always win.
+fn apply_style_defaults(node: &mut DiffNode, defaults: &Map<String, Value>) {
+    if defaults.is_empty() {
+        return;
+    }
+    if let Some(styles) = node.styles.as_mut() {
+        for (category, cat_defaults) in defaults {
+            if let Some(entry) = cat_defaults.as_object() {
+                let cat = styles
+                    .entry(category.clone())
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if let Some(cat_map) = cat.as_object_mut() {
+                    for (prop, val) in entry {
+                        cat_map.entry(prop.clone()).or_insert_with(|| val.clone());
+                    }
+                }
+            }
+        }
+    }
+    for child in &mut node.children {
+        apply_style_defaults(child, defaults);
     }
 }
 
@@ -316,6 +362,50 @@ mod tests {
         assert_eq!(forest.len(), 1);
         assert_eq!(forest[0].children.len(), 1);
         assert_eq!(forest[0].children[0].id, 2);
+    }
+
+    #[test]
+    fn load_str_merges_style_defaults_back_into_nodes() {
+        let meta: Value = serde_json::json!({
+            "__meta": {
+                "css_variables": {"--x": "1"},
+                "style_defaults": {"typography": {"font-size": "16px", "font-weight": "400"}}
+            }
+        });
+        let node: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.card", "children": [
+                {"id": 2, "tag": "SPAN", "selector": "div.card > span",
+                 "styles": {"typography": {"font-weight": "700"}, "visual": {"opacity": "1"}},
+                 "children": []}
+            ],
+            "styles": {"typography": {"color": "#212529"}}
+        });
+        let content = format!("{}\n{}\n", line(&meta), line(&node));
+        let forest = load_str(&content).unwrap();
+        assert_eq!(forest.len(), 1);
+        // Hoisted defaults are merged into the parent's styles.
+        let parent = &forest[0].styles.as_ref().unwrap();
+        assert_eq!(parent["typography"]["font-size"], "16px");
+        assert_eq!(parent["typography"]["font-weight"], "400");
+        assert_eq!(parent["typography"]["color"], "#212529");
+        // A node-specific value wins over the default.
+        let child = &forest[0].children[0].styles.as_ref().unwrap();
+        assert_eq!(child["typography"]["font-weight"], "700");
+        assert_eq!(child["typography"]["font-size"], "16px");
+        assert_eq!(child["visual"]["opacity"], "1");
+    }
+
+    #[test]
+    fn load_str_without_defaults_leaves_styles_untouched() {
+        let node: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.card",
+            "styles": {"typography": {"color": "#212529"}}
+        });
+        let content = line(&node);
+        let forest = load_str(&content).unwrap();
+        let styles = forest[0].styles.as_ref().unwrap();
+        assert_eq!(styles["typography"]["color"], "#212529");
+        assert!(styles["typography"].get("font-size").is_none());
     }
 
     #[test]

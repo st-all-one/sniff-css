@@ -9,12 +9,12 @@
 # o que compila do fonte no stage `builder` (com a toolchain Rust embarcada).
 #
 # Variáveis:
-#   ARG VERSION           tag do release (ex.: v0.2.1) — default latest
+#   ARG VERSION           tag do release (ex.: v0.3.0) — default latest
 #   ARG TARGETARCH        definido pelo buildx (amd64/arm64)
 #   ARG BUILD_FROM_SOURCE 0 (download do Release) ou 1 (build do fonte)
 
 # ── Stage 1a: build do fonte (usado só quando BUILD_FROM_SOURCE=1) ──────────
-FROM rust:1.97-bookworm AS builder
+FROM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS builder
 
 ARG BUILD_FROM_SOURCE=0
 WORKDIR /src
@@ -36,7 +36,7 @@ RUN if [ "${BUILD_FROM_SOURCE}" = "1" ]; then \
 # ── Stage 1b: fonte de verdade dos binários ─────────────────────────────────
 # Se BUILD_FROM_SOURCE=1, usa o que o builder compilou. Caso contrário baixa
 # os binários do GitHub Release e verifica o checksum SHA-256.
-FROM alpine:3.20 AS downloader
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS downloader
 
 ARG BUILD_FROM_SOURCE=0
 ARG VERSION=latest
@@ -77,7 +77,7 @@ RUN if [ "${BUILD_FROM_SOURCE}" = "1" ]; then \
     fi
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM lscr.io/linuxserver/chromium:latest@sha256:348379fe0ff2a8d96d1085c568936730f7ae60b8d354fc728848164298fe18c8
+FROM lscr.io/linuxserver/chromium:version-e8713bf7@sha256:348379fe0ff2a8d96d1085c568936730f7ae60b8d354fc728848164298fe18c8
 
 # Binários reais fora do caminho; /usr/local/bin tem os wait-wrappers.
 COPY --from=downloader /out/sniffCSS        /opt/sniffcss/bin/sniffCSS

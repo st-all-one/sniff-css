@@ -90,9 +90,39 @@ pub struct Cli {
     #[arg(long, action = clap::ArgAction::Append)]
     pub exclude: Vec<String>,
 
-    /// Output format: jsonl (default) or json.
-    #[arg(long, default_value = "jsonl")]
+    /// Output format: summary (default), jsonl, jsonl-flat or json.
+    #[arg(long, default_value = "summary")]
     pub output: String,
+
+    /// Shorthand for `--output summary`: emit the intermediate per-node
+    /// digest (structural skeleton + curated css subset + contrast + aria)
+    /// instead of the full snapshot. This is the default.
+    #[arg(long, default_value_t = false)]
+    pub summary: bool,
+
+    /// Emit the full, non-summarized snapshot (`--output jsonl`) instead of
+    /// the default summary digest.
+    #[arg(long = "no-summary", default_value_t = false)]
+    pub no_summary: bool,
+
+    /// Save a PNG of the page (post-stabilize, post-interaction) to this
+    /// path, alongside the snapshot output. Complements the computed
+    /// snapshot with the "how it actually looks" view.
+    #[arg(long)]
+    pub screenshot: Option<String>,
+
+    /// When `--screenshot` is set, capture the full scrollable document
+    /// instead of only the visible viewport.
+    #[arg(long = "fullpage-screenshot", default_value_t = false)]
+    pub fullpage_screenshot: bool,
+
+    /// Persist the snapshot to disk, mirroring the MCP store: creates
+    /// `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` under the CWD (or
+    /// `SNIFF_SNAPSHOT_DIR` when set), using the selected `--output` format,
+    /// and auto-ignores the tree with a `.gitignore`. The output is still
+    /// written to stdout as usual.
+    #[arg(long, default_value_t = false)]
+    pub persist: bool,
 
     /// Pretty-print JSON (single-JSON output only).
     #[arg(long, default_value_t = false)]
@@ -226,6 +256,13 @@ pub struct Cli {
     #[arg(long = "stable-key")]
     pub stable_key: Option<String>,
 
+    /// Extra DOM attributes to capture verbatim per node (repeatable or
+    /// comma-separated), e.g. `--attrs name,data-id`. Emitted under each
+    /// node's `attrs` map; useful to validate form field reindexing
+    /// (`name="parameters[items][0][title]"`) without scraping the DOM.
+    #[arg(long, value_delimiter = ',', action = clap::ArgAction::Append)]
+    pub attrs: Vec<String>,
+
     /// Full-fidelity mode: disables every AI optimization at once
     /// (`--no-compact --no-custom-props --no-stabilize --no-contrast
     /// --no-ax`). Equivalent to the pre-AI-default behavior.
@@ -274,7 +311,13 @@ impl Cli {
         let stabilize = self.stabilize && !self.no_stabilize && !self.full;
 
         let output = OutputConfig {
-            format: OutputFormat::parse_cli(&self.output)?,
+            format: if self.no_summary {
+                OutputFormat::JsonLines
+            } else if self.summary {
+                OutputFormat::Summary
+            } else {
+                OutputFormat::parse_cli(&self.output)?
+            },
             include_rect: !self.no_rect,
             include_path: !self.no_path,
             include_metrics: !self.no_metrics,
@@ -317,11 +360,14 @@ impl Cli {
             viewport,
             include_custom_properties,
             stable_key: self.stable_key,
+            attributes: self.attrs,
             stabilize,
             ax_tree: self.ax_tree,
             actions,
             effects: self.effects && !self.no_effects,
             effects_limit: self.effects_limit,
+            screenshot: self.screenshot.is_some(),
+            screenshot_full_page: self.fullpage_screenshot,
         })
     }
 }
@@ -412,6 +458,11 @@ mod tests {
             min_height: None,
             exclude: vec![],
             output: "jsonl".into(),
+            summary: false,
+            no_summary: false,
+            screenshot: None,
+            fullpage_screenshot: false,
+            persist: false,
             pretty: false,
             no_rect: false,
             no_path: false,
@@ -439,6 +490,7 @@ mod tests {
             custom_props: true,
             no_custom_props: false,
             stable_key: None,
+            attrs: vec![],
             full: false,
         };
         let cfg = cli.into_config().unwrap();
@@ -482,6 +534,11 @@ mod tests {
             min_height: None,
             exclude: vec![],
             output: "jsonl".into(),
+            summary: false,
+            no_summary: false,
+            screenshot: None,
+            fullpage_screenshot: false,
+            persist: false,
             pretty: false,
             no_rect: false,
             no_path: false,
@@ -509,6 +566,7 @@ mod tests {
             custom_props: true,
             no_custom_props: false,
             stable_key: None,
+            attrs: vec![],
             full: false,
         };
         cli.stable_key = Some("data-testid".into());
@@ -623,6 +681,11 @@ mod tests {
             min_height: None,
             exclude: vec![],
             output: "jsonl".into(),
+            summary: false,
+            no_summary: false,
+            screenshot: None,
+            fullpage_screenshot: false,
+            persist: false,
             pretty: false,
             no_rect: false,
             no_path: false,
@@ -650,6 +713,7 @@ mod tests {
             custom_props: true,
             no_custom_props: false,
             stable_key: None,
+            attrs: vec![],
             full: false,
         };
         cli.full = true;
@@ -684,6 +748,11 @@ mod tests {
             min_height: None,
             exclude: vec![],
             output: "jsonl".into(),
+            summary: false,
+            no_summary: false,
+            screenshot: None,
+            fullpage_screenshot: false,
+            persist: false,
             pretty: false,
             no_rect: false,
             no_path: false,
@@ -711,6 +780,7 @@ mod tests {
             custom_props: true,
             no_custom_props: false,
             stable_key: None,
+            attrs: vec![],
             full: false,
         };
         cli.no_compact = true;
@@ -745,6 +815,11 @@ mod tests {
             min_height: None,
             exclude: vec![],
             output: "jsonl".into(),
+            summary: false,
+            no_summary: false,
+            screenshot: None,
+            fullpage_screenshot: false,
+            persist: false,
             pretty: false,
             no_rect: false,
             no_path: false,
@@ -772,6 +847,7 @@ mod tests {
             custom_props: true,
             no_custom_props: false,
             stable_key: None,
+            attrs: vec![],
             full: false,
         };
         cli.full = true;
@@ -779,5 +855,80 @@ mod tests {
         let cfg = cli.into_config().unwrap();
         assert!(cfg.output.include_ax, "ax_tree must imply include_ax");
         assert!(cfg.ax_tree);
+    }
+
+    #[test]
+    fn summary_is_the_default_output() {
+        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
+            .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(
+            cfg.output.format,
+            OutputFormat::Summary,
+            "summary digest must be the default output"
+        );
+    }
+
+    #[test]
+    fn summary_flag_and_output_summary_agree() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--summary",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.output.format, OutputFormat::Summary);
+
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--output",
+            "summary",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.output.format, OutputFormat::Summary);
+    }
+
+    #[test]
+    fn no_summary_forces_full_jsonl() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--no-summary",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(
+            cfg.output.format,
+            OutputFormat::JsonLines,
+            "--no-summary must emit the full non-summarized snapshot"
+        );
+    }
+
+    #[test]
+    fn output_json_still_available_without_summary_flag() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--output",
+            "json",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.output.format, OutputFormat::Json);
     }
 }

@@ -68,7 +68,13 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--no-visible` | Incluir elementos invisíveis | — |
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
-| `--output jsonl\|jsonl-flat\|json` | Formato de saída | `jsonl` |
+| `--output jsonl\|jsonl-flat\|json\|summary` | Formato de saída | **`summary`** (digest intermediário) |
+| `--summary` | Atalho para `--output summary` (o padrão): digest de 1 linha por nó (estrutura + `css` curado + `contrast` + `aria`) | `off` |
+| `--no-summary` | Emitir o snapshot completo não-sumarizado (`--output jsonl`) em vez do digest padrão | `off` |
+| `--screenshot PATH` | Salvar PNG da página no estado final (pós-stabilize, pós-interação) | — |
+| `--fullpage-screenshot` | Com `--screenshot`: capturar o documento inteiro em vez da viewport | `off` |
+| `--persist` | Espelha o store do MCP: grava o snapshot em `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no CWD (ou `SNIFF_SNAPSHOT_DIR`), no formato de `--output` selecionado; a pasta ganha um `.gitignore` com `*` e nunca é rastreada pelo git. A saída continua indo para o stdout. | `off` |
+| `--attrs a,b` | Capturar atributos DOM verbatim por nó (`getAttribute`), repetível ou comma-separated; emitidos sob `attrs` (ex.: validar `name` de forms) | — |
 | `--compact` | Modo compacto (ver abaixo) | **`on`** (use `--no-compact`) |
 | `--custom-props` | Capturar todas as variáveis CSS (`--*`) | **`on`** (use `--no-custom-props`) |
 | `--stabilize` | Congelar animações/transições (snapshot determinístico) | **`on`** (use `--no-stabilize`) |
@@ -259,9 +265,83 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
 - `--output jsonl`: árvore aninhada, uma linha por elemento raiz.
 - `--output jsonl-flat`: um nó por linha, com `id`/`parent_id` (achatado).
 - `--output json`: array único (com `__meta` + `elements` no compact+custom-props).
+- `--output summary` / `--summary` (alias `slim`): **formato padrão**. Digest
+  intermediário de 1 linha por nó — esqueleto estrutural
+  (`tag/selector/path/depth/rect/visible`/`grade`) **mais** os facetos que
+  respondem perguntas reais sem o JSONL completo: `css` (subconjunto curado:
+  display, position, width/height, cores, font-size/weight, overflow, z-index),
+  `contrast` (`ratio`/`aa`/`aaa`) e `aria` (`role`/`name`/`focusable`).
+  Constantes globais saem numa linha `__meta` inicial (`style_defaults`, mesma
+  dedup do compact) e ficam omitidas por nó. ~5-10x menor que o snapshot
+  completo.
+- `--output jsonl` (ou `--no-summary`): o snapshot completo não-sumarizado —
+  usado como entrada de `sniffCSS-diff`/`sniffCSS-check`/jq.
 - Com `--stable-key data-testid`, os seletores saem como `button[data-testid="submit"]`
   em vez de dependerem de `id` gerados (`react-aria-123`), mantendo o output
   **matchável entre deploys**.
+
+### Dedup de constantes no compact (`__meta.style_defaults`)
+
+No modo compact (padrão), props cujo valor é idêntico em **todos** os nós
+capturados são hoisted uma única vez para a linha `__meta.style_defaults`
+(`{categoria: {prop: value}}`) e omitidas dos `styles` de cada nó. Em páginas
+típicas isso corta 50-80% do JSONL (80% dos bytes de estilos) **sem perder
+fidelidade**: `sniffCSS-diff` e `sniffCSS-check` (e o MCP) mesclam os defaults
+de volta, então uma mudança de página inteira (ex.: troca de `font-family`) é
+detectada normalmente. O `computed_style_hash` de cada nó sempre cobre os
+estilos efetivos completos.
+
+```jsonl
+{"__meta":{"style_defaults":{"typography":{"font-family":"Nunito Sans, ...","font-size":"16px"}}}}
+{"id":1,"tag":"MAIN","selector":"main#main","styles":{"box_model":{"width":"1350px"}}}
+```
+
+> Lendo um nó isolado: toda prop ausente do `styles` mas presente em
+> `__meta.style_defaults` vale o valor global. Use `--no-compact`/`--full` para
+> nós totalmente autocontidos.
+
+## Screenshot (`--screenshot`)
+
+Complementa o snapshot calculado com o "como a página realmente está" no estado
+final do pipeline (pós-stabilize, pós-interações):
+
+```bash
+sniffCSS -u "$URL" -s ".modal" --click "#open" --screenshot modal.png
+sniffCSS -u "$URL" -s "main" --depth 5 --screenshot page.png --fullpage-screenshot
+```
+
+O PNG é um artefato para olho humano; o JSONL continua sendo a fonte de verdade
+para diff/check.
+
+## Atributos DOM (`--attrs`)
+
+Computed styles são o núcleo da ferramenta, mas quando você precisa de um
+atributo DOM cru (ex.: `name="parameters[items][0][title]"` para validar a
+reindexação de um form), peça-o explicitamente — ele entra verbatim no mapa
+`attrs` de cada nó e é comparado por chave pelo diff:
+
+```bash
+sniffCSS -u "$URL" -s "form#sucesu" --depth 3 --attrs name,value
+# ... "attrs": {"name": "parameters[items][0][title]", "value": "Primeiro"} ...
+```
+
+## Persistência em disco (`--persist`)
+
+Espelha o layout do store do MCP sem precisar de um cliente MCP: cria
+`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no diretório de execução
+(ou em `SNIFF_SNAPSHOT_DIR` quando definida), no formato de `--output`
+selecionado (`.jsonl` para `jsonl`/`jsonl-flat`/`summary`, `.json` para
+`json`). A raiz `sniffCSS/` ganha um `.gitignore` com `*`, então toda a árvore
+gerada é **ignorada pelo git** automaticamente. O snapshot continua saindo no
+stdout; o caminho salvo é reportado no stderr.
+
+```bash
+sniffCSS -u "$URL" -s "main" --depth 5 --persist
+# criou sniffCSS/localhost_3000/20260812T101530Z-index-main.jsonl
+# (como o summary é o formato padrão, o arquivo guarda o digest; para persistir
+#  o snapshot completo — necessário como entrada de diff/check — use junto o
+#  --no-summary, ex.: sniffCSS -u "$URL" -s "main" --depth 5 --no-summary --persist)
+```
 
 ## Docker
 

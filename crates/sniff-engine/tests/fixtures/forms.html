@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  .field { display: block; margin: 8px 0; }
+  input[name] { width: 200px; height: 32px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <form id="sucesu-form">
+    <div class="field">
+      <label>Seção 0</label>
+      <input class="item" type="text" name="parameters[items][0][title]" value="Primeiro">
+    </div>
+    <div class="field">
+      <label>Seção 1</label>
+      <input class="item" type="text" name="parameters[items][1][title]" value="Segundo">
+    </div>
+    <div class="field hidden">
+      <label>Fantasma</label>
+      <input class="item" type="text" name="parameters[items][2][title]" value="Oculto">
+    </div>
+  </form>
+</body>
+</html>

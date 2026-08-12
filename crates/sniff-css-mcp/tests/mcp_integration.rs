@@ -233,13 +233,24 @@ async fn sniff_css_page_streams_progress_and_returns_jsonl() {
         .text
         .clone();
 
-    // JSONL root line(s) parse and carry expected fields.
+    // JSONL: a leading __meta line (compact style_defaults hoist) precedes
+    // the node line(s); the node line(s) parse and carry expected fields.
     let first_line: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    assert_eq!(first_line["tag"], "DIV");
-    assert_eq!(first_line["selector"], "div[data-testid=\"widget\"]");
-    assert_eq!(first_line["is_user_noticeable"]["display_visible"], true);
-    assert!(first_line["computed_style_hash"].is_string());
-    assert!(first_line["styles"]["box_model"]["width"].is_string());
+    if first_line.get("__meta").is_some() {
+        let node_line: serde_json::Value =
+            serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
+        assert_eq!(node_line["tag"], "DIV");
+        assert_eq!(node_line["selector"], "div[data-testid=\"widget\"]");
+        assert_eq!(node_line["is_user_noticeable"]["display_visible"], true);
+        assert!(node_line["computed_style_hash"].is_string());
+        assert!(node_line["styles"]["box_model"]["width"].is_string());
+    } else {
+        assert_eq!(first_line["tag"], "DIV");
+        assert_eq!(first_line["selector"], "div[data-testid=\"widget\"]");
+        assert_eq!(first_line["is_user_noticeable"]["display_visible"], true);
+        assert!(first_line["computed_style_hash"].is_string());
+        assert!(first_line["styles"]["box_model"]["width"].is_string());
+    }
 
     // Progress notifications were streamed asynchronously.
     wait_for_progress(&client, 2).await;
@@ -296,7 +307,7 @@ async fn sniff_css_diff_via_persisted_paths_returns_delta_and_summary() {
     let pool = launch_pool_with_retry(&opts).await;
     let (_client, running, temp) = setup(pool).await;
 
-    // Default sniffCSS_page returns a tiny __sniff reference (persisted).
+    // A __sniff reference return lets us diff by persisted path.
     let params = tool_call_with_progress(
         "sniffCSS_page",
         serde_json::json!({
@@ -307,6 +318,7 @@ async fn sniff_css_diff_via_persisted_paths_returns_delta_and_summary() {
             "compact": true,
             "stable_key": "data-testid",
             "wait": ["network-idle:200:30000"],
+            "return": "reference",
         }),
     );
     let text = running
@@ -497,5 +509,64 @@ async fn sniff_css_check_finds_odd_card_and_contrast_failure() {
     let summary: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
     assert_eq!(summary["__check_summary"]["uniformity_outliers"], 1);
     assert!(summary["__check_summary"]["rules"].as_u64().unwrap() > 0);
+    running.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn page_supports_include_invisible_screenshot_attrs_and_summary_return() {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return;
+    };
+    let pool = launch_pool_with_retry(&opts).await;
+    let (client, running, _temp) = setup(pool).await;
+
+    let params = tool_call_with_progress(
+        "sniffCSS_page",
+        serde_json::json!({
+            "url": fixture_url("page.html"),
+            "selector": "[data-testid=\"widget\"]",
+            "depth": 1,
+            "include_invisible": true,
+            "screenshot": true,
+            "attributes": ["data-testid", "class"],
+            "return": "summary",
+        }),
+    );
+    let result = running.call_tool(params).await.unwrap();
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .expect("text content")
+        .text
+        .clone();
+
+    // Summary return: token-lean digest lines without styles. A leading
+    // __meta line (compact style_defaults hoist) may precede the nodes.
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() >= 4, "root + 3 children, got {lines:?}");
+    let root: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    if root.get("__meta").is_some() {
+        assert!(lines.len() >= 5, "meta + root + 3 children, got {lines:?}");
+    }
+    let root: serde_json::Value =
+        serde_json::from_str(lines.iter().find(|l| !l.contains("\"__meta\"")).unwrap()).unwrap();
+    assert_eq!(root["tag"], "DIV");
+    assert!(root.get("styles").is_none(), "summary omits styles");
+    assert_eq!(root["visible"], true);
+
+    // include_invisible: the display:none ghost child is in the digest
+    // (visible=false), instead of being filtered out before capture.
+    let ghost = lines
+        .iter()
+        .find(|l| l.contains("\"visible\":false"))
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .expect("hidden node present in summary with visible=false");
+    assert_eq!(ghost["visible"], false);
+    assert!(ghost["tag"].as_str().is_some());
+
+    // Progress notifications were streamed for the multi-phase pipeline.
+    assert!(!client.progress.lock().unwrap().is_empty());
     running.cancel().await.unwrap();
 }

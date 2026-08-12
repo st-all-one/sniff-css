@@ -128,6 +128,37 @@ impl CdpSession {
         Ok(())
     }
 
+    /// Capture the current page as a PNG (`Page.captureScreenshot`).
+    ///
+    /// `full_page` captures the entire scrollable document instead of just
+    /// the visible viewport. Returns the decoded PNG bytes.
+    pub async fn capture_screenshot(&self, full_page: bool) -> Result<Vec<u8>> {
+        let res = self
+            .call(
+                "Page.captureScreenshot",
+                json!({
+                    "format": "png",
+                    "fromSurface": true,
+                    "captureBeyondViewport": full_page,
+                }),
+            )
+            .await?;
+        let data = res
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CdpError::Protocol {
+                method: "Page.captureScreenshot".into(),
+                message: "response missing `data`".into(),
+            })?;
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| CdpError::Protocol {
+                method: "Page.captureScreenshot".into(),
+                message: format!("invalid base64: {e}"),
+            })
+    }
+
     /// Navigate without waiting (caller is responsible for readiness).
     pub async fn navigate_no_wait(&self, url: &str) -> Result<()> {
         self.call("Page.navigate", json!({"url": url})).await?;

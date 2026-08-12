@@ -67,6 +67,26 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 > `__actions`, com o before = estado do passo anterior. Em passo quebrado, o
 > erro nomeia o índice, o seletor e os passos anteriores.
 
+### Controle de volumetria, prova visual e atributos DOM (novo)
+
+| Flag | Efeito |
+|---|---|
+| `--summary` (ou `--output summary`/`slim`) | **Formato padrão.** Digest intermediário de 1 linha por nó: esqueleto estrutural (`tag/selector/path/depth/rect/visible/grade`) + `css` curado (display, position, cores, font-size/weight, overflow, z-index) + `contrast` (`ratio`/`aa`/`aaa`) + `aria` (`role`/`name`/`focusable`). Constantes globais em `__meta.style_defaults`. ~5-10x menor que o full; responde cor/fonte/contraste/aria sem o JSONL completo. |
+| `--no-summary` | Emite o snapshot completo não-sumarizado (`--output jsonl`) em vez do digest padrão — use quando o output alimenta `sniffCSS-diff`/`sniffCSS-check`/jq. |
+| `--screenshot PATH` | PNG da página no estado final (pós-stabilize, pós-interação) — prova visual complementar ao snapshot calculado. |
+| `--fullpage-screenshot` | Com `--screenshot`: documento inteiro, não só a viewport. |
+| `--persist` | Grava o snapshot no mesmo layout do store MCP (`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>`, no formato de `--output`), com `.gitignore` `*` na raiz — a árvore fica fora do git. A saída continua no stdout. |
+| `--attrs a,b` | Captura atributos DOM verbatim por nó sob `attrs` (ex.: `--attrs name` para validar `name="parameters[items][0][title]"` de forms) — o diff compara `attrs` por chave. |
+| compact (padrão) | Além de suprimir defaults, hoist de **props constantes** para `__meta.style_defaults` — props idênticas em todos os nós saem uma vez e são omitidas por nó (~50-80% menos JSONL, 80% dos bytes de estilos). `sniffCSS-diff`/`check` mesclam de volta, então mudanças de página inteira (ex.: `font-family`) continuam sendo detectadas. |
+
+> **Conteúdo oculto por animação (WOW.js / scroll-reveal):** essas bibliotecas
+> deixam `visibility:hidden` até animar; com `--stabilize` ON (default) a
+> animação é cancelada e o elemento nunca fica visível, então o `element-ready`
+> default (visible+has-size) nunca dispara. Capture com
+> `--no-visible --wait "delay:3000"` (inclui o invisível + espera fixa) ou
+> `--no-stabilize --wait "delay:3000"` (deixa a animação rodar). No MCP:
+> `include_invisible:true` + `wait:["delay:3000"]`.
+
 Flags de a11y extras (continuam opt-in, adicionam facetas):
 
 | Flag | Facet emitido |
@@ -204,8 +224,10 @@ Preferencial para agentes: exponha `sniffCSS-mcp` como servidor MCP (stdio) em v
 de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece:
 
 1. **`sniffCSS_page`** — captura (args: url, selector, depth, categories, compact,
-   custom_props, stable_key, pseudo, wait, actions, viewport, format, stabilize,
-   contrast, include_ax, ax_tree, effects, effects_limit, full, persist, return).
+   custom_props, stable_key, **attributes**, pseudo, wait, actions, viewport,
+   format, stabilize, contrast, include_ax, ax_tree, effects, effects_limit,
+   **include_invisible**, **exclude**, **min_width**, **min_height**,
+   **screenshot** (default `false`), **screenshot_full_page**, full, persist, return).
    Os defaults já são os otimizados: `compact`, `custom_props`, `stabilize`,
    `contrast` e `include_ax` vêm ligados — passe `full:true` para full-fidelity
    ou qualquer flag como `false` para desligar individualmente.
@@ -225,15 +247,21 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    com as props que mudaram (com tolerância numérica) e `before`/`after`;
    reflow de raiz (`html`/`body` — scrollbar/altura/padding) é suprimido.
    Leia primeiro `effect` e `summary`, depois os elementos listados.
-   Por padrão **persiste** o snapshot em
-   `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
-   e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
-   (~200 tokens). Use `return:"jsonl"` para obter o JSONL inline
-   (`persist:false` desativa a gravação).
-   Durante a execução envia `notifications/progress` por fase:
-   `acquiring browser slot` → `navigating` → `performing interactions
-   (click/hover/type)` (se `actions`) → `waiting` → `extracting` →
-   `capturing accessibility tree` (se `include_ax`/`ax_tree`) → `formatting N nodes`.
+    **Novo (0.3):** `include_invisible:true` + `wait:["delay:..."]` captura
+    conteúdo oculto por animação (WOW.js); `attributes:["name"]` traz atributos
+    DOM verbatim sob `attrs` (valida reindexação de forms sem curl);
+    `screenshot:true` (+ `screenshot_full_page`) persiste um PNG junto do snapshot
+    e devolve `screenshot_path` no `__sniff`.
+    Por padrão **persiste** o snapshot em
+    `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+    e responde com o **digest summary** (estrutura + `css` + `contrast` + `aria`);
+    use `return:"reference"` para só a linha `{"__sniff": {path, url, selector, nodes}}`
+    (~200 tokens) e `return:"jsonl"` para o JSONL completo inline
+    (`persist:false` desativa a gravação; `return:"reference"` exige persist).
+    Durante a execução envia `notifications/progress` por fase:
+    `acquiring browser slot` → `navigating` → `performing interactions
+    (click/hover/type)` (se `actions`) → `waiting` → `extracting` →
+    `capturing accessibility tree` (se `include_ax`/`ax_tree`) → `formatting N nodes`.
 2. **`sniffCSS_snapshots`** — lista os snapshots persistidos (domain/target/path/
    created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use
    para escolher o par base/head.
@@ -248,10 +276,13 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    (args: **path** ou jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
 5. **`sniffCSS_categories`** — categorias aceitas.
 
-> **Fluxo low-token (recomendado):** cada `sniffCSS_page` salva no disco e retorna
-> só o `__sniff` reference. Depois, `sniffCSS_diff base_path/head_path` e
-> `sniffCSS_check path` leem os arquivos — o snapshot completo **nunca** entra no
-> contexto do LLM (nem no retorno, nem nos argumentos).
+> **Fluxo low-token (recomendado):** cada captura salva no disco. No CLI (preferido
+> quando há shell), `sniffCSS ... --persist` grava o snapshot completo e emite o
+> digest summary; `sniffCSS-diff <base> <head>` e `sniffCSS-check --input <head>`
+> leem os arquivos. No MCP, cada `sniffCSS_page` salva e responde o summary;
+> depois `sniffCSS_diff base_path/head_path` e `sniffCSS_check path` leem os
+> arquivos — o snapshot completo **nunca** entra no contexto do LLM (nem no
+> retorno, nem nos argumentos).
 
 Recursos embutidos: `sniffCSS://prompts/eval` (prompt), `sniffCSS://schemas/eval`
 (schema) e `sniffCSS://guides/golden` (padrão ouro de execução) — leia-os em vez

@@ -4,6 +4,66 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [0.3.0] — 2026-08-12
+
+### Added
+
+- **Screenshot de primeira classe** — captura a página como PNG
+  (`Page.captureScreenshot`) no estado final do pipeline (pós-stabilize,
+  pós-interações): CLI `--screenshot PATH` (+ `--fullpage-screenshot` para o
+  documento inteiro em vez da viewport) e MCP `screenshot:true` /
+  `screenshot_full_page:true`, que persiste o PNG junto do snapshot como
+  `[UTC]-[path]-[selector].png` e devolve `screenshot_path` no `__sniff`.
+  Complementa o snapshot calculado com o "como a página realmente parece".
+- **`--summary` / MCP `return:"summary"`** — novo `OutputFormat::Summary`:
+  digest token-lean de 1 linha por nó com só `{tag, selector, path, depth,
+  rect, visible}` (sem o payload de estilos). Elimina a necessidade de
+  ferramentas externas (python/jq) para reduzir a volumetria antes de mandar
+  ao modelo; o JSONL completo continua persistido para diff/check por path.
+- **Atributos DOM opt-in** — `--attrs name,value` no CLI (repetível ou
+  comma-separated) / `attributes:["name"]` no MCP capturam `getAttribute` de
+  cada atributo por nó, emitidos sob `attrs` (ex.:
+  `"attrs":{"name":"parameters[items][0][title]"}`). Valida reindexação de
+  forms sem `curl`/scraping do HTML. O diff passa a comparar `attrs` por chave.
+- **MCP: filtros de visibilidade e geometria** — `sniffCSS_page` ganhou
+  `include_invisible` (equivalente ao CLI `--no-visible`), `exclude`,
+  `min_width` e `min_height`, fechando a lacuna de paridade com o CLI que
+  obrigava a sair do MCP para capturar conteúdo oculto por animação (WOW.js).
+- **Browser lançado com `--remote-allow-origins=*`** — o Chromium próprio do
+  toolset agora aceita clientes DevTools de qualquer origem, então ferramentas
+  externas (websocket-client, Playwright/Puppeteer anexando via CDP) conseguem
+  usar o mesmo browser de `--connect` e do companion GUI do docker.
+- **Persistência no CLI (`--persist`) e pasta auto-ignorada pelo git** — o
+  `sniffCSS` agora aceita `--persist`, que grava o snapshot no mesmo layout do
+  store MCP (`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no CWD ou em
+  `SNIFF_SNAPSHOT_DIR`, no formato de `--output` selecionado). A lógica de
+  nomeação/raiz foi unificada em `sniff_core::snapshot`, compartilhada entre
+  CLI e MCP. Tanto o store do MCP quanto o `--persist` criam um `.gitignore`
+  com `*` na raiz `sniffCSS/`, então a árvore gerada **nunca é rastreada pelo
+  git** — a pasta de snapshots fica fora do versionamento por padrão.
+- **Summary virou o digest intermediário (`--summary`/`--output slim`)** — em
+  vez de só o esqueleto estrutural (`tag/selector/path/depth/rect/visible`),
+  cada linha agora carrega os facetos que respondem perguntas reais: `css`
+  (subconjunto curado: display, position, width/height, cores, font-size/weight,
+  overflow, z-index), `contrast` (`ratio`/`aa`/`aaa`) e `aria`
+  (`role`/`name`/`focusable`) + `grade`. Constantes globais saem numa linha
+  `__meta.style_defaults` inicial. ~5-10x menor que o full, mas responde
+  "qual a cor/fonte/contraste/role?" sem o JSONL completo.
+- **Summary é o formato padrão (`--summary`) e `--no-summary` extrai o full** —
+  `sniffCSS` agora emite o digest summary por padrão (`--output summary`);
+  `--no-summary` (ou `--output jsonl`) retorna o snapshot completo
+  não-sumarizado. No MCP, `sniffCSS_page` responde o summary por padrão
+  (`return:"summary"`); `return:"reference"` dá só o handle `__sniff` e
+  `return:"jsonl"` o JSONL completo inline. O CLI é documentado como a
+  interface preferida (o MCP é o wrapper para clientes que exigem tools).
+- **Dedup de props constantes no compact (`__meta.style_defaults`)** — props
+  com o mesmo valor em todos os nós capturados são hoisted uma única vez para
+  o `__meta` e omitidas dos `styles` de cada nó. Medido no site real: **~50-80%
+  menos JSONL (80% dos bytes de estilos)**. `sniffCSS-diff`/`sniffCSS-check`
+  (e MCP `sniffCSS_diff`/`sniffCSS_check`) mesclam os defaults de volta, então
+  mudanças de página inteira (ex.: `font-family`) continuam sendo detectadas;
+  o `computed_style_hash` sempre cobre os estilos efetivos completos.
+
 ## [0.2.1] — 2026-08-12
 
 ### Changed

@@ -88,6 +88,10 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 | Cards repetidos (grid) | `sniffCSS-check --uniform` acha o card estranho. |
 | Conteúdo que some após load | capture a subárvore estável: `--selector footer --depth 2` ou `--wait delay:N`. |
 | Elementos revelados por ação (modal/dropdown/menu) | `--click "#open"` (ou `--hover`/`--type`; no MCP, `actions`). O mesmo alvo `display:none` falha com timeout de `element-ready` sem a ação. |
+| Conteúdo oculto por animação (WOW.js) | `--no-visible --wait "delay:3000"` (inclui o invisível + espera fixa) ou `--no-stabilize --wait "delay:3000"`; no MCP `include_invisible:true` + `wait:["delay:3000"]`. |
+| Volumetria / contexto DOM barato | `--summary` (ou MCP `return:"summary"`) — esqueleto token-lean; o JSONL completo continua persistido para diff/check por path. |
+| Prova visual (olho humano) | `--screenshot out.png` (+ `--fullpage-screenshot`); no MCP `screenshot:true` → `screenshot_path` no `__sniff`. |
+| Validar reindexação de forms / atributos DOM | `--attrs name,value` (ou MCP `attributes:["name","value"]`) → mapa `attrs` por nó; o diff compara `attrs` por chave. |
 | Regressão de UI entre deploys | `sniffCSS-diff` compara os blocos `__actions` quando ambos os lados têm ações → deltas `ACTION_CHANGED` (o modal abriu fora da tela? `onscreen: false`?) + `actions_changed` no resumo. Os arrays compactos (`css_*_values`) são reidratados no diff, então o delta usa nomes de props (`appeared[0].css_after.display`). |
 | Interações encadeadas (modal → mini-modal → input) | `--action` ordenado, um passo por seletor; cada passo gera sua entrada em `__actions` (before = estado do passo anterior). |
 

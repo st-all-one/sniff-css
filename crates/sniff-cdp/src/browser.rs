@@ -69,6 +69,12 @@ impl BrowserProcess {
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--remote-debugging-address=127.0.0.1",
+            // Allow any origin to speak DevTools over the debugging
+            // websocket. Without this, Chrome >= 111 refuses non-devtools
+            // clients (curl, websocket-client, Playwright/Puppeteer
+            // attaching over CDP), which is exactly what `--connect` and
+            // the docker GUI companion rely on.
+            "--remote-allow-origins=*",
             &format!("--user-data-dir={user_data_dir}"),
             "about:blank",
         ]);

@@ -116,6 +116,12 @@ pub struct SniffPageRequest {
     /// preferred over generated ids for diffing across deploys.
     #[serde(default)]
     pub stable_key: Option<String>,
+    /// Extra DOM attributes to capture verbatim per node (`getAttribute`),
+    /// e.g. `["name"]` to validate form field reindexing
+    /// (`name="parameters[items][0][title]"`). Emitted under each node's
+    /// `attrs` map.
+    #[serde(default)]
+    pub attributes: Vec<String>,
     /// Pseudo-elements to capture alongside the element, e.g. `::before`.
     #[serde(default)]
     pub pseudo: Vec<String>,
@@ -154,6 +160,30 @@ pub struct SniffPageRequest {
     /// `true`.
     #[serde(default = "default_true")]
     pub stabilize: bool,
+    /// Keep elements the page considers hidden (`display:none`,
+    /// `visibility:hidden`, zero-size). CLI `--no-visible`; useful for
+    /// scroll-reveal animations (WOW.js) that leave content
+    /// `visibility:hidden` until animated. Defaults to `false`.
+    #[serde(default)]
+    pub include_invisible: bool,
+    /// Skip elements matching this selector (repeatable).
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// Keep only elements at least this wide (px).
+    #[serde(default)]
+    pub min_width: Option<f64>,
+    /// Keep only elements at least this tall (px).
+    #[serde(default)]
+    pub min_height: Option<f64>,
+    /// Capture a PNG of the page (post-stabilize, post-interaction) and
+    /// persist it beside the snapshot as `[UTC]-[path]-[selector].png`,
+    /// returning its `screenshot_path`. Defaults to `false`.
+    #[serde(default)]
+    pub screenshot: bool,
+    /// When `screenshot` is set, capture the full scrollable document
+    /// instead of only the visible viewport.
+    #[serde(default)]
+    pub screenshot_full_page: bool,
     /// Derive and emit a measured WCAG `contrast` facet per node.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
@@ -176,9 +206,12 @@ pub struct SniffPageRequest {
     /// to `true` so diff/check can run on paths instead of inline JSONL.
     #[serde(default = "default_true")]
     pub persist: bool,
-    /// What to return: `reference` (default) returns only a tiny
-    /// `{"__sniff": {path, url, selector, nodes}}` line — the most token
-    /// efficient way to capture; `jsonl` returns the full snapshot inline.
+    /// What to return: `summary` (default) returns the token-lean per-node
+    /// digest (structural skeleton + curated css subset + contrast + aria)
+    /// while still persisting the full snapshot for later diff/check by
+    /// path; `reference` returns only a tiny `{"__sniff": {path, url,
+    /// selector, nodes}}` line — the most token-efficient capture handle;
+    /// `jsonl` returns the full snapshot inline.
     #[serde(default = "default_return_mode", rename = "return")]
     pub return_mode: String,
 }
@@ -269,7 +302,7 @@ fn default_tolerance() -> f64 {
     0.5
 }
 fn default_return_mode() -> String {
-    "reference".into()
+    "summary".into()
 }
 
 // ---------------------------------------------------------------------------
@@ -281,29 +314,35 @@ impl SniffMcpServer {
     /// Capture computed styles from a live page as JSONL.
     #[tool(
         name = "sniffCSS_page",
-        description = "Capture the real computed CSS styles of elements on a page and return them as \
-                       JSONL. By default the snapshot is persisted to disk as \
-                       sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns only a \
-                       tiny __sniff reference (path, url, selector, node count) — pass return=\"jsonl\" \
-                       to get the full snapshot inline instead. Feed two persisted captures to \
-                       sniffCSS_diff via base_path/head_path (or sniffCSS_check via path) so the full \
-                       snapshot never enters the LLM context. Each node carries readable fields (tag, \
-                       selector, path, rect, metrics, styles grouped by category) plus \
-                       is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
-                        already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
-                        stabilize (freeze animations for deterministic snapshots), contrast (measured \
-                        WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
-                        capture full-fidelity output (disables all five at once), or set any flag to \
-                        false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
-                        that stay matchable across deploys. For elements that only exist after an \
-                        interaction, pass actions=[{type:\"click\", selector:\"#open-modal\"}, ...] \
-                        (click/hover/type, ordered — chains like modal → mini-modal → input just list \
-                        each step's selector) to reveal modals, dropdowns, hover menus and \
-                        type-ahead panels before the wait pipeline runs and capture happens. When \
-                        actions are set, the snapshot also carries a __actions UI-effect map (default \
-                        ON; effects:false to omit): per action, what appeared/disappeared/changed and \
-                        where — rect, on-screen flag, out-of-view offset, distance from the action \
-                        point — plus a no_effect marker when the interaction changed nothing."
+        description = "Capture the real computed CSS styles of elements on a page. By default the snapshot \
+                        is persisted to disk as sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the \
+                        tool returns the token-lean per-node summary digest (structural skeleton + \
+                        curated css subset + contrast + aria) — pass return=\"reference\" for only a tiny \
+                        __sniff handle (path, url, selector, node count), or return=\"jsonl\" for the full \
+                        snapshot inline. Feed two persisted captures to sniffCSS_diff via \
+                        base_path/head_path (or sniffCSS_check via path) so the full snapshot never \
+                        enters the LLM context. Each node carries readable fields (tag, \
+                        selector, path, rect, metrics, styles grouped by category) plus \
+                        is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
+                         already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
+                         stabilize (freeze animations for deterministic snapshots), contrast (measured \
+                         WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
+                         capture full-fidelity output (disables all five at once), or set any flag to \
+                         false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
+                         that stay matchable across deploys. For elements that only exist after an \
+                         interaction, pass actions=[{type:\"click\", selector:\"#open-modal\"}, ...] \
+                         (click/hover/type, ordered — chains like modal → mini-modal → input just list \
+                         each step's selector) to reveal modals, dropdowns, hover menus and \
+                         type-ahead panels before the wait pipeline runs and capture happens. When \
+                         actions are set, the snapshot also carries a __actions UI-effect map (default \
+                         ON; effects:false to omit): per action, what appeared/disappeared/changed and \
+                         where — rect, on-screen flag, out-of-view offset, distance from the action \
+                         point — plus a no_effect marker when the interaction changed nothing. Extra \
+                         evidence: attributes=[\"name\"] captures verbatim DOM attributes per node under \
+                         attrs (e.g. form field reindexing); include_invisible=true (+ wait:[\"delay:...\"]) \
+                         captures content hidden by scroll-reveal animations (WOW.js); screenshot=true \
+                         (+ screenshot_full_page) persists a PNG beside the snapshot and adds \
+                         screenshot_path to the __sniff reference."
     )]
     pub async fn sniff_css_page(
         &self,
@@ -349,12 +388,30 @@ impl SniffMcpServer {
             None
         };
 
+        let screenshot_path = if request.screenshot {
+            match &outcome.screenshot {
+                Some(bytes) => Some(
+                    self.store
+                        .save_bytes(&config, "png", bytes)
+                        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+                ),
+                None => {
+                    return Err(ErrorData::internal_error(
+                        "screenshot requested but the engine returned no image".to_string(),
+                        None,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         match request.return_mode.as_str() {
             "reference" => {
                 let path = rel_path.ok_or_else(|| {
                     ErrorData::invalid_params("return=reference requires persist:true", None)
                 })?;
-                let reference = serde_json::json!({
+                let mut reference = serde_json::json!({
                     "__sniff": {
                         "path": path.display().to_string(),
                         "url": request.url,
@@ -363,8 +420,26 @@ impl SniffMcpServer {
                         "actions": outcome.actions.as_ref().and_then(|a| a.as_array()).map(|a| a.len()),
                     }
                 });
+                if let Some(shot) = &screenshot_path {
+                    reference["__sniff"]["screenshot_path"] =
+                        serde_json::Value::String(shot.display().to_string());
+                }
                 serde_json::to_string(&reference)
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+            }
+            "summary" => {
+                // Full JSONL is still persisted (when persist:true) for
+                // later diff/check by path; the response carries only the
+                // token-lean structural digest.
+                let summary_config = OutputConfig {
+                    format: OutputFormat::Summary,
+                    pretty: false,
+                    ..config.output.clone()
+                };
+                let mut buf = Vec::new();
+                write_output(&mut buf, &outcome, &summary_config)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
             }
             _ => Ok(jsonl),
         }
@@ -653,7 +728,12 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
         custom_properties: Vec::new(),
         pseudo_elements: request.pseudo.clone(),
         wait,
-        filter: ElementFilter::default(),
+        filter: ElementFilter {
+            visible: !request.include_invisible,
+            min_width: request.min_width,
+            min_height: request.min_height,
+            exclude_selectors: request.exclude.clone(),
+        },
         output: OutputConfig {
             format,
             include_rect: true,
@@ -672,11 +752,14 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
         viewport: Some(viewport),
         include_custom_properties: request.custom_props && !request.full,
         stable_key: request.stable_key.clone(),
+        attributes: request.attributes.clone(),
         stabilize: request.stabilize && !request.full,
         ax_tree: request.ax_tree,
         actions,
         effects: request.effects,
         effects_limit: request.effects_limit.unwrap_or(10),
+        screenshot: request.screenshot,
+        screenshot_full_page: request.screenshot_full_page,
     })
 }
 
@@ -773,11 +856,18 @@ mod tests {
             compact: true,
             custom_props: true,
             stable_key: Some("data-testid".into()),
+            attributes: vec![],
             pseudo: vec![],
             wait: vec![],
             viewport: "1366x768".into(),
             format: "jsonl".into(),
             stabilize: true,
+            include_invisible: false,
+            exclude: vec![],
+            min_width: None,
+            min_height: None,
+            screenshot: false,
+            screenshot_full_page: false,
             contrast: true,
             include_ax: true,
             ax_tree: false,
@@ -807,8 +897,23 @@ mod tests {
         assert!(cfg.include_custom_properties);
         assert!(cfg.stabilize);
         assert!(!cfg.ax_tree);
+        assert!(cfg.filter.visible, "visible by default");
         assert_eq!(cfg.output.format, OutputFormat::JsonLines);
         assert_eq!(cfg.wait.len(), 3); // default pipeline
+    }
+
+    #[test]
+    fn include_invisible_and_filters_map_to_element_filter() {
+        let mut req = request();
+        req.include_invisible = true;
+        req.exclude = vec![".skip".into()];
+        req.min_width = Some(120.0);
+        req.min_height = Some(40.0);
+        let cfg = build_sniff_config(&req).unwrap();
+        assert!(!cfg.filter.visible, "include_invisible flips visible off");
+        assert_eq!(cfg.filter.exclude_selectors, vec![".skip"]);
+        assert_eq!(cfg.filter.min_width, Some(120.0));
+        assert_eq!(cfg.filter.min_height, Some(40.0));
     }
 
     #[test]
@@ -972,14 +1077,14 @@ mod tests {
     }
 
     #[test]
-    fn sniff_css_page_defaults_to_persist_and_reference() {
+    fn sniff_css_page_defaults_to_persist_and_summary() {
         let v: SniffPageRequest = serde_json::from_value(serde_json::json!({
             "url": "http://localhost:3000",
             "selector": ".card",
         }))
         .unwrap();
         assert!(v.persist, "persist defaults to true");
-        assert_eq!(v.return_mode, "reference", "return defaults to reference");
+        assert_eq!(v.return_mode, "summary", "return defaults to summary");
     }
 
     #[test]

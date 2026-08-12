@@ -5,17 +5,19 @@
 //! set), so diff/check tools can operate on **paths** instead of round-tripping
 //! full snapshots through the LLM context. The leading UTC stamp sorts the
 //! filenames chronologically, making executions of any target trivially
-//! ordered and the "latest snapshot" easy to find.
+//! ordered and the "latest snapshot" easy to find. The store root is
+//! auto-ignored by git (a `.gitignore` with `*`), so the generated tree is
+//! never tracked by version control.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use sniff_core::snapshot::{domain_of, ensure_gitignored, snapshot_file_name};
 use sniff_core::{SniffConfig, SniffError, SniffResult};
 
 /// Default root directory (relative to the server's CWD).
-pub const DEFAULT_ROOT: &str = "sniffCSS";
+pub const DEFAULT_ROOT: &str = sniff_core::snapshot::DEFAULT_ROOT;
 
 /// One persisted snapshot listed by [`SnapshotStore::list`].
 #[derive(Debug, Clone, serde::Serialize)]
@@ -41,10 +43,9 @@ pub struct SnapshotStore {
 impl SnapshotStore {
     /// Root from `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD.
     pub fn from_env() -> Self {
-        let root = std::env::var("SNIFF_SNAPSHOT_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_ROOT));
-        Self { root }
+        Self {
+            root: sniff_core::snapshot::snapshot_root(),
+        }
     }
 
     /// Root at an explicit path (used by tests to avoid polluting the repo).
@@ -57,13 +58,21 @@ impl SnapshotStore {
         &self.root
     }
 
+    /// Ensure the store root exists and carries a `.gitignore` (`*`) so the
+    /// whole generated tree is ignored by git. Called before any write.
+    fn ensure_root_ready(&self) -> SniffResult<()> {
+        ensure_gitignored(&self.root)
+            .map_err(|e| SniffError::Other(format!("prepare store root: {e}")))
+    }
+
     /// Persist a captured snapshot, returning its root-relative path.
     ///
     /// The write is atomic (temp file + rename) so concurrent captures never
     /// leave a torn file, and the name carries the UTC stamp for ordering.
     pub fn save(&self, config: &SniffConfig, jsonl: &str) -> SniffResult<PathBuf> {
+        self.ensure_root_ready()?;
         let domain = domain_of(&config.url);
-        let name = snapshot_file_name(config);
+        let name = snapshot_file_name(&config.url, &config.selector, "jsonl");
         let rel = PathBuf::from(&domain).join(&name);
         let abs = self.resolve(&rel)?;
 
@@ -78,6 +87,41 @@ impl SnapshotStore {
             let mut f = fs::File::create(&tmp)
                 .map_err(|e| SniffError::Other(format!("create {}: {e}", tmp.display())))?;
             f.write_all(jsonl.as_bytes())
+                .map_err(|e| SniffError::Other(format!("write {}: {e}", tmp.display())))?;
+            f.sync_all()
+                .map_err(|e| SniffError::Other(format!("sync {}: {e}", tmp.display())))?;
+        }
+        fs::rename(&tmp, &abs)
+            .map_err(|e| SniffError::Other(format!("rename {}: {e}", abs.display())))?;
+        Ok(rel)
+    }
+
+    /// Persist a binary artifact (e.g. a page screenshot) next to where the
+    /// matching snapshot would land, under `[UTC]-[path]-[selector].<ext>`.
+    /// Returns the root-relative path.
+    pub fn save_bytes(
+        &self,
+        config: &SniffConfig,
+        ext: &str,
+        bytes: &[u8],
+    ) -> SniffResult<PathBuf> {
+        self.ensure_root_ready()?;
+        let domain = domain_of(&config.url);
+        let name = snapshot_file_name(&config.url, &config.selector, ext);
+        let rel = PathBuf::from(&domain).join(&name);
+        let abs = self.resolve(&rel)?;
+
+        let parent = abs
+            .parent()
+            .ok_or_else(|| SniffError::Other(format!("no parent for {}", abs.display())))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| SniffError::Other(format!("create {}: {e}", parent.display())))?;
+
+        let tmp = parent.join(format!(".{name}.tmp"));
+        {
+            let mut f = fs::File::create(&tmp)
+                .map_err(|e| SniffError::Other(format!("create {}: {e}", tmp.display())))?;
+            f.write_all(bytes)
                 .map_err(|e| SniffError::Other(format!("write {}: {e}", tmp.display())))?;
             f.sync_all()
                 .map_err(|e| SniffError::Other(format!("sync {}: {e}", tmp.display())))?;
@@ -155,77 +199,9 @@ impl SnapshotStore {
 // Naming
 // ---------------------------------------------------------------------------
 
-/// Sanitized host of `url` (`localhost:3000` -> `localhost_3000`); `local`
-/// for `file://` URLs and anything without an authority.
-fn domain_of(url: &str) -> String {
-    let rest = match url.find("://") {
-        Some(i) => &url[i + 3..],
-        None => url,
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let slug = slug(host, 80);
-    if slug.is_empty() {
-        "local".into()
-    } else {
-        slug.to_ascii_lowercase()
-    }
-}
-
-/// Sanitized URL pathname (`/products/42` -> `products_42`); `index` for `/`.
-fn path_of(url: &str) -> String {
-    let rest = match url.find("://") {
-        Some(i) => &url[i + 3..],
-        None => url,
-    };
-    let path = rest.split(['?', '#']).next().unwrap_or("");
-    let path = match path.find('/') {
-        Some(i) => &path[i..],
-        None => "/",
-    };
-    let slug = slug(path, 80);
-    if slug.is_empty() {
-        "index".into()
-    } else {
-        slug
-    }
-}
-
-/// `[UTC]-[path]-[selector].jsonl` — leading timestamp so file listings sort
-/// chronologically across executions of the same target.
-fn snapshot_file_name(config: &SniffConfig) -> String {
-    format!(
-        "{}-{}-{}.jsonl",
-        utc_now(),
-        path_of(&config.url),
-        slug(&config.selector, 40),
-    )
-}
-
-/// Collapse arbitrary text into a filesystem-safe slug.
-fn slug(raw: &str, max: usize) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut prev_underscore = false;
-    for c in raw.chars() {
-        if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
-            out.push(c);
-            prev_underscore = false;
-        } else if !prev_underscore {
-            out.push('_');
-            prev_underscore = true;
-        }
-    }
-    while matches!(out.as_bytes().first(), Some(b'_' | b'.' | b'-')) {
-        out.remove(0);
-    }
-    while matches!(out.as_bytes().last(), Some(b'_' | b'.' | b'-')) {
-        out.pop();
-    }
-    if out.len() > max {
-        out.truncate(max);
-    }
-    out
-}
+// `domain_of`, `path_of`, `snapshot_file_name`, `slug` and `utc_now` live in
+// `sniff_core::snapshot` so the CLI `--persist` and the MCP store share the
+// exact same file-tree contract.
 
 /// Split `YYYYMMDDTHHMMSSZ-[target].jsonl` into its parts.
 fn parse_snapshot_name(name: &str) -> Option<(String, String)> {
@@ -249,38 +225,6 @@ fn is_timestamp(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Time
-// ---------------------------------------------------------------------------
-
-/// Current UTC instant as `YYYYMMDDTHHMMSSZ` (Howard Hinnant's civil-from-days
-/// algorithm; no chrono dependency needed for the store).
-fn utc_now() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = (secs / 86_400) as i64;
-    let sod = secs % 86_400;
-    let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!("{y:04}{mo:02}{d:02}T{h:02}{m:02}{s:02}Z")
-}
-
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
-// ---------------------------------------------------------------------------
 // Containment
 // ---------------------------------------------------------------------------
 
@@ -301,7 +245,9 @@ fn ensure_contained(root: &Path, abs: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
     use sniff_core::config::OutputFormat;
+    use sniff_core::snapshot::{path_of, utc_now};
     use sniff_core::{ElementFilter, OutputConfig, SniffConfig, WaitStrategy};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn config(url: &str, selector: &str) -> SniffConfig {
         SniffConfig {
@@ -321,12 +267,31 @@ mod tests {
             viewport: None,
             include_custom_properties: false,
             stable_key: None,
+            attributes: vec![],
             stabilize: false,
             ax_tree: false,
             actions: Vec::new(),
             effects: true,
             effects_limit: 10,
+            screenshot: false,
+            screenshot_full_page: false,
         }
+    }
+
+    #[test]
+    fn save_creates_gitignored_root() {
+        let dir = temp_dir("snapshot_store_gitignore");
+        let store = SnapshotStore::new(dir.clone());
+        let cfg = config("http://localhost:3000/foo/bar", ".card");
+        store.save(&cfg, "{\"id\":1}\n").unwrap();
+        let gitignore = dir.join(".gitignore");
+        assert!(gitignore.exists(), "store root must carry a .gitignore");
+        assert_eq!(
+            std::fs::read_to_string(&gitignore).unwrap(),
+            "*\n",
+            ".gitignore must ignore everything inside the snapshot tree"
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -345,7 +310,7 @@ mod tests {
     #[test]
     fn file_name_keeps_path_and_selector() {
         let cfg = config("http://localhost:3000/foo/bar", "[data-testid=\"widget\"]");
-        let name = snapshot_file_name(&cfg);
+        let name = snapshot_file_name(&cfg.url, &cfg.selector, "jsonl");
         let stripped = name
             .strip_prefix(&format!("{}-", utc_now()))
             .unwrap()
@@ -382,6 +347,23 @@ mod tests {
     }
 
     #[test]
+    fn save_bytes_persists_binary_beside_snapshot() {
+        let dir = temp_dir("snapshot_store_bytes");
+        let store = SnapshotStore::new(dir.clone());
+        let cfg = config("http://localhost:3000/foo/bar", ".card");
+        let rel = store.save_bytes(&cfg, "png", b"\x89PNG\r\n\x1a\n").unwrap();
+        let abs = store.resolve(&rel).unwrap();
+        assert_eq!(
+            abs.extension().unwrap().to_str().unwrap(),
+            "png",
+            "extension must replace .jsonl"
+        );
+        let data = fs::read(&abs).unwrap();
+        assert_eq!(data, b"\x89PNG\r\n\x1a\n");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn resolve_rejects_traversal() {
         let dir = temp_dir("snapshot_store_traversal");
         let store = SnapshotStore::new(dir.clone());
@@ -392,8 +374,8 @@ mod tests {
     }
 
     #[test]
-    fn utc_timestamp_is_formatted() {
-        let ts = utc_now();
+    fn store_uses_shared_snapshot_naming() {
+        let ts = sniff_core::snapshot::utc_now();
         assert_eq!(ts.len(), 16);
         assert!(ts.ends_with('Z'));
         assert_eq!(ts.as_bytes()[8], b'T');

@@ -390,6 +390,7 @@ mod tests {
             effective_background: None,
             contrast: None,
             ax: None,
+            attributes: None,
             styles: Default::default(),
             pseudo: vec![],
             children: vec![ElementSnapshot {
@@ -406,6 +407,7 @@ mod tests {
                 effective_background: None,
                 contrast: None,
                 ax: None,
+                attributes: None,
                 styles: Default::default(),
                 pseudo: vec![],
                 children: vec![],

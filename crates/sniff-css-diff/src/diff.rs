@@ -390,6 +390,9 @@ fn compute_changes(base: &DiffNode, head: &DiffNode, opts: &DiffOptions) -> Opti
     if let Some(ax) = object_diff(base.ax.as_ref(), head.ax.as_ref()) {
         changes.insert("ax".into(), ax);
     }
+    if let Some(attrs) = object_diff(base.attributes.as_ref(), head.attributes.as_ref()) {
+        changes.insert("attrs".into(), attrs);
+    }
 
     if changes.is_empty() {
         None
@@ -709,6 +712,7 @@ mod tests {
             aria: None,
             contrast: None,
             ax: None,
+            attributes: None,
             children: vec![],
         }
     }
@@ -909,6 +913,33 @@ mod tests {
         let changes = deltas[0].changes.as_ref().unwrap();
         assert_eq!(changes["contrast"]["ratio"]["after"], 2.1);
         assert_eq!(changes["contrast"]["aa"]["after"], "fail");
+    }
+
+    #[test]
+    fn attributes_change_is_reported_per_key() {
+        let mut a = node("input", box_width("44px"));
+        let mut b = node("input", box_width("44px"));
+        a.attributes = Some(serde_json::json!({
+            "name": "parameters[items][0][title]", "data-id": "x"
+        }));
+        b.attributes = Some(serde_json::json!({
+            "name": "parameters[items][1][title]", "data-id": "x"
+        }));
+        let (deltas, _) = diff_trees(&[a], &[b], &DiffOptions::default());
+        assert_eq!(deltas.len(), 1);
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert_eq!(
+            changes["attrs"]["name"]["before"],
+            "parameters[items][0][title]"
+        );
+        assert_eq!(
+            changes["attrs"]["name"]["after"],
+            "parameters[items][1][title]"
+        );
+        assert!(
+            changes["attrs"].get("data-id").is_none(),
+            "unchanged attr omitted"
+        );
     }
 
     #[test]

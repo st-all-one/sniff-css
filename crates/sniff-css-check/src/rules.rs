@@ -366,6 +366,7 @@ mod tests {
             aria: Some(serde_json::json!({"focusable": true})),
             contrast: None,
             ax: None,
+            attributes: None,
             children: vec![],
         }
     }
