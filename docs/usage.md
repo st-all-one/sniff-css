@@ -242,7 +242,8 @@ Os snapshots persistidos pelo MCP ficam em `/config/sniffCSS` (o volume
   ```
 
 - **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em
-  qualquer distro, incluindo Alpine), macOS aarch64/x86_64, Windows x86_64.
+  qualquer distro, incluindo Alpine), macOS Apple Silicon (aarch64), Windows
+  x86_64.
 - **Imagem Docker**: `stallonels/sniffcss` (Docker Hub), multi-arch
   (linux/amd64 + linux/arm64), tag igual à do release (`latest` aponta para o
   último).

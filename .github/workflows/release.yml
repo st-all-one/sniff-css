@@ -48,10 +48,9 @@ jobs:
             os: ubuntu-latest
             cmd: cross
           - target: aarch64-apple-darwin
+            # Only one macOS binary (Apple Silicon, the current/latest macOS
+            # hardware). Intel macs (x86_64-apple-darwin) are not published.
             os: macos-14
-            cmd: cargo
-          - target: x86_64-apple-darwin
-            os: macos-13
             cmd: cargo
           - target: x86_64-pc-windows-msvc
             os: windows-latest

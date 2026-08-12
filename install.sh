@@ -57,8 +57,8 @@ detect_target() {
     case "$os-$arch" in
         linux-x86_64)  echo "x86_64-unknown-linux-musl" ;;
         linux-aarch64) echo "aarch64-unknown-linux-musl" ;;
-        darwin-x86_64) echo "x86_64-apple-darwin" ;;
         darwin-aarch64) echo "aarch64-apple-darwin" ;;
+        darwin-x86_64) err "Mac Intel não suportado: só é publicado o binário macOS (Apple Silicon / aarch64)" ;;
         windows-x86_64) echo "x86_64-pc-windows-msvc" ;;
         windows-aarch64) echo "aarch64-pc-windows-msvc" ;;
         *) err "Sem binário publicado para $os/$arch" ;;
