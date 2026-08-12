@@ -345,7 +345,7 @@ snapshots. The MCP equivalent passes an ordered `actions` array to
 When actions are configured, each one gets a UI-effect entry in a reserved
 `__actions` line of the JSONL (default ON; `--no-effects` to omit). Each entry
 captures a whole-page before/after snapshot around the interaction and answers
-**what** changed and **where**:
+**what** changed and **where** — in a **token-optimized** shape:
 
 ```json
 {"__actions": [{
@@ -353,18 +353,19 @@ captures a whole-page before/after snapshot around the interaction and answers
   "target": {"path": "button#open-table", "rect": {...}, "onscreen": true},
   "effect": "revealed",
   "summary": "8 element(s) appeared · biggest: TABLE 1430px below — 2146px from click",
+  "css_keys": ["display", "position", "z-index", "top", ...],   // ~38 props, once
   "appeared": [{
     "tag": "TABLE", "path": "table#table",
     "rect": {"x": 8, "y": 2143, "width": 113, "height": 55},
     "onscreen": false, "out_of_view": {"below": 1430},
     "distance_from_action": 2146, "direction": "below-left",
-    "css_before": null, "css_after": {"display": "table", ...}
+    "css_after_values": ["table", "static", "auto", ...]        // aligned to css_keys
   }],
-  "removed":  [{"tag": "...", "css_before": {...}, "css_after": null}],
+  "removed":  [{"tag": "...", "css_before_values": [...]}],
   "changed":  [{"tag": "...", "rect_before": {...}, "rect_after": {...},
                 "visible_before": false, "visible_after": true,
-                "css_changed": ["display", "background-color"],
-                "css_before": {...}, "css_after": {...}}]
+                "css_diff": {"background-color": {"before": "#fff",
+                                                  "after": "#2563eb"}}}]
 }]}
 ```
 
@@ -375,16 +376,24 @@ captures a whole-page before/after snapshot around the interaction and answers
   edge) + `distance_from_action` + `direction` locate *where* the change
   happened — e.g. a table that appeared 1430px below the fold, or a calendar
   that opened 2400px from its trigger.
-- `css_before`/`css_after` are a curated ~38-property visual/layout signature
-  of the affected element; `css_changed` lists the differing properties.
+- **Token hygiene is a contract:** the ~38-property signature schema is emitted
+  once per entry as `css_keys`; `appeared`/`removed` reference it by index via
+  `css_after_values`/`css_before_values` (arrays). `changed` carries `css_diff`
+  — only the properties that differ **beyond numeric tolerance** (`16px` vs
+  `16.2px` = equal), each with `before`/`after`. Empty/absent fields are
+  omitted, root nodes (`html`/`body`) report only theme/visual changes
+  (scrollbar/height/padding reflow is suppressed), and `changed` lists semantic
+  changes before positional ones.
 - Chained flows (modal → mini-modal → input) produce **one entry per step**,
   each with the previous step's state as its `before`.
 
 **UI-effect regression diff:** `sniffCSS-diff` (and MCP `sniffCSS_diff`)
-compare the `__actions` blocks when both sides carry them, emitting
+compare the `__actions` blocks when both sides carry them, **rehydrating the
+compact arrays back to readable property names**, and emit
 `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` lines (e.g.
-`appeared[0].rect.y: 8 → 900`, `onscreen: true → false`,
-`effect: revealed → no_effect`) and counting them in `actions_changed`.
+`appeared[0].rect.y: 8 → 900`, `appeared[0].css_after.display: block → none`,
+`onscreen: true → false`, `effect: revealed → no_effect`) counting them in
+`actions_changed`.
 
 ---
 
@@ -485,7 +494,7 @@ pinned in `Cross.toml`; MSRV 1.88. Changes tracked in `CHANGELOG.md`.
 - Interaction actions are scoped to the main frame (elements inside `<iframe>` are not clickable).
 - `type` inserts text (appends to the focused element); it does not clear the field first.
 - CLI action specs split on `:`, so selectors containing colons (`.btn:hover`, `[data-x="a:b"]`) must go through the MCP `actions` object (`selector` field) instead of `--click`/`--hover`/`--type` strings.
-- `__actions` lists are capped (`--effects-limit`, default 10) and reflow-caused "changed" entries can flood a busy page — raise the settle between chain steps and read the `summary`/biggest entry first.
+- `__actions` lists are capped (`--effects-limit`, default 10); root reflow is suppressed, but a busy page can still list many `changed` elements — read the `effect`/`summary` and the top semantic entries first.
 
 ---
 

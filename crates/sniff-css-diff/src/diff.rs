@@ -98,8 +98,14 @@ pub fn diff_actions(
         let h = head.get(index);
         match (b, h) {
             (Some(b), Some(h)) => {
+                // Rehydrate compact `css_*_values` arrays (via `css_keys`) into
+                // `css_before`/`css_after` objects so the diff reports readable
+                // property names; the `css_keys` schema header itself is dropped
+                // from comparison (it is a fixed constant).
+                let b = expand_action_values(b);
+                let h = expand_action_values(h);
                 let mut changes = Map::new();
-                compare_action_value(b, h, opts, "", &mut changes);
+                compare_action_value(&b, &h, opts, "", &mut changes);
                 if changes.is_empty() {
                     continue;
                 }
@@ -123,7 +129,7 @@ pub fn diff_actions(
                     path: None,
                     depth: None,
                     changes: None,
-                    snapshot: Some(json_before_after(Some(b), None)),
+                    snapshot: Some(json_before_after(Some(&expand_action_values(b)), None)),
                 });
             }
             (None, Some(h)) => {
@@ -135,12 +141,63 @@ pub fn diff_actions(
                     path: None,
                     depth: None,
                     changes: None,
-                    snapshot: Some(json_before_after(None, Some(h))),
+                    snapshot: Some(json_before_after(None, Some(&expand_action_values(h)))),
                 });
             }
             (None, None) => {}
         }
     }
+}
+
+/// Rehydrate the compact per-element signature of an `__actions` entry: turn
+/// `css_before_values`/`css_after_values` (arrays aligned to `css_keys`) back
+/// into `css_before`/`css_after` objects keyed by property name, and drop the
+/// `css_keys` header. Entries without `css_keys` (legacy or self-describing)
+/// pass through untouched.
+fn expand_action_values(action: &Value) -> Value {
+    let Some(obj) = action.as_object() else {
+        return action.clone();
+    };
+    let Some(keys) = obj.get("css_keys").and_then(Value::as_array) else {
+        return action.clone();
+    };
+    let names: Vec<Option<&str>> = keys.iter().map(|k| k.as_str()).collect();
+    // Expand one per-element record: `css_*_values` arrays -> `css_*` objects.
+    let expand_node = |node: &Value| -> Value {
+        let Some(o) = node.as_object() else {
+            return node.clone();
+        };
+        let mut out = o.clone();
+        for field in ["css_before_values", "css_after_values"] {
+            let Some(vals) = o.get(field).and_then(Value::as_array) else {
+                continue;
+            };
+            out.remove(field);
+            let mut m = Map::new();
+            for (i, v) in vals.iter().enumerate() {
+                if let Some(name) = names.get(i).copied().flatten() {
+                    m.insert(name.to_string(), v.clone());
+                }
+            }
+            out.insert(field.trim_end_matches("_values").into(), Value::Object(m));
+        }
+        Value::Object(out)
+    };
+    let expand_list = |list: &Value| -> Value {
+        let Some(arr) = list.as_array() else {
+            return list.clone();
+        };
+        Value::Array(arr.iter().map(expand_node).collect())
+    };
+    let mut out = obj.clone();
+    out.remove("css_keys");
+    if let Some(a) = out.get("appeared").cloned() {
+        out.insert("appeared".into(), expand_list(&a));
+    }
+    if let Some(r) = out.get("removed").cloned() {
+        out.insert("removed".into(), expand_list(&r));
+    }
+    Value::Object(out)
 }
 
 /// Recursively collect leaf-level before/after diffs into `changes`, with
@@ -1041,6 +1098,71 @@ mod tests {
         );
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].status, "ACTION_ADDED");
+        assert_eq!(stats.actions_changed, 1);
+    }
+
+    /// A compact entry: per-node signatures are value arrays aligned to a
+    /// single `css_keys` header, and `changed` records carry `css_diff`.
+    fn compact_action(effect: &str, display: &str) -> Value {
+        serde_json::json!({
+            "index": 0,
+            "action": "click",
+            "selector": "#open",
+            "effect": effect,
+            "target": {"path": "button#open", "onscreen": true},
+            "css_keys": ["display", "position", "z-index", "width", "height"],
+            "appeared": [{
+                "tag": "TABLE", "path": "body > table",
+                "rect": {"x": 0.0, "y": 8.0, "width": 600.0, "height": 120.0},
+                "onscreen": true,
+                "css_after_values": [display, "static", "auto", "600px", "120px"]
+            }],
+            "removed": [],
+            "changed": [{
+                "tag": "INPUT", "path": "input#q",
+                "rect": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0},
+                "css_diff": {"box-shadow": {"before": "none", "after": "#00000040 0 0 0 4px"}}
+            }]
+        })
+    }
+
+    #[test]
+    fn compact_action_values_are_expanded_to_readable_diff() {
+        let base = compact_action("revealed", "block");
+        // Same structure: the table is now display:none, and the input's focus
+        // box-shadow is gone.
+        let mut head = compact_action("revealed", "none");
+        head["changed"][0]["css_diff"]["box-shadow"]["after"] = Value::String("none".into());
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &[base],
+            &[head],
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, "ACTION_CHANGED");
+        let changes = deltas[0].changes.as_ref().unwrap();
+        assert!(
+            changes.get("appeared[0].css_after.display").is_some(),
+            "compact arrays must diff as named props: {changes}"
+        );
+        assert_eq!(changes["appeared[0].css_after.display"]["before"], "block");
+        assert_eq!(changes["appeared[0].css_after.display"]["after"], "none");
+        assert_eq!(
+            changes["changed[0].css_diff.box-shadow.after"]["before"],
+            "#00000040 0 0 0 4px"
+        );
+        assert_eq!(
+            changes["changed[0].css_diff.box-shadow.after"]["after"],
+            "none"
+        );
+        assert!(
+            changes.get("css_keys").is_none(),
+            "the schema header must not be compared: {changes}"
+        );
         assert_eq!(stats.actions_changed, 1);
     }
 }

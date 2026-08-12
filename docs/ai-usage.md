@@ -60,7 +60,7 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 | `--type sel:text` | Foca `sel` e digita `text` (type-ahead). Repetível. |
 | `--action spec` | Forma ordenada p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>`. Repetível. |
 | `--effects` / `--no-effects` | **default ON com ações** — mapa `__actions` por interação (o que apareceu/sumiu/mudou e onde; `no_effect` quando nada mudou). |
-| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (default `10`). |
+| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (em `changed`, semânticas primeiro; default `10`). |
 
 > Com `--action` ordenado, cadeias funcionam naturalmente (modal → mini-modal →
 > input): cada passo espera o próprio alvo e gera a própria entrada em
@@ -219,7 +219,12 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    linha `__actions` (default ON; `effects:false` omite): **por passo**, o que
    apareceu/sumiu/mudou de estilo e **onde** — rect, on-screen, offset
    fora-da-viewport, distância do ponto da ação — além de `no_effect` quando a
-   interação não mudou nada.
+   interação não mudou nada. O bloco é **orientado a tokens**: a assinatura CSS
+   de ~38 props sai uma vez (`css_keys`) e os elementos aparecem como arrays
+   (`css_after_values`/`css_before_values`); `changed` carrega `css_diff` só
+   com as props que mudaram (com tolerância numérica) e `before`/`after`;
+   reflow de raiz (`html`/`body` — scrollbar/altura/padding) é suprimido.
+   Leia primeiro `effect` e `summary`, depois os elementos listados.
    Por padrão **persiste** o snapshot em
    `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
    e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`

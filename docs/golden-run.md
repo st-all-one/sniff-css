@@ -88,7 +88,7 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 | Cards repetidos (grid) | `sniffCSS-check --uniform` acha o card estranho. |
 | Conteúdo que some após load | capture a subárvore estável: `--selector footer --depth 2` ou `--wait delay:N`. |
 | Elementos revelados por ação (modal/dropdown/menu) | `--click "#open"` (ou `--hover`/`--type`; no MCP, `actions`). O mesmo alvo `display:none` falha com timeout de `element-ready` sem a ação. |
-| Regressão de UI entre deploys | `sniffCSS-diff` compara os blocos `__actions` quando ambos os lados têm ações → deltas `ACTION_CHANGED` (o modal abriu fora da tela? `onscreen: false`?) + `actions_changed` no resumo. |
+| Regressão de UI entre deploys | `sniffCSS-diff` compara os blocos `__actions` quando ambos os lados têm ações → deltas `ACTION_CHANGED` (o modal abriu fora da tela? `onscreen: false`?) + `actions_changed` no resumo. Os arrays compactos (`css_*_values`) são reidratados no diff, então o delta usa nomes de props (`appeared[0].css_after.display`). |
 | Interações encadeadas (modal → mini-modal → input) | `--action` ordenado, um passo por seletor; cada passo gera sua entrada em `__actions` (before = estado do passo anterior). |
 
 ## 4. Falha de job (CI)

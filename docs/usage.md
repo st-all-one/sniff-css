@@ -64,7 +64,7 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--type sel:text` | Foca `sel` e digita `text` antes de capturar (repetível) — revela type-ahead | — |
 | `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` (repetível) | — |
 | `--effects` | Emitir a linha `__actions` com o mapa de efeito de UI por interação (o que apareceu/sumiu/mudou e onde) | **`on` com ações** (use `--no-effects`) |
-| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (maiores áreas primeiro) | `10` |
+| `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (em `changed`, mudanças semânticas vêm antes das de posição; demais listas por área) | `10` |
 | `--no-visible` | Incluir elementos invisíveis | — |
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
@@ -138,8 +138,16 @@ snapshot de página inteira antes/depois da ação e responde **o que** mudou e
 - `appeared` / `removed` / `changed`: elementos com `tag`, `path`, `rect`,
   `onscreen`, `out_of_view.{above,below,left,right}` (px além de cada borda da
   viewport), `distance_from_action` e `direction` (posição relativa ao ponto da
-  ação), `css_before`/`css_after` (assinatura curada de ~38 props visuais) e
-  `css_changed`.
+  ação). A assinatura CSS é compacta e orientada a tokens:
+  - `css_keys`: a lista de ~38 props visuais/layout emitida **uma vez por
+    entrada**; `appeared`/`removed` carregam `css_after_values`/
+    `css_before_values` (arrays de valores alinhados ao `css_keys`).
+  - `changed` carrega `css_diff` — só as props que mudaram além da tolerância
+    numérica, com `before`/`after` (ex.: `{"padding-top": {"before":"16px",
+    "after":"26px"}}`).
+  - Campos vazios/ausentes são omitidos; nós raiz (`html`/`body`) só reportam
+    mudanças de tema/visual (reflow de scrollbar/altura/padding é suprimido);
+    `changed` lista mudanças semânticas antes das de posição.
 - `summary`: resumo determinístico (ex.: `"1 element(s) appeared · biggest:
   TABLE 1430px below — 2146px from click"`).
 

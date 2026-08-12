@@ -108,11 +108,22 @@ emitido na linha reservada `__actions`:
   `hidden`/`changed`/`moved`/`no_effect`) e `summary` determinística.
 - Onde: `rect`, `onscreen`, `out_of_view.{above,below,left,right}`,
   `distance_from_action` (px do ponto clicado) e `direction` (bússola).
-- `css_before`/`css_after`: assinatura curada dos elementos afetados.
+- Assinatura CSS compacta e orientada a tokens:
+  - `css_keys`: a lista de ~38 props emitida **uma vez por entrada** com
+    records `appeared`/`removed`; os records referenciam por índice em
+    `css_after_values`/`css_before_values` (arrays alinhados).
+  - `changed` usa `css_diff` — só as props que mudaram além da tolerância
+    numérica (`16px` vs `16.2px` = igual), com `before`/`after` por prop.
+  - Campos vazios/ausentes são omitidos (`out_of_view`, `text`, `aria`,
+    `rect_before`/`rect_after`, `visible_before`/`visible_after`).
+  - Nós raiz (`html`/`body`) só reportam mudanças de tema/visual
+    (`ROOT_SIGNATURE_PROPS`): reflow geométrico (scrollbar, altura, padding)
+    não entra em `changed`; `changed` é ordenado semântico-primeiro.
 
 O `sniffCSS-diff`/`sniffCSS_diff` comparam os blocos `__actions` quando presentes
-(`diff_actions` em `sniff-css-diff`) com tolerância numérica nos rects →
-`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed` no resumo —
+(`diff_actions` em `sniff-css-diff`) com tolerância numérica nos rects, **reidratando
+os arrays compactos de volta para nomes legíveis** (`appeared[0].css_after.display`)
+→ `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed` no resumo —
 vira teste de regressão de UI ("o modal continuou abrindo na tela, no mesmo
 lugar?").
 

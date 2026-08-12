@@ -10,8 +10,15 @@
 //!
 //! The per-element record is deliberately small: a stable key, tag, rect,
 //! visibility, on-screen flag, a curated CSS *signature* (~38 visual/layout
-//! properties, the `css_before`/`css_after` values), a text snippet and the
-//! implicit ARIA role/name.
+//! properties) and the implicit ARIA role/name.
+//!
+//! Token hygiene is a contract: the full 38-property signature is emitted only
+//! once per action entry as `css_keys`, and per-element records reference it by
+//! index (`css_before_values`/`css_after_values` arrays). `changed` records
+//! carry `css_diff` (only the properties that differ beyond tolerance, with
+//! `before`/`after`), never the full maps. Root nodes (`html`/`body`) only
+//! report theme/visual changes (geometry reflow is suppressed), and empty
+//! fields are omitted entirely.
 
 use serde_json::{Map, Value, json};
 use sniff_core::{Action, SniffError, SniffResult};
@@ -19,9 +26,9 @@ use sniff_core::{Action, SniffError, SniffResult};
 use crate::action::ActionTarget;
 
 /// Curated visual/layout properties captured for every element in a page
-/// snapshot (the `css_before`/`css_after` values). Small enough to keep the
-/// before-map cheap and the diff deterministic, large enough to tell "a table
-/// appeared here" apart from "the page just reflowed".
+/// snapshot (the `css_keys` schema shared by all `css_*_values` arrays). Small
+/// enough to keep the before-map cheap and the diff deterministic, large enough
+/// to tell "a table appeared here" apart from "the page just reflowed".
 pub const EFFECT_SIGNATURE_PROPS: &[&str] = &[
     "display",
     "position",
@@ -66,6 +73,34 @@ pub const EFFECT_SIGNATURE_PROPS: &[&str] = &[
 /// Tolerance for treating a rect move as a real "moved" change (px), matching
 /// the main diff's default so subpixel jitter is ignored.
 const RECT_TOLERANCE: f64 = 0.5;
+
+/// Tolerance for treating two CSS signature values as equal (same unit, diff
+/// within this magnitude, e.g. `16px` vs `16.2px`). Applied per property.
+const SIGNATURE_TOLERANCE: f64 = 0.5;
+
+/// Theme/visual subset of [`EFFECT_SIGNATURE_PROPS`] reported for the root
+/// nodes `html`/`body`. Geometry, spacing and box-model props are excluded so a
+/// page reflow (scrollbar, viewport growth, padding compensation) never floods
+/// `changed` — roots only surface theme-level, stacking and visibility changes.
+pub const ROOT_SIGNATURE_PROPS: &[&str] = &[
+    "display",
+    "position",
+    "z-index",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "line-height",
+    "text-align",
+    "color",
+    "background-color",
+    "background-image",
+    "opacity",
+    "visibility",
+    "border-radius",
+    "box-shadow",
+    "transform",
+    "overflow",
+];
 
 /// One pass over `document.querySelectorAll('*')` producing the compact
 /// per-element records consumed by [`diff`]. Runs in a single
@@ -267,8 +302,13 @@ pub fn diff(
             }
             Some(before_rec) => {
                 let visible_changed = before_rec.visible != rec.visible;
-                let sig_changed = before_rec.signature != rec.signature;
-                let moved = rect_delta(&before_rec.rect, &rec.rect);
+                let root = is_root(rec);
+                let changed_props =
+                    signature_diff_keys(&before_rec.signature, &rec.signature, root);
+                let sig_changed = !changed_props.is_empty();
+                // Geometry reflow of the root nodes is noise (scrollbar width,
+                // viewport growth, padding compensation) — never report it.
+                let moved = !root && rect_delta(&before_rec.rect, &rec.rect);
                 if visible_changed {
                     if rec.visible {
                         n_revealed += 1;
@@ -276,17 +316,19 @@ pub fn diff(
                         n_hidden += 1;
                     }
                 }
-                if visible_changed || sig_changed || moved {
-                    changed.push(changed_entry(
+                if (visible_changed || sig_changed || moved)
+                    && let Some(entry) = changed_entry(
                         before_rec,
                         rec,
                         target,
                         vw,
                         vh,
                         visible_changed,
-                        sig_changed,
+                        changed_props,
                         moved,
-                    ));
+                    )
+                {
+                    changed.push(entry);
                 }
             }
         }
@@ -309,7 +351,25 @@ pub fn diff(
     };
     appeared.sort_by_key(sort_key);
     removed.sort_by_key(sort_key);
-    changed.sort_by_key(sort_key);
+    // Semantic changes (css_diff/visibility) first, then largest area — so a
+    // busy page opens with the entries that carry the most information.
+    let changed_sort_key = |v: &Value| {
+        let semantic = v
+            .get("css_diff")
+            .and_then(Value::as_object)
+            .is_some_and(|o| !o.is_empty())
+            || v.get("visible_before").is_some();
+        let area = v.get("rect").and_then(rect_of).map(area).unwrap_or(0.0);
+        std::cmp::Reverse((
+            semantic as u8,
+            area as i64,
+            v.get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        ))
+    };
+    changed.sort_by_key(changed_sort_key);
     if limit > 0 {
         appeared.truncate(limit);
         removed.truncate(limit);
@@ -348,6 +408,19 @@ pub fn diff(
     entry.insert("target".into(), Value::Object(target_obj));
     entry.insert("effect".into(), Value::String(effect.to_string()));
     entry.insert("summary".into(), Value::String(summary));
+    // The 38-property signature schema is emitted once per entry that carries
+    // appeared/removed records; per-node `css_*_values` arrays index into it.
+    if !appeared.is_empty() || !removed.is_empty() {
+        entry.insert(
+            "css_keys".into(),
+            Value::Array(
+                EFFECT_SIGNATURE_PROPS
+                    .iter()
+                    .map(|p| Value::String((*p).to_string()))
+                    .collect(),
+            ),
+        );
+    }
     entry.insert("appeared".into(), Value::Array(appeared));
     entry.insert("removed".into(), Value::Array(removed));
     entry.insert("changed".into(), Value::Array(changed));
@@ -391,9 +464,9 @@ fn classify_effect(
     } else if !removed.is_empty() || n_hidden > 0 {
         Effect::Hidden
     } else if changed.iter().any(|c| {
-        c.get("css_changed")
-            .and_then(Value::as_array)
-            .is_some_and(|a| !a.is_empty())
+        c.get("css_diff")
+            .and_then(Value::as_object)
+            .is_some_and(|o| !o.is_empty())
     }) {
         Effect::Changed
     } else if !changed.is_empty() {
@@ -505,7 +578,10 @@ fn base_entry(rec: &ElementRec, target: &ActionTarget, vw: f64, vh: f64) -> Map<
         "onscreen".into(),
         Value::Bool(rect_onscreen(rec.rect, vw, vh)),
     );
-    m.insert("out_of_view".into(), out_of_view(rec.rect, vw, vh));
+    let oov = out_of_view(rec.rect, vw, vh);
+    if oov.as_object().is_some_and(|o| !o.is_empty()) {
+        m.insert("out_of_view".into(), oov);
+    }
     let dist = distance_from_point(rec.rect, target.center.0, target.center.1);
     m.insert("distance_from_action".into(), Value::from(dist.round()));
     m.insert(
@@ -526,16 +602,66 @@ fn base_entry(rec: &ElementRec, target: &ActionTarget, vw: f64, vh: f64) -> Map<
 
 fn appeared_entry(rec: &ElementRec, target: &ActionTarget, vw: f64, vh: f64) -> Value {
     let mut m = base_entry(rec, target, vw, vh);
-    m.insert("css_before".into(), Value::Null);
-    m.insert("css_after".into(), Value::Object(rec.signature.clone()));
+    m.insert("css_after_values".into(), signature_values(&rec.signature));
     Value::Object(m)
 }
 
 fn removed_entry(rec: &ElementRec, target: &ActionTarget, vw: f64, vh: f64) -> Value {
     let mut m = base_entry(rec, target, vw, vh);
-    m.insert("css_before".into(), Value::Object(rec.signature.clone()));
-    m.insert("css_after".into(), Value::Null);
+    m.insert("css_before_values".into(), signature_values(&rec.signature));
     Value::Object(m)
+}
+
+/// The 38-property signature as a value array aligned to `css_keys` (missing
+/// props padded with `null`, so every array has the same length/order).
+fn signature_values(sig: &Map<String, Value>) -> Value {
+    Value::Array(
+        EFFECT_SIGNATURE_PROPS
+            .iter()
+            .map(|p| sig.get(*p).cloned().unwrap_or(Value::Null))
+            .collect(),
+    )
+}
+
+/// Property names (in canonical order) whose signature value differs beyond
+/// [`SIGNATURE_TOLERANCE`]. For root nodes only [`ROOT_SIGNATURE_PROPS`] are
+/// compared, so pure geometry reflow never marks `html`/`body` as changed.
+fn signature_diff_keys(
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+    root: bool,
+) -> Vec<String> {
+    let props: &[&str] = if root {
+        ROOT_SIGNATURE_PROPS
+    } else {
+        EFFECT_SIGNATURE_PROPS
+    };
+    props
+        .iter()
+        .filter(|p| !css_value_equal(before.get(**p), after.get(**p)))
+        .map(|p| p.to_string())
+        .collect()
+}
+
+fn is_root(rec: &ElementRec) -> bool {
+    rec.tag == "HTML" || rec.tag == "BODY"
+}
+
+/// Signature-value equality applying [`SIGNATURE_TOLERANCE`] to numbers (and
+/// strings carrying numbers), so subpixel jitter doesn't show up in `css_diff`.
+fn css_value_equal(a: Option<&Value>, b: Option<&Value>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(Value::String(x)), Some(Value::String(y))) => {
+            x == y || numeric_close(x, y, SIGNATURE_TOLERANCE)
+        }
+        (Some(Value::Number(x)), Some(Value::Number(y))) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => x == y || (x - y).abs() <= SIGNATURE_TOLERANCE,
+            _ => x == y,
+        },
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -545,29 +671,41 @@ fn changed_entry(
     target: &ActionTarget,
     vw: f64,
     vh: f64,
-    _visible_changed: bool,
-    sig_changed: bool,
-    _moved: bool,
-) -> Value {
+    visible_changed: bool,
+    changed_props: Vec<String>,
+    moved: bool,
+) -> Option<Value> {
+    // Skip nodes that only moved (roots never get here with `moved`, geometry
+    // reflow being suppressed) — a pure reflow carries no UI-level signal.
+    if !visible_changed && changed_props.is_empty() && !moved {
+        return None;
+    }
     let mut m = base_entry(after, target, vw, vh);
-    m.insert("rect_before".into(), rect_to_json(before.rect));
-    m.insert("rect_after".into(), rect_to_json(after.rect));
-    m.insert("visible_before".into(), Value::Bool(before.visible));
-    m.insert("visible_after".into(), Value::Bool(after.visible));
-    let changed_props: Vec<Value> = if sig_changed {
-        after
-            .signature
-            .iter()
-            .filter(|(k, v)| before.signature.get(*k) != Some(v))
-            .map(|(k, _)| Value::String(k.clone()))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    m.insert("css_changed".into(), Value::Array(changed_props));
-    m.insert("css_before".into(), Value::Object(before.signature.clone()));
-    m.insert("css_after".into(), Value::Object(after.signature.clone()));
-    Value::Object(m)
+    if moved {
+        m.insert("rect_before".into(), rect_to_json(before.rect));
+        m.insert("rect_after".into(), rect_to_json(after.rect));
+    }
+    if visible_changed {
+        m.insert("visible_before".into(), Value::Bool(before.visible));
+        m.insert("visible_after".into(), Value::Bool(after.visible));
+    }
+    if !changed_props.is_empty() {
+        let mut diff = Map::new();
+        for k in &changed_props {
+            let mut pair = Map::new();
+            pair.insert(
+                "before".into(),
+                before.signature.get(k).cloned().unwrap_or(Value::Null),
+            );
+            pair.insert(
+                "after".into(),
+                after.signature.get(k).cloned().unwrap_or(Value::Null),
+            );
+            diff.insert(k.clone(), Value::Object(pair));
+        }
+        m.insert("css_diff".into(), Value::Object(diff));
+    }
+    Some(Value::Object(m))
 }
 
 // ---------------------------------------------------------------------------
@@ -677,6 +815,28 @@ fn rect_delta(a: &(f64, f64, f64, f64), b: &(f64, f64, f64, f64)) -> bool {
         || (a.1 - b.1).abs() > RECT_TOLERANCE
         || (a.2 - b.2).abs() > RECT_TOLERANCE
         || (a.3 - b.3).abs() > RECT_TOLERANCE
+}
+
+/// True when two CSS strings are numbers with the same unit and within `tol`
+/// (e.g. `16px` vs `16.2px`).
+fn numeric_close(a: &str, b: &str, tol: f64) -> bool {
+    let (Some((x, ru)), Some((y, rv))) = (leading_number(a), leading_number(b)) else {
+        return false;
+    };
+    ru == rv && (x - y).abs() <= tol
+}
+
+/// Split a CSS value into a leading number and the unit remainder.
+fn leading_number(s: &str) -> Option<(f64, &str)> {
+    let s = s.trim();
+    let idx = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+        .unwrap_or(s.len());
+    if idx == 0 {
+        return None;
+    }
+    let (num, rest) = s.split_at(idx);
+    Some((num.parse().ok()?, rest))
 }
 
 fn rect_onscreen(rect: (f64, f64, f64, f64), vw: f64, vh: f64) -> bool {
@@ -831,6 +991,27 @@ mod tests {
         }
     }
 
+    /// Read a per-element signature value by property name from the compact
+    /// `css_*_values` array, using the entry's `css_keys` header.
+    fn sig_value<'a>(
+        report: &'a Value,
+        rec: &'a Value,
+        field: &str,
+        prop: &str,
+    ) -> Option<&'a Value> {
+        let keys = report["css_keys"].as_array()?;
+        let idx = keys.iter().position(|k| k.as_str() == Some(prop))?;
+        rec.get(field)?.as_array()?.get(idx)
+    }
+
+    fn rec_with_sig(key: &str, tag: &str, sig: Value) -> Value {
+        json!({
+            "k": key, "t": tag, "r": [0.0, 0.0, 100.0, 40.0],
+            "v": true, "o": true,
+            "s": sig,
+        })
+    }
+
     #[test]
     fn diff_detects_appeared_element_with_off_view() {
         let before = snapshot(vec![rec(
@@ -872,6 +1053,19 @@ mod tests {
         assert_eq!(appeared["out_of_view"]["below"], 352.0);
         assert!(appeared["distance_from_action"].as_f64().unwrap() > 0.0);
         assert!(report["summary"].as_str().unwrap().contains("appeared"));
+        // The signature schema is shared once per entry; per-node arrays align.
+        let keys = report["css_keys"].as_array().unwrap();
+        assert_eq!(keys.len(), EFFECT_SIGNATURE_PROPS.len());
+        assert_eq!(
+            appeared["css_after_values"].as_array().unwrap().len(),
+            EFFECT_SIGNATURE_PROPS.len(),
+            "value array must align with css_keys"
+        );
+        assert_eq!(
+            sig_value(&report, appeared, "css_after_values", "display"),
+            Some(&Value::String("table".into()))
+        );
+        assert!(appeared.get("css_before_values").is_none());
     }
 
     #[test]
@@ -944,8 +1138,8 @@ mod tests {
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0]["visible_before"], false);
         assert_eq!(changed[0]["visible_after"], true);
-        let css_changed = changed[0]["css_changed"].as_array().unwrap();
-        assert!(css_changed.iter().any(|v| v == "display"));
+        let css_diff = changed[0]["css_diff"].as_object().unwrap();
+        assert!(css_diff.contains_key("display"), "got: {css_diff:?}");
     }
 
     #[test]
@@ -983,8 +1177,19 @@ mod tests {
         );
         assert_eq!(report["effect"], "hidden");
         assert_eq!(report["removed"].as_array().unwrap().len(), 1);
-        assert_eq!(report["removed"][0]["css_before"]["display"], "block");
-        assert_eq!(report["removed"][0]["css_after"], Value::Null);
+        assert_eq!(
+            sig_value(
+                &report,
+                &report["removed"][0],
+                "css_before_values",
+                "display"
+            ),
+            Some(&Value::String("block".into()))
+        );
+        assert!(
+            report["removed"][0].get("css_after_values").is_none(),
+            "removed nodes carry no after signature"
+        );
     }
 
     #[test]
@@ -1057,14 +1262,200 @@ mod tests {
         assert_eq!(report["effect"], "changed");
         let changed = report["changed"].as_array().unwrap();
         assert_eq!(changed.len(), 1);
-        assert!(
-            changed[0]["css_changed"]
-                .as_array()
-                .unwrap()
-                .contains(&Value::String("background-color".into()))
+        let css_diff = changed[0]["css_diff"].as_object().unwrap();
+        assert!(css_diff.contains_key("background-color"));
+        assert_eq!(css_diff["background-color"]["before"], Value::Null);
+        assert_eq!(css_diff["background-color"]["after"], "#ff0000");
+    }
+
+    #[test]
+    fn root_geometry_reflow_is_suppressed_but_theme_changes_surface() {
+        let root_sig = |width: &str, height: &str, bg: &str| {
+            json!({
+                "display": "block", "position": "static", "z-index": "auto",
+                "width": width, "height": height, "padding-top": "20px",
+                "background-color": bg, "background-image": "none",
+            })
+        };
+        let before = snapshot(vec![
+            rec_with_sig("html", "HTML", root_sig("1366px", "768px", "#00000000")),
+            rec_with_sig(
+                "html > body",
+                "BODY",
+                root_sig("1366px", "768px", "#00000000"),
+            ),
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+        ]);
+        let after = snapshot(vec![
+            // Geometry reflow only: viewport width shrink + content growth.
+            rec_with_sig("html", "HTML", root_sig("1351px", "1884px", "#00000000")),
+            rec_with_sig(
+                "html > body",
+                "BODY",
+                root_sig("1351px", "1884px", "#00000000"),
+            ),
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+        ]);
+        let report = diff(
+            &before,
+            &after,
+            &target(125.0, 120.0),
+            &click_action(),
+            0,
+            10,
         );
-        assert_eq!(changed[0]["css_before"].get("background-color"), None);
-        assert_eq!(changed[0]["css_after"]["background-color"], "#ff0000");
+        assert_eq!(
+            report["changed"].as_array().unwrap().len(),
+            0,
+            "geometry-only root reflow must not flood changed"
+        );
+        assert_eq!(report["effect"], "no_effect");
+
+        // Now add a real theme change on BODY: background-color flips.
+        let after2 = snapshot(vec![
+            rec_with_sig("html", "HTML", root_sig("1351px", "1884px", "#00000000")),
+            rec_with_sig(
+                "html > body",
+                "BODY",
+                root_sig("1351px", "1884px", "#ffffff"),
+            ),
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+        ]);
+        let report = diff(
+            &before,
+            &after2,
+            &target(125.0, 120.0),
+            &click_action(),
+            0,
+            10,
+        );
+        let changed = report["changed"].as_array().unwrap();
+        assert_eq!(changed.len(), 1, "only BODY surfaces a theme change");
+        assert_eq!(changed[0]["tag"], "BODY");
+        let css_diff = changed[0]["css_diff"].as_object().unwrap();
+        assert!(
+            css_diff.contains_key("background-color"),
+            "theme diff must be reported: {css_diff:?}"
+        );
+        assert!(
+            !css_diff.contains_key("width") && !css_diff.contains_key("height"),
+            "root geometry must stay out of css_diff: {css_diff:?}"
+        );
+        assert!(
+            changed[0].get("rect_before").is_none(),
+            "root nodes never report rect movement"
+        );
+    }
+
+    #[test]
+    fn css_diff_ignores_subpixel_jitter_beyond_tolerance() {
+        let sig_a = json!({
+            "display": "block", "position": "static", "z-index": "auto",
+            "font-size": "16px", "width": "340px", "height": "58px",
+        });
+        let mut sig_b = sig_a.clone();
+        sig_b["font-size"] = Value::String("16.2px".into());
+        let before = snapshot(vec![
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+            rec_with_sig("body > .field", "INPUT", sig_a.clone()),
+        ]);
+        let after = snapshot(vec![
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+            rec_with_sig("body > .field", "INPUT", sig_b),
+        ]);
+        let report = diff(
+            &before,
+            &after,
+            &target(125.0, 120.0),
+            &click_action(),
+            0,
+            10,
+        );
+        assert_eq!(
+            report["changed"].as_array().unwrap().len(),
+            0,
+            "subpixel jitter within tolerance must not mark a node changed"
+        );
+
+        // A real size change (unit-consistent) still surfaces.
+        let mut sig_c = sig_a.clone();
+        sig_c["font-size"] = Value::String("20px".into());
+        let after2 = snapshot(vec![
+            rec(
+                "button#open",
+                "BUTTON",
+                (100.0, 100.0, 100.0, 40.0),
+                true,
+                "block",
+            ),
+            rec_with_sig("body > .field", "INPUT", sig_c),
+        ]);
+        let report = diff(
+            &before,
+            &after2,
+            &target(125.0, 120.0),
+            &click_action(),
+            0,
+            10,
+        );
+        let changed = report["changed"].as_array().unwrap();
+        assert_eq!(changed.len(), 1);
+        assert!(changed[0]["css_diff"]["font-size"]["before"] == "16px");
+        assert!(changed[0]["css_diff"]["font-size"]["after"] == "20px");
+    }
+
+    #[test]
+    fn no_effect_entries_omit_css_keys() {
+        let before = snapshot(vec![rec(
+            "button#open",
+            "BUTTON",
+            (100.0, 100.0, 100.0, 40.0),
+            true,
+            "block",
+        )]);
+        let report = diff(
+            &before,
+            &before.clone(),
+            &target(125.0, 120.0),
+            &click_action(),
+            0,
+            10,
+        );
+        assert_eq!(report["effect"], "no_effect");
+        assert!(
+            report.get("css_keys").is_none(),
+            "no appeared/removed records -> no css_keys header"
+        );
     }
 
     #[test]
