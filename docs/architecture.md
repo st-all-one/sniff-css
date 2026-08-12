@@ -79,12 +79,16 @@ Isso mantém o motor simples, testável e 100% estático.
 ### 3b. Ações de interação como dados
 
 Da mesma forma, as interações de usuário são um enum de configuração
-(`sniff-core::Action`: `Click`/`Hover`/`Type`) executado por
-`sniff_engine::action` via o domínio `Input` do CDP (`Input.dispatchMouseEvent`
-para click/hover, `Input.insertText` para type). Cada ação espera o próprio
-seletor aparecer (polling), rola até o centro (`scrollIntoView` + leitura do
-rect) e dispara um **evento confiável** — não um `el.click()` sintético, então
-`:hover`/`:active`/`pointer`/`mouse`/`click` disparam de verdade.
+(`sniff-core::Action`: `Click`/`Hover`/`Type`/`Upload`) executado por
+`sniff_engine::action` via o domínio `Input`/`DOM` do CDP
+(`Input.dispatchMouseEvent` para click/hover, `Input.insertText` para type,
+`DOM.setFileInputFiles` para upload). Cada ação espera o próprio seletor
+aparecer (polling), rola até o centro (`scrollIntoView` + leitura do rect) e
+dispara um **evento confiável** — não um `el.click()` sintético, então
+`:hover`/`:active`/`pointer`/`mouse`/`click` disparam de verdade. Upload aceita
+alvos **ocultos** (file inputs costumam ter `display:none`; o `prepare` relaxa
+visibilidade para essa variante) e o próprio Chromium dispara `change`, então
+handlers reais (cropper de imagem) rodam.
 
 Quando `config.actions` não está vazio, o `sniffer` pula o wait inicial e roda
 as ações em ordem após `navigate`/`stabilize`; o pipeline de waits (`waiter`)
@@ -128,10 +132,26 @@ vira teste de regressão de UI ("o modal continuou abrindo na tela, no mesmo
 lugar?").
 
 ### 4. Catálogo de propriedades
-
 `sniff-core::properties` define 8 categorias com ~250 propriedades padrão da
 web. O catálogo evita serializar as ~400 propriedades computadas de cada
 elemento — só as solicitadas são extraídas (ganho ~80% em payload).
+
+### 4b. Identidade de sessão (headers + storage state)
+
+A sessão é configurada **antes** do `Page.navigate` no `sniff_session_with_progress`
+(`sniff_engine::sniffer`):
+
+- **Headers HTTP** (`config.headers` → `Network.setExtraHTTPHeaders`): aplicados
+  a todo request da sessão; cobre auth stateless por header (ex. middleware IA
+  de CMS `X-CMS-AI-Token`) sem token em URL/proxy.
+- **Estado de sessão** (`config.storage_state_path` → `sniff_core::storage`):
+  formato Playwright `storageState` (cookies + `origins[].localStorage`).
+  Restauração = `Network.setCookies` (cookies escopados por domain/path) +
+  `Page.addScriptToEvaluateOnNewDocument` com um script **origin-guarded** que
+  grava o `localStorage` antes dos scripts da página (timing correto para SPAs).
+- **Exportação** (`config.save_storage_state`): ao fim do pipeline, lê
+  `Network.getAllCookies` + `localStorage` da origem atual e grava o mesmo JSON
+  — um login feito por `actions` vira estado persistente entre restarts.
 
 ## Formato de saída
 

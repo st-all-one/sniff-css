@@ -58,7 +58,8 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 | `--click sel[:timeout[:settle]]` | Clique real no centro de `sel` (modais, dropdowns). Repetível. |
 | `--hover sel[:timeout[:settle]]` | `mouseMoved` para `sel` (menus de `:hover`). Repetível. |
 | `--type sel:text` | Foca `sel` e digita `text` (type-ahead). Repetível. |
-| `--action spec` | Forma ordenada p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>`. Repetível. |
+| `--upload sel:file1,file2` | Anexa arquivos locais a um `<input type=file>` (`DOM.setFileInputFiles`) — funciona em inputs ocultos e o browser dispara `change` sozinho, então uploads reais (ex. cropper do CMS) rodam. Repetível. |
+| `--action spec` | Forma ordenada p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` · `upload:<sel>:<file1,file2>`. Repetível. |
 | `--effects` / `--no-effects` | **default ON com ações** — mapa `__actions` por interação (o que apareceu/sumiu/mudou e onde; `no_effect` quando nada mudou). |
 | `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (em `changed`, semânticas primeiro; default `10`). |
 
@@ -66,6 +67,14 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 > input): cada passo espera o próprio alvo e gera a própria entrada em
 > `__actions`, com o before = estado do passo anterior. Em passo quebrado, o
 > erro nomeia o índice, o seletor e os passos anteriores.
+
+### Acesso a áreas restritas (novo)
+
+| Flag | Efeito |
+|---|---|
+| `--header "Name: Value"` | Headers HTTP extras aplicados a **todo** request da sessão (`Network.setExtraHTTPHeaders`), ex. `--header "X-CMS-AI-Token: <token>"` para auth stateless de CMS. Repetível; `SNIFF_DEFAULT_HEADERS` (JSON) é mesclado antes, e `--header` explícito vence na colisão. |
+| `--storage-state PATH` | Restaura estado de sessão persistido (cookies + `localStorage`, JSON storageState do Playwright) **antes** da navegação: cookies via `Network.setCookies`, `localStorage` via script que roda antes dos scripts da página. Login prévio sobrevive a este capture. |
+| `--save-storage-state PATH` | Exporta cookies + `localStorage` da origem atual ao fim do pipeline — faça login por `actions` numa captura e reutilize o arquivo em `--storage-state` nas seguintes (sobrevive a restarts do browser). |
 
 ### Controle de volumetria, prova visual e atributos DOM (novo)
 
@@ -227,17 +236,26 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
    custom_props, stable_key, **attributes**, pseudo, wait, actions, viewport,
    format, stabilize, contrast, include_ax, ax_tree, effects, effects_limit,
    **include_invisible**, **exclude**, **min_width**, **min_height**,
-   **screenshot** (default `false`), **screenshot_full_page**, full, persist, return).
+   **screenshot** (default `false`), **screenshot_full_page**, full, persist, return,
+   **headers**, **storage_state**, **save_storage_state**).
+   **Defaults de equipe (env do servidor):** `SNIFF_DEFAULT_HEADERS`
+   (`{"X-CMS-AI-Token":"<token>"}`, mesclado em todo request; `headers` por chamada
+   sobrescreve por chave), `SNIFF_STORAGE_STATE` (estado de sessão restaurado antes
+   de toda navegação; `storage_state` por chamada sobrescreve) e `SNIFF_BASE_URL`
+   (prefixo para `url` relativa, ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`).
    Os defaults já são os otimizados: `compact`, `custom_props`, `stabilize`,
    `contrast` e `include_ax` vêm ligados — passe `full:true` para full-fidelity
    ou qualquer flag como `false` para desligar individualmente.
    Para elementos que só existem após uma ação, passe `actions` (array **ordenado**
-   de `{type: "click"|"hover"|"type", selector, text?, timeout_ms?, settle_ms?}`);
-   cada ação espera o próprio alvo, interage de verdade (evento confiável via
-   `Input.dispatchMouseEvent`/`Input.insertText`) e o pipeline de waits roda depois
+   de `{type: "click"|"hover"|"type"|"upload", selector, text?, files?, timeout_ms?,
+   settle_ms?}`); cada ação espera o próprio alvo, interage de verdade (evento
+   confiável via `Input.dispatchMouseEvent`/`Input.insertText`, ou
+   `DOM.setFileInputFiles` para `upload`) e o pipeline de waits roda depois
    contra o DOM pós-interação. Ex.: `[{"type":"click","selector":"#open-modal"}]`
-   abre um modal antes de capturar o `.modal`. Cadeias (modal → mini-modal →
-   input) listam cada passo em ordem. Com `actions` setado, o snapshot carrega a
+   abre um modal antes de capturar o `.modal`; `{"type":"upload","selector":"#file",
+   "files":["/tmp/x.png"]}` sobe um arquivo num `<input type=file>` (inclusive
+   oculto) e o cropper/handler real roda. Cadeias (modal → mini-modal → input)
+   listam cada passo em ordem. Com `actions` setado, o snapshot carrega a
    linha `__actions` (default ON; `effects:false` omite): **por passo**, o que
    apareceu/sumiu/mudou de estilo e **onde** — rect, on-screen, offset
    fora-da-viewport, distância do ponto da ação — além de `no_effect` quando a
@@ -252,6 +270,10 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
     DOM verbatim sob `attrs` (valida reindexação de forms sem curl);
     `screenshot:true` (+ `screenshot_full_page`) persiste um PNG junto do snapshot
     e devolve `screenshot_path` no `__sniff`.
+    **Novo (auth/sessão):** `headers:{"X-CMS-AI-Token":"<token>"}` autentica
+    áreas restritas (aplicado a todo request via `Network.setExtraHTTPHeaders`);
+    `storage_state`/`save_storage_state` restauram/exportam cookies+`localStorage`
+    (um login por `actions` sobrevive a restarts).
     Por padrão **persiste** o snapshot em
     `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
     e responde com o **digest summary** (estrutura + `css` + `contrast` + `aria`);

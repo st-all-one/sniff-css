@@ -297,7 +297,7 @@ disk and never enters the tool call or the returned content.
 
 | Tool | Inputs | Returns |
 |------|--------|---------|
-| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects** (default `true`), **effects_limit** (default `10`), **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot** (default `false`), **screenshot_full_page**, **full** (default `false`), **persist** (default `true`), **return** (default `"summary"`) | summary digest (structural + css subset + contrast + aria) by default; tiny `{"__sniff": {path, url, selector, nodes, actions, screenshot_path?}}` with `return:"reference"`; full JSONL (incl. `__actions`) with `return:"jsonl"` (+ `notifications/progress` per phase) |
+| `sniffCSS_page` | url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects** (default `true`), **effects_limit** (default `10`), **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot** (default `false`), **screenshot_full_page**, **full** (default `false`), **persist** (default `true`), **return** (default `"summary"`), **headers**, **storage_state**, **save_storage_state** | summary digest (structural + css subset + contrast + aria) by default; tiny `{"__sniff": {path, url, selector, nodes, actions, screenshot_path?}}` with `return:"reference"`; full JSONL (incl. `__actions`) with `return:"jsonl"` (+ `notifications/progress` per phase) |
 | `sniffCSS_snapshots` | domain, target, limit (all optional) | JSONL lines: `{domain, target, path, created_at, size}`, newest first |
 | `sniffCSS_diff` | **base_path, head_path** (preferred) or base_jsonl, head_jsonl; tolerance, ignore_props, ignore_structural | CHANGED/ADDED/REMOVED delta (incl. `attrs`) + `__action_*` UI-effect deltas + `__diff_summary` (incl. `actions_changed`) |
 | `sniffCSS_check` | **path** (preferred) or jsonl; uniform, rules, tolerance | PASS/WARN/FAIL lines + outliers + `__check_summary` |
@@ -320,6 +320,13 @@ disk and never enters the tool call or the returned content.
   and get `screenshot_path` in the reference. Set `include_invisible:true`
   (with `wait:["delay:..."]`) to capture scroll-reveal/WOW.js content, and
   `attributes:["name"]` to get verbatim form-field names for reindex validation.
+  For restricted areas (e.g. a CMS behind a stateless AI-token middleware) pass
+  `headers: {"X-CMS-AI-Token": "<token>"}` — applied to every request before
+  navigation. `storage_state`/`save_storage_state` round-trip a login
+  (cookies + localStorage) across restarts: save after a login-by-actions
+  capture, then pass the path on later captures. `actions` also accept
+  `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` to drive real
+  file-input uploads (e.g. opening the CMS image cropper).
 - **`sniffCSS_snapshots`** — the memory of the store. When you need a base/head
   pair (or the path of the latest capture for a target), query here instead of
   guessing filenames. Filter `domain`/`target`; `limit` caps the newest N.
@@ -367,6 +374,22 @@ from disk rather than re-capturing.
   and rejects anything escaping the root.
 - Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`,
   `sniffCSS://guides/golden`.
+
+### Team defaults (`sniffCSS-mcp` env)
+
+Configure once at server start so the agent never has to repeat auth/session
+plumbing per capture; per-call values win on collision:
+
+- `SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'` — extra HTTP headers
+  applied to **every** `sniffCSS_page` request (stateless CMS auth). A call's
+  own `headers` object overrides per-key.
+- `SNIFF_STORAGE_STATE=/path/state.json` — session state restored before every
+  navigation (call `storage_state` overrides).
+- `SNIFF_BASE_URL=http://localhost:10011` — prefixed to relative `url` values
+  (e.g. `cms/dashboard` → `http://localhost:10011/cms/dashboard`).
+
+The CLI mirrors the first two: `--header "Name: Value"` (+ `SNIFF_DEFAULT_HEADERS`
+merged first), `--storage-state`, `--save-storage-state`.
 
 ---
 
@@ -472,6 +495,11 @@ sniffCSS -u "$URL" -s ".result" \
   --action "click:#open-modal:5000" \
   --action "type:#q:shoes" \
   --action "click:.result-item"
+# attach a file to a (possibly hidden) <input type=file>; the browser fires
+# `change`, so real upload handlers run — e.g. a CMS image cropper
+sniffCSS -u "$URL" -s "#cropper-wrapper" \
+  --action "upload:#media-input:/tmp/pixel.png" \
+  --wait "delay:7000" --wait "element-ready:#cropper-wrapper:visible,has-size:15000"
 ```
 
 The wait pipeline (selector + network-idle + element-ready on the capture
@@ -482,7 +510,27 @@ snapshots. The MCP equivalent passes an ordered `actions` array to
 
 ```json
 {"actions": [{"type": "click", "selector": "#open-modal"},
-             {"type": "type", "selector": "#q", "text": "shoes"}]}
+             {"type": "type", "selector": "#q", "text": "shoes"},
+             {"type": "upload", "selector": "#media-input",
+              "files": ["/tmp/pixel.png"]}]}
+```
+
+### Authenticated / restricted captures
+
+For areas behind a login, the header token path is the cleanest fix: the CMS
+middleware authenticates every request without a URL token, `.env` or proxy.
+Restore a previously-saved session (cookies + localStorage) with
+`--storage-state`; re-export after a login performed through actions with
+`--save-storage-state`:
+
+```bash
+# 1. login via actions, export the session at the end
+sniffCSS -u "$URL/login" -s ".dashboard" \
+  --type "#email:admin@x.com" --type "#password:secret" \
+  --click "button[type=submit]" --save-storage-state /tmp/cms-state.json
+# 2. later captures restore it (fresh browser, cookie + localStorage restored
+#    before the page's scripts run)
+sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
 ```
 
 ### Map what happened at the UI level (`__actions`)
@@ -638,7 +686,9 @@ pinned in `Cross.toml`; MSRV 1.88. Changes tracked in `CHANGELOG.md`.
 - Hidden panels (carousels/tabs) are still in the AX tree → grade `AA`, `display_visible:true`.
 - Interaction actions are scoped to the main frame (elements inside `<iframe>` are not clickable).
 - `type` inserts text (appends to the focused element); it does not clear the field first.
-- CLI action specs split on `:`, so selectors containing colons (`.btn:hover`, `[data-x="a:b"]`) must go through the MCP `actions` object (`selector` field) instead of `--click`/`--hover`/`--type` strings.
+- `upload` file paths are resolved **by the browser process** — in a container the files must exist inside it (mount them). Hidden inputs are supported; non-file inputs error out.
+- Session-state export captures `localStorage` only from the current page's origin; sub-origins (CDN hosts) are not represented. Restored cookies are host-scoped (a `.domain` prefix is normalized to host-only).
+- CLI action specs split on `:`, so selectors containing colons (`.btn:hover`, `[data-x="a:b"]`) must go through the MCP `actions` object (`selector` field) instead of `--click`/`--hover`/`--type`/`--upload` strings.
 - `__actions` lists are capped (`--effects-limit`, default 10); root reflow is suppressed, but a busy page can still list many `changed` elements — read the `effect`/`summary` and the top semantic entries first.
 - **DOM attributes are not captured by default** — the tool is computed-style. Use `--attrs a,b` / MCP `attributes` for the specific attributes you need (verbatim `getAttribute`).
 - **Server-side data is out of scope** — payloads, templates, server routes and backend state (e.g. inspecting a CMS `landing_sections` payload, `route:list`, DB state) are not sniffCSS's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.

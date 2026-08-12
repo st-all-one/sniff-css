@@ -4,6 +4,36 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [Unreleased]
+
+### Added
+
+- **Headers HTTP por sessão (`Network.setExtraHTTPHeaders`)** — `SniffConfig.headers`,
+  CLI `--header "Name: Value"` (repetível), MCP `headers` (`{"X-CMS-AI-Token": "<token>"}`)
+  e env `SNIFF_DEFAULT_HEADERS` (JSON). Aplicados a **todo** request antes da
+  navegação, permitindo autenticar áreas restritas (middleware stateless de CMS)
+  sem token em URL, `.env` ou proxy.
+- **Ação `upload` (`DOM.setFileInputFiles`)** — novo `Action::Upload`: anexa
+  arquivos locais a um `<input type=file>` (inclusive visualmente ocultos) e o
+  browser dispara `change` sozinho, então handlers reais de upload (ex. o
+  cropper de imagem de um CMS) rodam. CLI `--upload sel:file1,file2` /
+  `--action upload:<sel>:<file1,file2>`, MCP `{"type":"upload","selector":...,"files":[...]}`.
+  O `prepare` relaxa a visibilidade para upload (file inputs costumam estar com
+  `display:none`).
+- **Estado de sessão persistente (storage state)** — `SniffConfig.storage_state_path`
+  / `save_storage_state`, CLI `--storage-state` / `--save-storage-state`, MCP
+  `storage_state` / `save_storage_state` e env `SNIFF_STORAGE_STATE`. Formato
+  Playwright-compatível (`cookies` + `origins[].localStorage`): cookies
+  restaurados via `Network.setCookies` e `localStorage` via
+  `Page.addScriptToEvaluateOnNewDocument` (roda antes dos scripts da página) —
+  tudo **antes** da navegação. `--save-storage-state` exporta cookies +
+  `localStorage` da origem atual ao fim do pipeline, então um login feito por
+  `actions` sobrevive a restarts do browser/servidor.
+- **Defaults configuráveis no MCP** — `ServerDefaults` lidos do ambiente uma vez:
+  `SNIFF_DEFAULT_HEADERS` (JSON), `SNIFF_STORAGE_STATE` (path) e `SNIFF_BASE_URL`
+  (prefixo para URLs relativas). O agente não precisa repetir auth/session por
+  chamada; valores explícitos por chamada sobrescrevem os defaults.
+
 ## [0.3.0] — 2026-08-12
 
 ### Added
