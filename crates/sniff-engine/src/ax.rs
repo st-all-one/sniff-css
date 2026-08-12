@@ -94,15 +94,11 @@ pub async fn capture(
         let Some(ax_node) = fetch_ax_node(session, node_id).await else {
             continue;
         };
-        if include_facets {
-            if let Some(map) = facets.as_mut() {
-                map.insert(root.id, parse_ax_facet(&ax_node));
-            }
+        if include_facets && let Some(map) = facets.as_mut() {
+            map.insert(root.id, parse_ax_facet(&ax_node));
         }
-        if include_tree {
-            if let Some(id) = ax_node.get("nodeId").and_then(Value::as_str) {
-                root_ax_ids.push(id.to_string());
-            }
+        if include_tree && let Some(id) = ax_node.get("nodeId").and_then(Value::as_str) {
+            root_ax_ids.push(id.to_string());
         }
     }
 
@@ -111,12 +107,11 @@ pub async fn capture(
         let mut stack: Vec<&ElementSnapshot> =
             roots.iter().flat_map(|r| r.children.iter()).collect();
         while let Some(node) = stack.pop() {
-            if let Some(node_id) = query_node_id(session, root_node_id, &node.selector).await {
-                if let Some(ax_node) = fetch_ax_node(session, node_id).await {
-                    if let Some(map) = facets.as_mut() {
-                        map.insert(node.id, parse_ax_facet(&ax_node));
-                    }
-                }
+            if let Some(node_id) = query_node_id(session, root_node_id, &node.selector).await
+                && let Some(ax_node) = fetch_ax_node(session, node_id).await
+                && let Some(map) = facets.as_mut()
+            {
+                map.insert(node.id, parse_ax_facet(&ax_node));
             }
             stack.extend(node.children.iter());
         }

@@ -201,10 +201,11 @@ async fn wait_for_endpoint(
 
 /// Locate a usable Chrome/Chromium executable.
 pub fn detect_chrome() -> Option<String> {
-    if let Ok(path) = std::env::var("SNIFF_CHROME_PATH") {
-        if !path.is_empty() && Path::new(&path).exists() {
-            return Some(path);
-        }
+    if let Ok(path) = std::env::var("SNIFF_CHROME_PATH")
+        && !path.is_empty()
+        && Path::new(&path).exists()
+    {
+        return Some(path);
     }
     const CANDIDATES: &[&str] = &[
         "google-chrome-stable",

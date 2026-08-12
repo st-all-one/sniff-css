@@ -354,6 +354,31 @@ Snapshots persist to `/config/sniffCSS` (volume `./chromium-config:/config`).
 `--connect` also accepts `http://host:port` (resolved via `/json/version`) and
 defaults to `SNIFF_CONNECT`.
 
+## Installation & releases
+
+Prebuilt binaries are published per [GitHub Release](https://github.com/st-all-one/sniff-css/releases)
+(semver tags): **Linux glibc + musl (x86_64/aarch64), macOS, Windows**. The
+rustup-style installer (detects OS/arch, verifies the Release's SHA-256
+checksums, installs to `~/.local/bin`):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
+# pinned version:
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.1.0 sh
+```
+
+Env overrides: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.
+The Docker Hub image `stallonels/sniffcss` is multi-arch (linux/amd64+arm64)
+and **downloads prebuilt binaries from the matching Release** by default
+(`--build-arg VERSION=vX.Y.Z`); `--build-arg BUILD_FROM_SOURCE=1` compiles from
+source for local dev (`scripts/docker.sh build-source`).
+
+New release: `git tag vX.Y.Z && git push origin vX.Y.Z` triggers
+`.github/workflows/release.yml` (build matrix → GitHub Release + sha256sums.txt
+→ Docker Hub push). Requires `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets
+(`scripts/set-secrets.sh`); musl cross-compilation uses `cross` with digests
+pinned in `Cross.toml`; MSRV 1.88. Changes tracked in `CHANGELOG.md`.
+
 ---
 
 ## Anti-patterns

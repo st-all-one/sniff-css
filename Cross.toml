@@ -1,0 +1,11 @@
+# Cross (cross-rs) configuration for cross-compiled release targets.
+#
+# The pre-built `cross` image tag (e.g. 0.2.5) can lag behind the current
+# Rust toolchain: its bundled glibc is too old to run build scripts produced by
+# newer rustc (seen on aarch64-unknown-linux-musl). Pinning the rolling `main`
+# images by digest keeps the workflow reproducible and working.
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl@sha256:dfb72a59029f50787396e5fe1c3d26b57cab78e326f434578e8719f0e12a8ecd"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:e148c4bc7bc3f5dfb252d2b546dafbc79f2d7eeba2d371b28a7b149270ffc331"

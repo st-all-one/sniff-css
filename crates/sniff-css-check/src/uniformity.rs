@@ -163,14 +163,14 @@ fn flat_props(node: &DiffNode) -> Vec<(String, Option<String>)> {
             }
         }
     }
-    if let Some(rect) = &node.rect {
-        if let Some(o) = rect.as_object() {
-            // Compare the layout footprint (width/height), not the absolute
-            // position (x/y) — siblings in normal flow always differ in y.
-            for k in ["width", "height"] {
-                if let Some(v) = o.get(k).and_then(Value::as_f64) {
-                    out.push((format!("rect.{k}"), Some(v.to_string())));
-                }
+    if let Some(rect) = &node.rect
+        && let Some(o) = rect.as_object()
+    {
+        // Compare the layout footprint (width/height), not the absolute
+        // position (x/y) — siblings in normal flow always differ in y.
+        for k in ["width", "height"] {
+            if let Some(v) = o.get(k).and_then(Value::as_f64) {
+                out.push((format!("rect.{k}"), Some(v.to_string())));
             }
         }
     }

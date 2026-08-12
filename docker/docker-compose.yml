@@ -15,7 +15,10 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: sniffcss:latest
+      # Sem Release publicado ainda? Compile do fonte:
+      #   args:
+      #     BUILD_FROM_SOURCE: "1"
+    image: stallonels/sniffcss:latest
     container_name: sniffcss
     environment:
       # Fidelity: FullColor 4:4:4 (true 8-bit color) enabled by default.

@@ -225,3 +225,33 @@ Os snapshots persistidos pelo MCP ficam em `/config/sniffCSS` (o volume
 `./chromium-config:/config`). Para rebuild, GPU (devices `/dev/dri` +
 `PIXELFLUX_WAYLAND=true`), ou variantes headless, veja o
 [`docker-compose.yml`](../docker/docker-compose.yml).
+
+### Distribuição e versões
+
+- **Binários**: publicados no [GitHub Release](https://github.com/st-all-one/sniff-css/releases)
+  vinculado à tag semver. O instalador oficial baixa o binário certo por
+  OS/arquitetura, verifica o checksum e instala:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf \
+    https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
+  # versão específica:
+  curl --proto '=https' --tlsv1.2 -sSf \
+    https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
+    | VERSION=v0.1.0 sh
+  ```
+
+- **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em
+  qualquer distro, incluindo Alpine), macOS aarch64/x86_64, Windows x86_64.
+- **Imagem Docker**: `stallonels/sniffcss` (Docker Hub), multi-arch
+  (linux/amd64 + linux/arm64), tag igual à do release (`latest` aponta para o
+  último).
+- **Como o Dockerfile obtém os binários**: por padrão **baixa os binários
+  pré-compilados do próprio Release** (`--build-arg VERSION=v0.1.0`) e verifica
+  o `sha256sums.txt` — não compila nada. Para desenvolvimento local sem Release
+  publicado, use `--build-arg BUILD_FROM_SOURCE=1` (compila do fonte):
+  `scripts/docker.sh build-source`.
+- **Releases futuros**: `git tag vX.Y.Z && git push origin vX.Y.Z` dispara o
+  workflow `.github/workflows/release.yml` (build multi-arquitetura + GitHub
+  Release + push Docker Hub). Configure os secrets `DOCKERHUB_USERNAME`/
+  `DOCKERHUB_TOKEN` com `scripts/set-secrets.sh`.

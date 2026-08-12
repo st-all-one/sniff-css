@@ -43,37 +43,37 @@ fn node_to_json(
         obj.insert("path".into(), Value::String(snap.path.clone()));
     }
     obj.insert("depth".into(), Value::from(snap.depth));
-    if config.include_rect {
-        if let Some(rect) = snap.rect {
-            obj.insert(
-                "rect".into(),
-                json_rect(rect.x, rect.y, rect.width, rect.height),
-            );
-        }
+    if config.include_rect
+        && let Some(rect) = snap.rect
+    {
+        obj.insert(
+            "rect".into(),
+            json_rect(rect.x, rect.y, rect.width, rect.height),
+        );
     }
-    if config.include_metrics {
-        if let Some(metrics) = &snap.metrics {
-            obj.insert(
-                "metrics".into(),
-                Value::Object({
-                    let mut m = Map::new();
-                    m.insert("z_index".into(), Value::String(metrics.z_index.clone()));
-                    m.insert(
-                        "stacking_context".into(),
-                        Value::Bool(metrics.stacking_context),
-                    );
-                    m
-                }),
-            );
-        }
+    if config.include_metrics
+        && let Some(metrics) = &snap.metrics
+    {
+        obj.insert(
+            "metrics".into(),
+            Value::Object({
+                let mut m = Map::new();
+                m.insert("z_index".into(), Value::String(metrics.z_index.clone()));
+                m.insert(
+                    "stacking_context".into(),
+                    Value::Bool(metrics.stacking_context),
+                );
+                m
+            }),
+        );
     }
-    if config.include_visibility {
-        if let Some(noticeable) = &snap.noticeable {
-            obj.insert(
-                "is_user_noticeable".into(),
-                serde_json::to_value(noticeable).unwrap_or(Value::Null),
-            );
-        }
+    if config.include_visibility
+        && let Some(noticeable) = &snap.noticeable
+    {
+        obj.insert(
+            "is_user_noticeable".into(),
+            serde_json::to_value(noticeable).unwrap_or(Value::Null),
+        );
     }
     if let Some(aria) = &snap.aria {
         obj.insert(
@@ -237,13 +237,12 @@ fn compact_group(category: StyleCategory, props: &[ComputedProperty]) -> Vec<Com
         .iter()
         .filter(|p| {
             // Logical/physical dedup (keep the physical, drop the logical).
-            if let Some(phys) = physical_equivalent(&p.name) {
-                if map
+            if let Some(phys) = physical_equivalent(&p.name)
+                && map
                     .get(phys.as_str())
                     .is_some_and(|&v| v == p.value.as_str())
-                {
-                    return false;
-                }
+            {
+                return false;
             }
             // Default/noise suppression (skip allow-listed properties).
             if !KEEP_DEFAULTS.contains(&p.name.as_str()) && is_noise_value(p.value.trim()) {
@@ -494,10 +493,10 @@ pub fn write_output<W: Write>(
             let document = if compact_meta || outcome.ax_tree.is_some() {
                 let mut root = Map::new();
                 let mut meta = Map::new();
-                if let Some(vars) = global.as_ref() {
-                    if !vars.is_empty() {
-                        meta.insert("css_variables".into(), vars_to_json(vars));
-                    }
+                if let Some(vars) = global.as_ref()
+                    && !vars.is_empty()
+                {
+                    meta.insert("css_variables".into(), vars_to_json(vars));
                 }
                 if !meta.is_empty() {
                     root.insert("__meta".into(), Value::Object(meta));
@@ -540,18 +539,18 @@ fn emit_meta_line<W: Write>(
     writer: &mut W,
     global: &Option<HashMap<String, String>>,
 ) -> SniffResult<()> {
-    if let Some(vars) = global {
-        if !vars.is_empty() {
-            let mut meta = Map::new();
-            meta.insert("css_variables".into(), vars_to_json(vars));
-            let line = serde_json::to_string(&Value::Object({
-                let mut m = Map::new();
-                m.insert("__meta".into(), Value::Object(meta));
-                m
-            }))
-            .map_err(SniffError::from)?;
-            writeln!(writer, "{line}").map_err(io_err)?;
-        }
+    if let Some(vars) = global
+        && !vars.is_empty()
+    {
+        let mut meta = Map::new();
+        meta.insert("css_variables".into(), vars_to_json(vars));
+        let line = serde_json::to_string(&Value::Object({
+            let mut m = Map::new();
+            m.insert("__meta".into(), Value::Object(meta));
+            m
+        }))
+        .map_err(SniffError::from)?;
+        writeln!(writer, "{line}").map_err(io_err)?;
     }
     Ok(())
 }

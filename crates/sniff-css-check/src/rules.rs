@@ -221,18 +221,18 @@ fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
     }
 
     // --- Target size (WCAG 2.2 min 24x24 CSS px) ---
-    if visible && INTERACTIVE_TAGS.contains(&tag) {
-        if let Some((w, h)) = rect_size(node) {
-            if w < 24.0 || h < 24.0 {
-                out.push(CheckLine {
-                    check: "target-size".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Fail,
-                    evidence: format!("interactive {tag} is {w:0.0}x{h:0.0}px (minimum 24x24)"),
-                });
-            }
-        }
+    if visible
+        && INTERACTIVE_TAGS.contains(&tag)
+        && let Some((w, h)) = rect_size(node)
+        && (w < 24.0 || h < 24.0)
+    {
+        out.push(CheckLine {
+            check: "target-size".into(),
+            selector: node.selector.clone(),
+            tag: node.tag.clone(),
+            status: RuleStatus::Fail,
+            evidence: format!("interactive {tag} is {w:0.0}x{h:0.0}px (minimum 24x24)"),
+        });
     }
 
     // --- Visible focus indicator ---
@@ -273,20 +273,20 @@ fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
             .as_ref()
             .and_then(|a| a.get("alt"))
             .and_then(Value::as_str);
-        if let Some("") = alt {
-            if let Some((w, h)) = rect_size(node) {
-                if w > 32.0 && h > 32.0 {
-                    out.push(CheckLine {
-                        check: "empty-alt-image".into(),
-                        selector: node.selector.clone(),
-                        tag: node.tag.clone(),
-                        status: RuleStatus::Warn,
-                        evidence: format!(
-                            "image {w:0.0}x{h:0.0}px has an empty alt (decorative? otherwise add a label)"
-                        ),
-                    });
-                }
-            }
+        if let Some("") = alt
+            && let Some((w, h)) = rect_size(node)
+            && w > 32.0
+            && h > 32.0
+        {
+            out.push(CheckLine {
+                check: "empty-alt-image".into(),
+                selector: node.selector.clone(),
+                tag: node.tag.clone(),
+                status: RuleStatus::Warn,
+                evidence: format!(
+                    "image {w:0.0}x{h:0.0}px has an empty alt (decorative? otherwise add a label)"
+                ),
+            });
         }
     }
 }

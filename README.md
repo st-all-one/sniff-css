@@ -23,29 +23,51 @@ Fala diretamente com o navegador via **Chrome DevTools Protocol (CDP) raw sobre 
 | [`docs/golden-run.md`](docs/golden-run.md) | Padrão ouro de execução (contrato de determinismo). |
 | [`docs/architecture.md`](docs/architecture.md) | Arquitetura interna dos crates. |
 
-## Build e instalação
+## Instalação
+
+Binários pré-compilados para **Linux (glibc + musl), macOS e Windows** são
+publicados em cada [GitHub Release](https://github.com/st-all-one/sniff-css/releases)
+vinculado a uma tag semver (`v0.1.0`, `v0.2.0`, …). O instalador abaixo é o
+jeito mais rápido (estilo rustup) — baixa, verifica checksum e instala em
+`~/.local/bin`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
+```
+
+Por padrão instala o **latest**; para uma versão específica:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
+  | VERSION=v0.1.0 sh
+```
+
+> O instalador é `pipefail`-seguro, verifica o `sha256sums.txt` do Release antes
+> de instalar e nunca roda com sudo. Personalize com `INSTALL_DIR` (destino) ou
+> `SNIFF_TARGET` (triple).
+
+Compilar do fonte (dev, exige Rust):
 
 ```bash
 cargo build --release
 # binários: target/release/sniffCSS, sniffCSS-diff, sniffCSS-check, sniffCSS-mcp
+scripts/install.sh --no-build   # instala os binários compilados em ~/.local/bin
 ```
 
-Instalar no computador (fica disponível em `~/.local/bin`, com PATH automático):
-
-```bash
-scripts/install.sh          # compila e instala
-scripts/install.sh --no-build   # re-instala sem recompilar
-```
-
-Requisito: Chrome/Chromium disponível (ou defina `SNIFF_CHROME_PATH` / use `--chrome`).
+Requisito em todos os casos: Chrome/Chromium disponível (ou defina
+`SNIFF_CHROME_PATH` / use `--chrome`).
 
 ## Docker (self-contained Chromium)
 
-Sem depender de nada no host: `docker/` empacota a toolchain + Chromium num
-container focado em fidelidade. O Chromium da GUI (`http://localhost:3001`)
-roda com **FullColor 4:4:4** por padrão e expõe CDP em `127.0.0.1:9222`;
-`sniffCSS` e `sniffCSS-mcp` anexam a esse mesmo browser (`SNIFF_CONNECT` já é o
-default), então o que você vê na tela é exatamente o que é capturado.
+A imagem [`stallonels/sniffcss`](https://hub.docker.com/r/stallonels/sniffcss)
+(Docker Hub) é publicada no mesmo release, multi-arch (**linux/amd64 +
+linux/arm64**) e contém Chromium + toolchain. O Chromium da GUI
+(`http://localhost:3001`) roda com **FullColor 4:4:4** por padrão e expõe CDP
+em `127.0.0.1:9222`; `sniffCSS` e `sniffCSS-mcp` anexam a esse mesmo browser
+(`SNIFF_CONNECT` já é o default), então o que você vê na tela é exatamente o
+que é capturado.
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
@@ -122,14 +144,19 @@ crates/
 └── sniff-css-mcp/     # servidor MCP (stdio): sniffCSS_page, sniffCSS_diff, sniffCSS_check, sniffCSS_snapshots, sniffCSS_categories
 ```
 
-## Testes
+## Desenvolvimento e releases
 
-```bash
-cargo test                    # unit tests (sem Chrome)
-cargo test -p sniff-engine --test integration   # e2e com Chrome real (auto-skip se ausente)
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
-```
+- **Testes**: `cargo test` · `cargo clippy --all-targets -- -D warnings` · `cargo fmt --check`
+- **Release**: envie uma tag semver → o workflow `.github/workflows/release.yml`
+  compila os binários de todas as arquiteturas, publica o GitHub Release e a
+  imagem Docker no Docker Hub (requer os secrets `DOCKERHUB_USERNAME`/
+  `DOCKERHUB_TOKEN`, configure com `scripts/set-secrets.sh`):
+
+  ```bash
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+
+- Registro das mudanças em [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Licença
 
