@@ -7,6 +7,8 @@
 pub mod browser;
 pub mod progress;
 pub mod server;
+pub mod store;
 
 pub use browser::ChromePool;
 pub use server::SniffMcpServer;
+pub use store::SnapshotStore;

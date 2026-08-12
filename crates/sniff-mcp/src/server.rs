@@ -11,6 +11,9 @@
 //! - `sniff://prompts/eval` — the AI evaluation prompt template.
 //! - `sniff://schemas/eval` — the rigid JSON Schema for the AI answer.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -28,6 +31,7 @@ use sniff_engine::write_output;
 
 use crate::browser::ChromePool;
 use crate::progress::ProgressReporter;
+use crate::store::SnapshotStore;
 
 const EVAL_PROMPT: &str = include_str!("../../../docs/eval-prompt.md");
 const EVAL_SCHEMA: &str = include_str!("../../../docs/sniff-eval.schema.json");
@@ -37,15 +41,25 @@ const GOLDEN_RUN: &str = include_str!("../../../docs/golden-run.md");
 #[derive(Debug, Clone)]
 pub struct SniffMcpServer {
     pool: ChromePool,
+    /// Persisted-snapshot store; lets diff/check tools operate on paths so
+    /// full JSONL snapshots never round-trip through the LLM context.
+    store: Arc<SnapshotStore>,
     #[expect(dead_code, reason = "tool_handler macro accesses this router field")]
     tool_router: ToolRouter<Self>,
 }
 
 impl SniffMcpServer {
-    /// Build a server backed by the given browser pool.
+    /// Build a server backed by the given browser pool, with the snapshot
+    /// store rooted at `SNIFF_SNAPSHOT_DIR` or `sniff-css` under the CWD.
     pub fn new(pool: ChromePool) -> Self {
+        Self::new_with_store(pool, SnapshotStore::from_env())
+    }
+
+    /// Build a server with an explicit snapshot store (tests inject a temp dir).
+    pub fn new_with_store(pool: ChromePool, store: SnapshotStore) -> Self {
         Self {
             pool,
+            store: Arc::new(store),
             tool_router: Self::tool_router(),
         }
     }
@@ -108,14 +122,28 @@ pub struct SniffPageRequest {
     /// emit it as a `__ax_tree` document (implies `include_ax`).
     #[serde(default)]
     pub ax_tree: bool,
+    /// Persist the snapshot to disk as `sniff-css/[domain]/[path]-[selector]-
+    /// [UTC].jsonl` (root overridable via `SNIFF_SNAPSHOT_DIR`). Defaults to
+    /// `true` so diff/check can run on paths instead of inline JSONL.
+    #[serde(default = "default_true")]
+    pub persist: bool,
+    /// What to return: `reference` (default) returns only a tiny
+    /// `{"__sniff": {path, url, selector, nodes}}` line — the most token
+    /// efficient way to capture; `jsonl` returns the full snapshot inline.
+    #[serde(default = "default_return_mode", rename = "return")]
+    pub return_mode: String,
 }
 
 /// Parameters for the `diff_snapshots` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DiffRequest {
-    /// Base snapshot JSONL (output of `sniff_page`).
+    /// Base snapshot JSONL (output of `sniff_page`); ignored when `base_path`
+    /// is set.
+    #[serde(default)]
     pub base_jsonl: String,
-    /// Head snapshot JSONL (output of `sniff_page`).
+    /// Head snapshot JSONL (output of `sniff_page`); ignored when `head_path`
+    /// is set.
+    #[serde(default)]
     pub head_jsonl: String,
     /// Ignore value changes smaller than this in the same unit
     /// (e.g. 0.5 absorbs 16px -> 16.2px). 0 disables tolerance.
@@ -129,12 +157,23 @@ pub struct DiffRequest {
     /// whose item count varies by design.
     #[serde(default)]
     pub ignore_structural: bool,
+    /// Base snapshot on disk (root-relative or absolute), produced by a
+    /// persisted `sniff_page`. Precedence over `base_jsonl`; keeps the full
+    /// snapshot out of the tool call.
+    #[serde(default)]
+    pub base_path: Option<String>,
+    /// Head snapshot on disk (root-relative or absolute). Precedence over
+    /// `head_jsonl`.
+    #[serde(default)]
+    pub head_path: Option<String>,
 }
 
 /// Parameters for the `run_checks` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CheckRequest {
-    /// Snapshot JSONL (output of `sniff_page`) to evaluate offline.
+    /// Snapshot JSONL (output of `sniff_page`) to evaluate offline; ignored
+    /// when `path` is set.
+    #[serde(default)]
     pub jsonl: String,
     /// Run the uniformity check (odd card out among sibling instances).
     #[serde(default = "default_true")]
@@ -145,6 +184,24 @@ pub struct CheckRequest {
     /// Tolerance for numeric uniformity deviations (same unit).
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
+    /// Snapshot on disk (root-relative or absolute), produced by a persisted
+    /// `sniff_page`. Precedence over `jsonl`.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Parameters for the `list_snapshots` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListSnapshotsRequest {
+    /// Filter by sanitized host directory (e.g. `localhost_3000`).
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// Filter by target identity (`[path]-[selector]`, e.g. `products_42-card`).
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Return only the N most recent snapshots.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 fn default_categories() -> String {
@@ -162,6 +219,9 @@ fn default_format() -> String {
 fn default_tolerance() -> f64 {
     0.5
 }
+fn default_return_mode() -> String {
+    "reference".into()
+}
 
 // ---------------------------------------------------------------------------
 // Tools
@@ -173,12 +233,16 @@ impl SniffMcpServer {
     #[tool(
         name = "sniff_page",
         description = "Capture the real computed CSS styles of elements on a page and return them as \
-                       JSONL. Each node carries readable fields (tag, selector, path, rect, metrics, \
-                       styles grouped by category) plus is_user_noticeable (display_visible + \
-                       accessibility_grade) and computed_style_hash. \
-                       Use compact=true for ~55% fewer tokens and stable_key (e.g. data-testid) for \
-                       selectors that stay matchable across deploys. Feed two runs to diff_snapshots \
-                       to detect what changed."
+                       JSONL. By default the snapshot is persisted to disk as \
+                       sniff-css/[domain]/[path]-[selector]-[UTC].jsonl and the tool returns only a \
+                       tiny __sniff reference (path, url, selector, node count) — pass return=\"jsonl\" \
+                       to get the full snapshot inline instead. Feed two persisted captures to \
+                       diff_snapshots via base_path/head_path (or run_checks via path) so the full \
+                       snapshot never enters the LLM context. Each node carries readable fields (tag, \
+                       selector, path, rect, metrics, styles grouped by category) plus \
+                       is_user_noticeable and computed_style_hash. Use compact=true for ~55% fewer \
+                       tokens and stable_key (e.g. data-testid) for selectors that stay matchable \
+                       across deploys."
     )]
     pub async fn sniff_page(
         &self,
@@ -211,31 +275,72 @@ impl SniffMcpServer {
         let mut buf = Vec::new();
         write_output(&mut buf, &outcome, &config.output)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
+        let jsonl =
+            String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        let rel_path = if request.persist {
+            Some(
+                self.store
+                    .save(&config, &jsonl)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+            )
+        } else {
+            None
+        };
+
+        match request.return_mode.as_str() {
+            "reference" => {
+                let path = rel_path.ok_or_else(|| {
+                    ErrorData::invalid_params("return=reference requires persist:true", None)
+                })?;
+                let reference = serde_json::json!({
+                    "__sniff": {
+                        "path": path.display().to_string(),
+                        "url": request.url,
+                        "selector": request.selector,
+                        "nodes": outcome.snapshots.len(),
+                    }
+                });
+                serde_json::to_string(&reference)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+            }
+            _ => Ok(jsonl),
+        }
     }
 
-    /// Deterministically diff two inline JSONL snapshots.
+    /// Deterministically diff two JSONL snapshots.
     #[tool(
         name = "diff_snapshots",
-        description = "Deterministically diff two sniff_page JSONL snapshots (passed inline as \
-                       strings) and return only what changed: CHANGED nodes with before/after values \
-                       per property (styles, pseudo, aria, contrast, ax, rect, metrics, \
-                       is_user_noticeable), ADDED/REMOVED nodes with their full snapshot, plus a \
-                       final __diff_summary line. tolerance ignores subpixel jitter in the same \
-                       unit; ignore_props skips volatile props (e.g. transform); \
-                       ignore_structural suppresses ADDED/REMOVED for variable-count lists. Use \
-                       this delta as the input to your evaluation prompt instead of the full \
-                       snapshots."
+        description = "Deterministically diff two sniff_page snapshots and return only what changed: \
+                       CHANGED nodes with before/after values per property (styles, pseudo, aria, \
+                       contrast, ax, rect, metrics, is_user_noticeable), ADDED/REMOVED nodes with \
+                       their full snapshot, plus a final __diff_summary line. Snapshots are best \
+                       passed as persisted base_path/head_path (from a sniff_page __sniff reference) \
+                       so the full JSONL stays out of the tool call; base_jsonl/head_jsonl inline \
+                       strings still work. tolerance ignores subpixel jitter in the same unit; \
+                       ignore_props skips volatile props (e.g. transform); ignore_structural \
+                       suppresses ADDED/REMOVED for variable-count lists. Use this delta as the \
+                       input to your evaluation prompt instead of the full snapshots."
     )]
     pub async fn diff_snapshots(
         &self,
         params: Parameters<DiffRequest>,
     ) -> Result<String, ErrorData> {
         let request = params.0;
-        let base = sniff_diff::load_str(&request.base_jsonl)
-            .map_err(|e| ErrorData::invalid_params(format!("invalid base JSONL: {e}"), None))?;
-        let head = sniff_diff::load_str(&request.head_jsonl)
-            .map_err(|e| ErrorData::invalid_params(format!("invalid head JSONL: {e}"), None))?;
+        let base = load_snapshot(
+            &self.store,
+            request.base_path.as_deref(),
+            &request.base_jsonl,
+            "base",
+        )
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
+        let head = load_snapshot(
+            &self.store,
+            request.head_path.as_deref(),
+            &request.head_jsonl,
+            "head",
+        )
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
 
         let opts = sniff_diff::DiffOptions {
             tolerance: request.tolerance,
@@ -263,19 +368,25 @@ impl SniffMcpServer {
         String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 
-    /// Run deterministic offline checks over an inline snapshot.
+    /// Run deterministic offline checks over a snapshot.
     #[tool(
         name = "run_checks",
-        description = "Deterministic offline UI checks over a sniff_page JSONL snapshot: \
-                       uniformity (finds the odd sibling instance against the group norm — the \
-                       'odd card out') and derived rules (measured WCAG contrast, 24x24 target \
-                       size, visible focus indicator, hidden focusables, empty alt on large \
-                       images). No LLM involved: use the results as evidence in the eval prompt."
+        description = "Deterministic offline UI checks over a sniff_page snapshot: uniformity \
+                       (finds the odd sibling instance against the group norm — the 'odd card \
+                       out') and derived rules (measured WCAG contrast, 24x24 target size, visible \
+                       focus indicator, hidden focusables, empty alt on large images). Prefer a \
+                       persisted snapshot path (from a sniff_page __sniff reference); inline jsonl \
+                       still works. No LLM involved: use the results as evidence in the eval prompt."
     )]
     pub async fn run_checks(&self, params: Parameters<CheckRequest>) -> Result<String, ErrorData> {
         let request = params.0;
-        let nodes = sniff_diff::load_str(&request.jsonl)
-            .map_err(|e| ErrorData::invalid_params(format!("invalid JSONL: {e}"), None))?;
+        let nodes = load_snapshot(
+            &self.store,
+            request.path.as_deref(),
+            &request.jsonl,
+            "snapshot",
+        )
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
 
         let mut buf = Vec::new();
         let mut rule_count = 0usize;
@@ -334,6 +445,42 @@ impl SniffMcpServer {
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         buf.push(b'\n');
 
+        String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    /// List persisted snapshots to pick base/head pairs for `diff_snapshots`.
+    #[tool(
+        name = "list_snapshots",
+        description = "List snapshots persisted by sniff_page under sniff-css/ (or \
+                       SNIFF_SNAPSHOT_DIR), newest first. Each line has domain (host directory), \
+                       target ([path]-[selector]), path (usable as base_path/head_path or the \
+                       run_checks path), created_at (UTC) and size. Filter by domain/target and cap \
+                       with limit to find the base/head pair to diff."
+    )]
+    pub async fn list_snapshots(
+        &self,
+        params: Parameters<ListSnapshotsRequest>,
+    ) -> Result<String, ErrorData> {
+        let request = params.0;
+        let mut entries = self
+            .store
+            .list()
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        if let Some(domain) = &request.domain {
+            entries.retain(|e| &e.domain == domain);
+        }
+        if let Some(target) = &request.target {
+            entries.retain(|e| &e.target == target);
+        }
+        if let Some(limit) = request.limit {
+            entries.truncate(limit);
+        }
+        let mut buf = Vec::new();
+        for entry in &entries {
+            serde_json::to_writer(&mut buf, entry)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            buf.push(b'\n');
+        }
         String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 
@@ -447,6 +594,25 @@ fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String>
     })
 }
 
+/// Load a snapshot for diff/check from an optional persisted path, falling
+/// back to inline JSONL when no path is given.
+fn load_snapshot(
+    store: &SnapshotStore,
+    path: Option<&str>,
+    inline: &str,
+    label: &str,
+) -> Result<Vec<sniff_diff::DiffNode>, String> {
+    if let Some(path) = path {
+        let abs = store
+            .resolve(Path::new(path))
+            .map_err(|e| format!("invalid {label} path `{path}`: {e}"))?;
+        sniff_diff::load_file(&abs)
+            .map_err(|e| format!("cannot load {label} snapshot `{path}`: {e}"))
+    } else {
+        sniff_diff::load_str(inline).map_err(|e| format!("invalid {label} JSONL: {e}"))
+    }
+}
+
 /// Human-readable message for a pipeline phase.
 fn phase_message(phase: &sniff_engine::Phase) -> String {
     match phase {
@@ -492,6 +658,8 @@ mod tests {
             contrast: false,
             include_ax: false,
             ax_tree: false,
+            persist: true,
+            return_mode: "reference".into(),
         }
     }
 
@@ -576,6 +744,57 @@ mod tests {
         assert_eq!(v.tolerance, 0.5);
         assert!(v.ignore_props.is_empty());
         assert!(!v.ignore_structural);
+        assert!(v.base_path.is_none());
+        assert!(v.head_path.is_none());
+    }
+
+    #[test]
+    fn sniff_page_defaults_to_persist_and_reference() {
+        let v: SniffPageRequest = serde_json::from_value(serde_json::json!({
+            "url": "http://localhost:3000",
+            "selector": ".card",
+        }))
+        .unwrap();
+        assert!(v.persist, "persist defaults to true");
+        assert_eq!(v.return_mode, "reference", "return defaults to reference");
+    }
+
+    #[test]
+    fn check_request_accepts_path() {
+        let v: CheckRequest = serde_json::from_value(serde_json::json!({
+            "path": "localhost/foo.jsonl",
+        }))
+        .unwrap();
+        assert_eq!(v.path.as_deref(), Some("localhost/foo.jsonl"));
+        assert!(v.uniform);
+        assert!(v.rules);
+    }
+
+    #[test]
+    fn load_snapshot_prefers_path_over_inline() {
+        let dir = std::env::temp_dir().join(format!("sniff-mcp-srv-{}", std::process::id()));
+        let store = SnapshotStore::new(dir.clone());
+        let base =
+            "{\"id\":1,\"tag\":\"DIV\",\"selector\":\"div.card\",\"depth\":0,\"children\":[]}\n";
+
+        // Without a path, inline JSONL is parsed.
+        let nodes = load_snapshot(&store, None, base, "base").unwrap();
+        assert_eq!(nodes.len(), 1);
+
+        // A rejected path errors with a clear message.
+        let err = load_snapshot(&store, Some("../escape.jsonl"), base, "base").unwrap_err();
+        assert!(
+            err.contains("rejected"),
+            "traversal must be rejected: {err}"
+        );
+
+        // A real persisted file loads.
+        std::fs::create_dir_all(&dir).ok();
+        let file = dir.join("loaded.jsonl");
+        std::fs::write(&file, base).ok();
+        let nodes = load_snapshot(&store, Some("loaded.jsonl"), "", "base").unwrap();
+        assert_eq!(nodes.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

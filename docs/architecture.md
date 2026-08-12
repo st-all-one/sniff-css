@@ -157,9 +157,18 @@ A avaliação semântica (positiva/negativa) é responsabilidade do LLM: contrat
   `sniff_session_with_progress`; cada fase emite `notifications/progress`
   (`ProgressReporter` → `Peer::notify_progress`) e o JSONL final volta como
   resultado da tool. Sem block do pipeline: as notificações são enviadas
-  assincronamente entre as fases.
-- **`diff_snapshots`** — `sniff_diff::load_str` (JSONL inline) + `diff_trees`
-  + `write_delta`, com linha `__diff_summary` ao final.
+  assincronamente entre as fases. Por padrão o `SnapshotStore` persiste o
+  snapshot em `sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (escrita
+  atômica, UTC por `SystemTime`, raiz via `SNIFF_SNAPSHOT_DIR`) e a tool
+  retorna apenas o `__sniff` reference; `return:"jsonl"`/`persist:false`
+  optam pelo comportamento inline.
+- **`diff_snapshots`** — aceita `base_path`/`head_path` (resolvidos pelo
+  `SnapshotStore` com guarda anti path-traversal) ou `base_jsonl`/`head_jsonl`
+  inline → `sniff_diff::load_file`/`load_str` + `diff_trees` + `write_delta`,
+  com linha `__diff_summary` ao final.
+- **`run_checks`** — idem: `path` (persistido) ou `jsonl` inline.
+- **`list_snapshots`** — enumera os arquivos do `SnapshotStore`
+  (domain/target/path/created_at/size), para o agente escolher o par base/head.
 - **Recursos** — `sniff://prompts/eval`, `sniff://schemas/eval`
   (`include_str!` das docs).
 - Transporte: `stdio()` (todos os clientes). Um browser morto é relançado

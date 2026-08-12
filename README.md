@@ -63,7 +63,7 @@ Veja [`docs/usage.md`](docs/usage.md) para a referência completa de flags.
 | `sniff-computed-style` | Captura o estado real dos elementos → JSONL. |
 | `sniff-diff` | Diff determinístico entre dois snapshots → delta mínimo para a IA. |
 | `sniff-check` | Checks determinísticos offline: uniformidade + regras (contraste, alvo, foco, alt). |
-| `sniff-mcp` | Servidor MCP (stdio): `sniff_page`, `diff_snapshots`, `run_checks`, `list_categories`. |
+| `sniff-mcp` | Servidor MCP (stdio): `sniff_page`, `diff_snapshots`, `run_checks`, `list_snapshots`, `list_categories`. |
 
 ## Integração com IA
 
@@ -78,6 +78,12 @@ Para agentes, exponha `sniff-mcp` como servidor MCP. O fluxo recomendado é
 **captura determinística → diff determinístico → checks determinísticos → IA
 (só interpreta o delta)**; o passo a passo está em [`docs/ai-usage.md`](docs/ai-usage.md).
 
+Por padrão o MCP persiste cada captura em
+`sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+e o `sniff_page` retorna só um `__sniff` reference; `diff_snapshots`/`run_checks`
+leem por `base_path`/`head_path`/`path` — o JSONL completo nunca entra no contexto
+do LLM.
+
 ## Estrutura do projeto
 
 ```
@@ -88,7 +94,7 @@ crates/
 ├── sniff-cli/      # binário clap (sniff-computed-style)
 ├── sniff-diff/     # diff determinístico JSONL (binário sniff-diff) + delta p/ IA
 ├── sniff-check/    # checks determinísticos (binário sniff-check): uniformidade + regras
-└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, run_checks, list_categories
+└── sniff-mcp/      # servidor MCP (stdio): sniff_page, diff_snapshots, run_checks, list_snapshots, list_categories
 ```
 
 ## Testes
@@ -102,4 +108,4 @@ cargo fmt --check
 
 ## Licença
 
-MIT
+CC0

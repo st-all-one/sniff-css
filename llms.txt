@@ -128,11 +128,12 @@ Full list with defaults:
 
 ### MCP server (sniff-mcp)
 
-Four tools over stdio:
+Five tools over stdio:
 
-- `sniff_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree) → JSONL; emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
-- `diff_snapshots` — deterministic diff of two inline JSONL (base_jsonl, head_jsonl, tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
-- `run_checks` — deterministic checks over inline JSONL (jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
+- `sniff_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, pseudo, wait, viewport, format, stabilize, contrast, include_ax, ax_tree, persist, return). By default persists the snapshot to `sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (root via `SNIFF_SNAPSHOT_DIR`) and returns only a tiny `__sniff` reference (path, url, selector, nodes); `return:"jsonl"` returns the full JSONL inline. Emits `notifications/progress` per phase (acquiring browser slot → navigating → waiting → extracting → capturing accessibility tree → formatting N nodes).
+- `list_snapshots` — list persisted snapshots (domain/target/path/created_at/size), newest first; filters domain/target/limit.
+- `diff_snapshots` — deterministic diff via persisted `base_path`/`head_path` (preferred, keeps JSONL out of the LLM context) or inline `base_jsonl`/`head_jsonl` (+ tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
+- `run_checks` — deterministic checks over a persisted `path` or inline `jsonl` (uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
 - `list_categories` — accepted categories.
 
 Embedded resources: `sniff://prompts/eval`, `sniff://schemas/eval`, `sniff://guides/golden`.

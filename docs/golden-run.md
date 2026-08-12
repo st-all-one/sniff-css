@@ -59,6 +59,21 @@ sniff-check --input snapshots/head.jsonl --uniform --rules
 #   docs/sniff-eval.schema.json.
 ```
 
+## 2b. Pipeline MCP (mesmo contrato, zero JSONL no contexto)
+
+O MCP segue o mesmo pipeline, mas o snapshot fica no disco
+(`sniff-css/[domain]/[path]-[selector]-[UTC].jsonl`) e só a referência trafega:
+
+```text
+1. sniff_page  (url, selector, mesmos flags, persist default ON)
+   -> {"__sniff": {"path": "localhost_3000/checkout-form-...-Z.jsonl", "nodes": N}}
+2. sniff_page  (mesmos params, após a mudança) -> outro __sniff reference
+3. diff_snapshots  base_path="<path base>"  head_path="<path head>"  tolerance 0.5
+   -> só o delta + __diff_summary (o JSONL completo nunca entra no LLM)
+4. run_checks      path="<path head>" uniform rules   -> PASS/WARN/FAIL
+5. list_snapshots  domain/localhost_3000              -> acha pares base/head
+```
+
 ## 3. Variações por cenário
 
 | Cenário | Ajuste |

@@ -178,16 +178,29 @@ de chamar o shell. O servidor mantém um Chrome headless compartilhado e oferece
 
 1. **`sniff_page`** — captura (args: url, selector, depth, categories, compact,
    custom_props, stable_key, pseudo, wait, viewport, format, stabilize,
-   contrast, include_ax, ax_tree) e retorna JSONL.
+   contrast, include_ax, ax_tree, persist, return).
+   Por padrão **persiste** o snapshot em
+   `sniff-css/[domain]/[path]-[selector]-[UTC].jsonl` (raiz via `SNIFF_SNAPSHOT_DIR`)
+   e retorna **apenas** uma linha `{"__sniff": {path, url, selector, nodes}}`
+   (~200 tokens). Use `return:"jsonl"` para obter o JSONL inline
+   (`persist:false` desativa a gravação).
    Durante a execução envia `notifications/progress` por fase:
    `acquiring browser slot` → `navigating` → `waiting` → `extracting` →
    `capturing accessibility tree` (se `--ax`) → `formatting N nodes`.
-2. **`diff_snapshots`** — diff determinístico de dois JSONL inline
-   (args: base_jsonl, head_jsonl, tolerance, ignore_props, ignore_structural)
-   → delta + `__diff_summary`.
-3. **`run_checks`** — checks determinísticos offline sobre um JSONL inline
-   (args: jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
-4. **`list_categories`** — categorias aceitas.
+2. **`list_snapshots`** — lista os snapshots persistidos (domain/target/path/
+   created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use
+   para escolher o par base/head.
+3. **`diff_snapshots`** — diff determinístico de dois snapshots
+   (args: **base_path/head_path** — o modo otimizado — ou base_jsonl/head_jsonl,
+   tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`.
+4. **`run_checks`** — checks determinísticos offline sobre um snapshot
+   (args: **path** ou jsonl, uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
+5. **`list_categories`** — categorias aceitas.
+
+> **Fluxo low-token (recomendado):** cada `sniff_page` salva no disco e retorna
+> só o `__sniff` reference. Depois, `diff_snapshots base_path/head_path` e
+> `run_checks path` leem os arquivos — o snapshot completo **nunca** entra no
+> contexto do LLM (nem no retorno, nem nos argumentos).
 
 Recursos embutidos: `sniff://prompts/eval` (prompt), `sniff://schemas/eval`
 (schema) e `sniff://guides/golden` (padrão ouro de execução) — leia-os em vez

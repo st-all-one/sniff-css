@@ -3,6 +3,7 @@
 //!
 //! Chrome-backed tests are skipped when no Chromium binary is available.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use rmcp::model::{
@@ -14,6 +15,7 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_mcp::browser::ChromePool;
 use sniff_mcp::server::SniffMcpServer;
+use sniff_mcp::store::SnapshotStore;
 
 /// Cap concurrent Chrome launches to keep CI/containers happy.
 fn browser_semaphore() -> &'static tokio::sync::Semaphore {
@@ -77,9 +79,38 @@ impl ClientHandler for TestClient {
 
 type Running = RunningService<RoleClient, TestClient>;
 
+/// Unique temp dir that cleans itself up on drop — the snapshot store lives
+/// here so tests never write into the repo's CWD.
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "sniff-mcp-it-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        Self { path }
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 /// Serve the MCP server on one end of a duplex pipe and connect a client.
-async fn setup(pool: ChromePool) -> (TestClient, Running) {
-    let server = SniffMcpServer::new(pool);
+/// The snapshot store is rooted in a fresh temp dir.
+async fn setup(pool: ChromePool) -> (TestClient, Running, TempDir) {
+    let temp = TempDir::new();
+    let store = SnapshotStore::new(temp.path.clone());
+    let server = SniffMcpServer::new_with_store(pool, store);
     let (server_side, client_side) = tokio::io::duplex(1 << 20);
     tokio::spawn(async move {
         server
@@ -96,7 +127,7 @@ async fn setup(pool: ChromePool) -> (TestClient, Running) {
         .serve(client_side)
         .await
         .expect("client serve");
-    (client, running)
+    (client, running, temp)
 }
 
 fn tool_call(name: &str, args: serde_json::Value) -> CallToolRequestParams {
@@ -129,7 +160,7 @@ async fn list_tools_exposes_sniff_page_and_diff() {
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (_client, running) = setup(pool).await;
+    let (_client, running, _temp) = setup(pool).await;
 
     let tools = running.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
@@ -150,7 +181,7 @@ async fn resources_expose_eval_prompt_and_schema() {
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (_client, running) = setup(pool).await;
+    let (_client, running, _temp) = setup(pool).await;
 
     let resources = running.list_all_resources().await.unwrap();
     let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
@@ -178,7 +209,7 @@ async fn sniff_page_streams_progress_and_returns_jsonl() {
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (client, running) = setup(pool).await;
+    let (client, running, _temp) = setup(pool).await;
 
     let params = tool_call_with_progress(
         "sniff_page",
@@ -190,6 +221,7 @@ async fn sniff_page_streams_progress_and_returns_jsonl() {
             "compact": true,
             "stable_key": "data-testid",
             "wait": ["network-idle:200:30000"],
+            "return": "jsonl",
         }),
     );
     let result = running.call_tool(params).await.unwrap();
@@ -236,7 +268,7 @@ async fn sniff_page_with_no_match_returns_tool_error() {
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (_client, running) = setup(pool).await;
+    let (_client, running, _temp) = setup(pool).await;
 
     let params = tool_call(
         "sniff_page",
@@ -256,15 +288,15 @@ async fn sniff_page_with_no_match_returns_tool_error() {
 }
 
 #[tokio::test]
-async fn diff_snapshots_returns_delta_and_summary() {
+async fn diff_snapshots_via_persisted_paths_returns_delta_and_summary() {
     let Some(opts) = require_chrome() else {
         eprintln!("skipping: no Chrome binary found");
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (_client, running) = setup(pool).await;
+    let (_client, running, temp) = setup(pool).await;
 
-    // Same page, same snapshot -> zero changes.
+    // Default sniff_page returns a tiny __sniff reference (persisted).
     let params = tool_call_with_progress(
         "sniff_page",
         serde_json::json!({
@@ -277,7 +309,7 @@ async fn diff_snapshots_returns_delta_and_summary() {
             "wait": ["network-idle:200:30000"],
         }),
     );
-    let snapshot = running
+    let text = running
         .call_tool(params)
         .await
         .unwrap()
@@ -287,13 +319,21 @@ async fn diff_snapshots_returns_delta_and_summary() {
         .expect("text")
         .text
         .clone();
+    let reference: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let path = reference["__sniff"]["path"].as_str().expect("path");
+    assert!(reference["__sniff"]["nodes"].as_u64().unwrap() >= 1);
 
+    // The snapshot actually landed under the store root.
+    let abs = temp.path.join(path);
+    assert!(abs.exists(), "snapshot must be persisted at {abs:?}");
+
+    // Diff the snapshot against itself via paths -> zero changes, no inline JSONL.
     let diff = running
         .call_tool(tool_call(
             "diff_snapshots",
             serde_json::json!({
-                "base_jsonl": snapshot,
-                "head_jsonl": snapshot,
+                "base_path": path,
+                "head_path": path,
                 "tolerance": 0.5,
             }),
         ))
@@ -314,13 +354,110 @@ async fn diff_snapshots_returns_delta_and_summary() {
 }
 
 #[tokio::test]
+async fn diff_snapshots_rejects_traversal_and_bad_files() {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return;
+    };
+    let pool = launch_pool_with_retry(&opts).await;
+    let (_client, running, temp) = setup(pool).await;
+
+    // A traversal path must be rejected as invalid params.
+    let err = running
+        .call_tool(tool_call(
+            "diff_snapshots",
+            serde_json::json!({
+                "base_path": "../escape.jsonl",
+                "head_path": "missing.jsonl",
+            }),
+        ))
+        .await
+        .expect_err("traversal must fail");
+    assert!(err.to_string().contains("rejected"));
+
+    // Two known snapshots on disk that differ in one property.
+    std::fs::create_dir_all(&temp.path).unwrap();
+    let base = "{\"id\":1,\"tag\":\"DIV\",\"selector\":\"div.card\",\"depth\":0,\"styles\":{\"box_model\":{\"width\":\"300px\"}},\"children\":[]}\n";
+    let head = "{\"id\":1,\"tag\":\"DIV\",\"selector\":\"div.card\",\"depth\":0,\"styles\":{\"box_model\":{\"width\":\"310px\"}},\"children\":[]}\n";
+    std::fs::write(temp.path.join("base.jsonl"), base).unwrap();
+    std::fs::write(temp.path.join("head.jsonl"), head).unwrap();
+
+    let diff = running
+        .call_tool(tool_call(
+            "diff_snapshots",
+            serde_json::json!({
+                "base_path": "base.jsonl",
+                "head_path": "head.jsonl",
+                "tolerance": 0.5,
+            }),
+        ))
+        .await
+        .unwrap();
+    let text = diff
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .expect("text")
+        .text
+        .clone();
+    let summary: serde_json::Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(summary["__diff_summary"]["changed"], 1);
+    assert_eq!(summary["__diff_summary"]["base_nodes"], 1);
+    assert_eq!(summary["__diff_summary"]["head_nodes"], 1);
+    running.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn list_snapshots_enumerates_persisted_targets() {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return;
+    };
+    let pool = launch_pool_with_retry(&opts).await;
+    let (_client, running, _temp) = setup(pool).await;
+
+    let params = tool_call(
+        "sniff_page",
+        serde_json::json!({
+            "url": fixture_url("page.html"),
+            "selector": "[data-testid=\"widget\"]",
+            "depth": 1,
+            "categories": "box-model",
+            "compact": true,
+            "wait": ["network-idle:200:30000"],
+        }),
+    );
+    running.call_tool(params).await.unwrap();
+
+    let result = running
+        .call_tool(tool_call(
+            "list_snapshots",
+            serde_json::json!({ "limit": 10 }),
+        ))
+        .await
+        .unwrap();
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .expect("text")
+        .text
+        .clone();
+    let entry: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(entry["domain"], "local");
+    assert!(entry["path"].as_str().unwrap().ends_with(".jsonl"));
+    assert!(entry["created_at"].as_str().unwrap().ends_with('Z'));
+    running.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn run_checks_finds_odd_card_and_contrast_failure() {
     let Some(opts) = require_chrome() else {
         eprintln!("skipping: no Chrome binary found");
         return;
     };
     let pool = launch_pool_with_retry(&opts).await;
-    let (_client, running) = setup(pool).await;
+    let (_client, running, _temp) = setup(pool).await;
 
     // Three sibling cards; the third is short (uniformity outlier) and the
     // first carries a low-contrast paragraph (rules failure) in its subtree.
