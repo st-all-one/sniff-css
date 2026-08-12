@@ -25,9 +25,14 @@ sniffCSS --url http://localhost:3000 --selector ".card" \
 sniffCSS --url http://localhost:3000 --selector ".modal" \
   --wait app-flag:__APP_READY__:15000 --pseudo ::before
 
-# Conectar num browser já aberto (Chrome com --remote-debugging-port=9222)
+# Conectar num browser já aberto (Chrome com --remote-debugging-port=9222).
+# Aceita ws:// direto OU um origin http:// que resolve via /json/version.
 sniffCSS --url http://localhost:3000 --selector "header" \
-  --connect ws://127.0.0.1:9222/devtools/browser/<id>
+  --connect http://127.0.0.1:9222
+
+# A mesma coisa usando a variável de ambiente (padrão do container Docker).
+SNIFF_CONNECT=http://127.0.0.1:9222 sniffCSS --url http://localhost:3000 \
+  --selector "header"
 ```
 
 ## Opções principais
@@ -66,7 +71,7 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 | `--no-normalize-colors` | Manter cores como o browser retorna | — |
 | `--no-group` | Estilos achatados (sem categorias) | — |
 | `--chrome PATH` | Binário do Chrome | autodetect |
-| `--connect WS` | Conectar em browser existente | — |
+| `--connect ENDPOINT` | Conectar em browser existente — `ws://...` direto, ou `http://host:port` / `host:port` que resolve via `/json/version` | env `SNIFF_CONNECT` |
 | `--viewport WxH` | Viewport emulado (afeta `%`, `vh`, media queries) | `1366x768` |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
 
@@ -182,3 +187,41 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
 - Com `--stable-key data-testid`, os seletores saem como `button[data-testid="submit"]`
   em vez de dependerem de `id` gerados (`react-aria-123`), mantendo o output
   **matchável entre deploys**.
+
+## Docker
+
+O container **sniffCSS** (`docker/`) incorpora a toolchain completa +
+Chromium num ambiente independente do host, com foco em fidelidade:
+
+- Base `lscr.io/linuxserver/chromium` (pinada por digest), com **FullColor
+  4:4:4** habilitado por padrão (`SELKIES_H264_FULLCOLOR=true`) — cores reais
+  de 8 bits na GUI.
+- O Chromium da GUI (porta `3001`) é exposto via CDP em `127.0.0.1:9222`; o
+  `sniffCSS` e o `sniffCSS-mcp` **anexam ao mesmo browser** que você vê na tela
+  (máxima fidelidade: o que aparece na GUI é exatamente o que é capturado).
+- `SNIFF_CONNECT=http://127.0.0.1:9222` é o default — `sniffCSS -u URL -s SEL`
+  já conecta, sem flags extras.
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+# GUI:  http://localhost:3001   (Chromium com FullColor 4:4:4)
+
+# Captura conectando à GUI (computed styles reais do browser na tela):
+docker compose -f docker/docker-compose.yml exec sniffcss \
+  sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid
+
+# Diff / checks / MCP dentro do container:
+docker compose -f docker/docker-compose.yml exec sniffcss \
+  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
+docker compose -f docker/docker-compose.yml exec sniffcss \
+  sniffCSS-check --input snap.jsonl --rules
+
+# Servidor MCP (stdio) — configure no agente:
+#   command = docker
+#   args = [compose, -f, docker/docker-compose.yml, exec, -i, sniffcss, sniffCSS-mcp]
+```
+
+Os snapshots persistidos pelo MCP ficam em `/config/sniffCSS` (o volume
+`./chromium-config:/config`). Para rebuild, GPU (devices `/dev/dri` +
+`PIXELFLUX_WAYLAND=true`), ou variantes headless, veja o
+[`docker-compose.yml`](../docker/docker-compose.yml).

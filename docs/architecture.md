@@ -59,7 +59,10 @@ protege contra divergência entre o Rust e o snippet.
   `ws://` do stderr.
 - Usa `--user-data-dir` temporário, removido no `Drop` (com retry).
 - `--connect` permite conectar num browser já rodando (dev server com
-  remote debugging).
+  remote debugging). Aceita `ws://` direto ou um origin HTTP
+  (`http://host:port` / `host:port`) que é resolvido via `GET /json/version`
+  (`webSocketDebuggerUrl`), com default da env `SNIFF_CONNECT` — o que permite
+  anexar ao Chromium da GUI no container Docker.
 
 ### 3. Wait strategies como dados
 

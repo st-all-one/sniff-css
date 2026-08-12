@@ -1,0 +1,10 @@
+target
+debug
+.git
+.gitmodules
+.seeds
+ai-guides
+llms.txt
+SKILL.md
+README.md
+**/*.rs.bk

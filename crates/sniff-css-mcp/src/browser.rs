@@ -40,9 +40,9 @@ impl ChromePool {
 
     /// Connect to an already-running browser instead of launching one.
     ///
-    /// Kept for programmatic use (e.g. pointing the MCP server at a dev
-    /// server with remote debugging); the CLI currently launches headless.
-    #[allow(dead_code)]
+    /// Used when the MCP server is pointed at a shared Chromium (e.g. the
+    /// GUI instance in a container) via the `SNIFF_CONNECT` environment
+    /// variable or for programmatic use with remote debugging enabled.
     pub async fn connect(endpoint: &str) -> SniffResult<Self> {
         let sniffer = Sniffer::connect(endpoint).await?;
         Ok(Self {

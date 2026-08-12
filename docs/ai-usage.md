@@ -338,8 +338,10 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
    capture a **subárvore estável** (`selector=footer --depth 2`) ou use
    `--wait delay:N`. O primeiro slide oculto de um carrossel também faz o
    `element-ready` falhar mesmo com o conteúdo visível depois.
-7. **Conecte no seu dev server** — `--connect ws://127.0.0.1:9222/devtools/browser/<id>`
-   evita subir outro Chrome e captura exatamente o que você está vendo.
+7. **Conecte no seu dev server** — `--connect http://127.0.0.1:9222` (origin HTTP é
+   resolvido via `/json/version`; `ws://` direto também funciona) evita subir outro
+   Chrome e captura exatamente o que você está vendo. No container Docker isso é o
+   default via `SNIFF_CONNECT` (anexa ao Chromium da GUI).
 8. **Não use `--no-rect/--no-metrics` no pipeline de regressão** — `rect`/`is_user_noticeable`
    são parte valiosa do sinal de CLS/visibilidade.
 

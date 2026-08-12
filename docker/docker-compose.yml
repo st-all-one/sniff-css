@@ -1,0 +1,51 @@
+# sniffCSS in a self-contained Chromium container.
+#
+# The GUI Chromium runs with FullColor 4:4:4 (true 8-bit color) and a DevTools
+# port on loopback; sniffCSS / sniffCSS-mcp attach to that same browser, so what
+# you see at http://localhost:3001 is exactly what gets captured (fidelity).
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#   docker compose -f docker/docker-compose.yml exec sniffcss sniffCSS -u URL -s SEL
+#
+# MCP integration (run sniffCSS-mcp inside the container, stdio):
+#   docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp
+#   # agent config: command = docker, args = [compose ... exec -i sniffcss sniffCSS-mcp]
+services:
+  sniffcss:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: sniffcss:latest
+    container_name: sniffcss
+    environment:
+      # Fidelity: FullColor 4:4:4 (true 8-bit color) enabled by default.
+      - SELKIES_H264_FULLCOLOR=true
+      # GUI Chromium flags: CDP on loopback + allow the ws client origin.
+      - CHROME_CLI=--remote-debugging-port=9222 --remote-allow-origins=*
+      # sniffCSS + MCP connect to the GUI browser by default.
+      - SNIFF_CONNECT=http://127.0.0.1:9222
+      # Snapshots persist under the /config volume.
+      - SNIFF_SNAPSHOT_DIR=/config/sniffCSS
+      # linuxserver user/group ids (match your host uid/gid).
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+    volumes:
+      - ./chromium-config:/config
+    ports:
+      # GUI (HTTP must be proxied; HTTPS recommended)
+      - "3000:3000"
+      - "3001:3001"
+    # Needed for modern sites (rendering + memory buffers).
+    shm_size: "1gb"
+    restart: unless-stopped
+
+    # Optional: give Chromium access to the host GPU for hardware-accelerated
+    # rendering/encoding (better performance). See the linuxserver/chromium
+    # docs for Wayland vs X11 notes.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # environment:
+    #   - PIXELFLUX_WAYLAND=true
+    #   - DRINODE=/dev/dri/renderD128
+    #   - DRI_NODE=/dev/dri/renderD128

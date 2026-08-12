@@ -4,7 +4,7 @@
 
 Things to remember when using sniffCSS:
 
-- Talks to the browser over raw CDP (WebSocket); needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`). It can also attach to an already-running browser via `--connect ws://...`.
+- Talks to the browser over raw CDP (WebSocket); needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`). It can also attach to an already-running browser via `--connect` (accepts a `ws://` URL directly, or an HTTP origin like `http://127.0.0.1:9222` / `host:port` that is resolved through `/json/version`; defaults to the `SNIFF_CONNECT` environment variable).
 - Captures ~250 curated CSS properties (not the ~400 the browser exposes), grouped into 8 categories: `box-model`, `layout`, `typography`, `visual`, `transform`, `animation`, `interaction`, `accessibility`, `all`.
 - Default output is JSONL: one JSON document per matched root with nested `children`; `--output jsonl-flat` emits one node per line with `id`/`parent_id`; `--output json` emits a single array.
 - **AI-optimized by default**: a bare `sniffCSS -u URL -s SEL` already enables `--compact` (~55% fewer tokens: drops logical/physical duplicates, suppresses default noise values, scopes `css_variables` to one global `__meta` line plus per-node overrides), `--custom-props`, `--stabilize`, `--contrast`, and `--ax`. `--full` disables all five at once (full-fidelity); individual `--no-compact/--no-custom-props/--no-stabilize/--no-contrast/--no-ax` give fine control.
@@ -31,7 +31,7 @@ Core flags:
 - `--wait <spec>`: repeatable wait strategy (`delay:ms`, `network-idle:idle[:timeout]`, `fonts-loaded[:timeout]`, `selector:sel[:timeout]`, `element-ready:sel:cond1,cond2[:timeout]`, `app-flag:flag[:timeout]`).
 - Element filters: `--no-visible` (include invisible), `--min-width`, `--min-height`, `--exclude sel`.
 - Output: `--output jsonl|jsonl-flat|json`, `--pretty`, `--no-rect/--no-path/--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`.
-- Browser: `--chrome PATH`, `--connect ws://...`, `--viewport WxH` (default `1366x768`).
+- Browser: `--chrome PATH`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport WxH` (default `1366x768`).
 - AI optimizations (all default ON): `--compact`, `--custom-props`, `--stabilize`, `--contrast`, `--ax`. Escapes: `--full` (disable all five), or per-flag `--no-compact`, `--no-custom-props`, `--no-stabilize`, `--no-contrast`, `--no-ax`. Opt-in extras: `--ax-tree`, `--stable-key attr`.
 
 JSONL node shape (one line per root, `children` nested):
@@ -115,7 +115,7 @@ Full list with defaults:
 - `--wait` (repeatable), `--min-width`, `--min-height`, `--exclude`, `--no-visible`
 - `--output` (default `jsonl`), `--pretty`, `--compact` (default ON), `--no-compact`
 - `--no-rect`, `--no-path`, `--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`
-- `--chrome`, `--connect`, `--viewport` (default `1366x768`)
+- `--chrome`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport` (default `1366x768`)
 - `--custom-props` (default ON), `--no-custom-props`, `--stable-key`, `--stabilize` (default ON), `--no-stabilize`, `--contrast` (default ON), `--no-contrast`, `--ax` (default ON), `--no-ax`, `--ax-tree`, `--full`
 
 ### Categories
@@ -137,6 +137,10 @@ Five tools over stdio:
 - `sniffCSS_categories` — accepted categories.
 
 Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniffCSS://guides/golden`.
+
+### Docker (self-contained Chromium)
+
+`docker/` ships the whole toolchain + Chromium in a container independent of the host (fidelity-first: `docker compose -f docker/docker-compose.yml up -d`). The GUI Chromium runs on `http://localhost:3001` with FullColor 4:4:4 (true 8-bit color) and a CDP port on loopback; `SNIFF_CONNECT=http://127.0.0.1:9222` is the default, so `sniffCSS`/`sniffCSS-mcp` attach to the same browser that is displayed. Run tools with `docker compose -f docker/docker-compose.yml exec sniffcss sniffCSS ...`; run the MCP server with `docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp` (stdio; `SNIFF_SNAPSHOT_DIR=/config/sniffCSS` persists captures on the `./chromium-config:/config` volume).
 
 ### Output schema of the AI evaluation
 

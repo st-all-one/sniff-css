@@ -105,7 +105,7 @@ sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
 | `--no-compact` / `--no-custom-props` / `--no-stabilize` / `--no-contrast` / `--no-ax` | opt-in fine control, override the defaults individually |
 | `--stable-key attr` | Stable selectors (`data-testid`) across deploys |
 | `--viewport WxH` | Emulated viewport (default `1366x768`) — affects media queries/%/vh |
-| `--connect ws://...` | Attach to an already-running browser |
+| `--connect ws://...` | Attach to an already-running browser (`ws://` direct, or `http://host:port` resolved via `/json/version`; default from `SNIFF_CONNECT` env) |
 | `--output jsonl\|jsonl-flat\|json` | Output shape (default `jsonl`) |
 | `--no-visible` | Include invisible elements |
 | `--exclude sel`, `--min-width`, `--min-height` | Element filters |
@@ -331,6 +331,28 @@ jq -r '.. | objects | select(.tag=="A" or .tag=="BUTTON")
 ```bash
 sniffCSS -u "$URL" -s "footer" --depth 2 --wait "delay:1500"
 ```
+
+---
+
+## Docker (self-contained Chromium)
+
+`docker/` ships the full toolchain + Chromium in a container independent of the
+host, fidelity-first: the GUI Chromium (`http://localhost:3001`) runs with
+**FullColor 4:4:4** by default and a CDP port on loopback (`127.0.0.1:9222`);
+`sniffCSS`/`sniffCSS-mcp` **attach to that same browser**, so what you see is
+exactly what is captured. `SNIFF_CONNECT=http://127.0.0.1:9222` is the default.
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml exec sniffcss \
+  sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid
+```
+
+MCP inside the container (stdio; client launches via `docker exec -i`):
+`command: docker`, `args: [compose, -f, docker/docker-compose.yml, exec, -i, sniffcss, sniffCSS-mcp]`.
+Snapshots persist to `/config/sniffCSS` (volume `./chromium-config:/config`).
+`--connect` also accepts `http://host:port` (resolved via `/json/version`) and
+defaults to `SNIFF_CONNECT`.
 
 ---
 

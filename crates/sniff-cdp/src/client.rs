@@ -60,8 +60,13 @@ impl std::fmt::Debug for CdpClient {
 
 impl CdpClient {
     /// Connect to a DevTools WebSocket endpoint.
+    ///
+    /// The `url` may be a `ws://`/`wss://` endpoint directly, or an HTTP
+    /// origin (`http://127.0.0.1:9222` or `127.0.0.1:9222`) which is resolved
+    /// through `/json/version` to the browser's WebSocket URL.
     pub async fn connect(url: &str) -> Result<Self> {
-        let (ws, _) = tokio_tungstenite::connect_async(url)
+        let ws_url = crate::endpoint::resolve_endpoint(url).await?;
+        let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
             .await
             .map_err(|e| CdpError::Connect(e.to_string()))?;
         let (sink, mut stream) = ws.split();

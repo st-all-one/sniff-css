@@ -155,9 +155,11 @@ pub struct Cli {
     #[arg(long)]
     pub chrome: Option<String>,
 
-    /// Connect to an already-running browser (ws:// endpoint) instead
-    /// of launching one.
-    #[arg(long)]
+    /// Connect to an already-running browser instead of launching one.
+    /// Accepts a `ws://`/`wss://` endpoint directly, or an HTTP origin
+    /// (`http://127.0.0.1:9222` / `127.0.0.1:9222`) which is resolved via
+    /// `/json/version`. Defaults to the `SNIFF_CONNECT` environment variable.
+    #[arg(long, env = "SNIFF_CONNECT")]
     pub connect: Option<String>,
 
     /// Emulated viewport as WxH (default: 1366x768 laptop).

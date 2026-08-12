@@ -39,6 +39,23 @@ scripts/install.sh --no-build   # re-instala sem recompilar
 
 Requisito: Chrome/Chromium disponível (ou defina `SNIFF_CHROME_PATH` / use `--chrome`).
 
+## Docker (self-contained Chromium)
+
+Sem depender de nada no host: `docker/` empacota a toolchain + Chromium num
+container focado em fidelidade. O Chromium da GUI (`http://localhost:3001`)
+roda com **FullColor 4:4:4** por padrão e expõe CDP em `127.0.0.1:9222`;
+`sniffCSS` e `sniffCSS-mcp` anexam a esse mesmo browser (`SNIFF_CONNECT` já é o
+default), então o que você vê na tela é exatamente o que é capturado.
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml exec sniffcss \
+  sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid
+docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp   # MCP (stdio)
+```
+
+Detalhes e opções (GPU, headless, volume) em [`docs/usage.md`](docs/usage.md#docker).
+
 ## Uso rápido
 
 ```bash

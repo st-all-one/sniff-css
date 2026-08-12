@@ -10,11 +10,19 @@ use sniff_css_mcp::{ChromePool, SniffMcpServer};
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let opts = LaunchOptions {
-        headless: true,
-        ..Default::default()
+    let pool = match std::env::var("SNIFF_CONNECT") {
+        Ok(endpoint) if !endpoint.is_empty() => {
+            tracing::info!(endpoint = %endpoint, "connecting to existing browser");
+            ChromePool::connect(&endpoint).await?
+        }
+        _ => {
+            let opts = LaunchOptions {
+                headless: true,
+                ..Default::default()
+            };
+            ChromePool::launch(&opts).await?
+        }
     };
-    let pool = ChromePool::launch(&opts).await?;
     let service = SniffMcpServer::new(pool);
 
     tracing::info!(
