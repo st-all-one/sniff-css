@@ -4,7 +4,7 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
-## [Unreleased]
+## [0.3.1] — 2026-08-13
 
 ### Added
 
