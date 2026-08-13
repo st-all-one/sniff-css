@@ -1,63 +1,59 @@
 # SniffCSS
 
-Capture o **computed style real** de elementos de uma página e use isso para
-desenvolvimento assistido por IA. Fala direto com o navegador via **Chrome
-DevTools Protocol (CDP)**, sem frameworks de automação — rápido, determinístico
-e com saída otimizada para LLMs.
+**SniffCSS** captura o **computed style real** de elementos de uma página via
+**Chrome DevTools Protocol (CDP)**, com saída estruturada e determinística para
+desenvolvimento assistido por IA sem frameworks de automação — rápido, determinístico
+e com saída otimizada para LLMs
+
+## Destaques
+
+- **Interações reais antes da captura** — `--click`, `--hover`, `--type`,
+  `--upload` e `--action` disparam **eventos confiáveis** (não `el.click()`
+  sintético) para revelar elementos que só existem após uma ação: modais,
+  dropdowns, menus de hover, type-ahead e uploads reais (cropper de CMS roda).
+- **Acesso a áreas restritas** — `--header "Name: Value"` aplica o header a
+  **todo** request (`Network.setExtraHTTPHeaders`), autenticando middleware
+  stateless de CMS **sem token em URL**; no MCP, configure uma vez via
+  `SNIFF_DEFAULT_HEADERS`.
+- **Determinístico de ponta a ponta** — capture → `sniffCSS-diff` →
+  `sniffCSS-check` → a IA interpreta só o delta (0 tokens antes do LLM).
 
 ## Instalação
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
+curl --proto '=https' \
+     --tlsv1.2 \
+     --show-error \
+     --fail \
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
+  | sh
 ```
 
-Baixa o binário certo para seu sistema (Linux glibc/musl, macOS Apple Silicon,
-Windows), verifica o checksum e instala em `~/.local/bin`.
-
-- Versão específica: `... install.sh | VERSION=v0.3.1 sh`
-- Compilar do fonte: `cargo build --release` (ver `scripts/install.sh`)
-- Container self-contained (Chromium incluso): [`docs/docker.md`](docs/docker.md)
-
-Requisito: Chrome/Chromium no sistema (ou `SNIFF_CHROME_PATH` / `--chrome`).
+> Requisito: Chrome/Chromium no sistema (ou `SNIFF_CHROME_PATH` / `--chrome`).
 
 ## Quickstart
 
 ```bash
 # Computed styles de um botão — default otimizado para IA
-sniffCSS -u http://localhost:3000 -s ".btn-primary"
+sniffCSS -u https://example.net -s ".btn-primary"
 
 # Subárvore, só box-model + tipografia
-sniffCSS -u http://localhost:3000 -s ".card" \
-  --depth 1 --categories box-model,typography
+sniffCSS -u https://example.net -s ".card" \
+  --depth 4 --categories box-model,typography
 
 # Revelar elementos que só existem após uma ação (modal, dropdown, menu)
-sniffCSS -u http://localhost:3000 -s ".modal" --click "#open-modal"
-sniffCSS -u http://localhost:3000 -s ".search-results" --type "#q:shoes"
+sniffCSS -u https://example.net -s ".modal" --click "#open-modal"
+sniffCSS -u https://example.net -s ".search-results" --type "#q:shoes"
 
-# Upload real em <input type=file> (até oculto) — dispara `change` de verdade,
-# então handlers como o cropper de um CMS rodam; cadeia click→upload funciona
-sniffCSS -u http://localhost:3000 -s ".cropper" \
-  --action "click:#abrir-modal:5000:800" \
-  --action "upload:#arquivo:/tmp/foto.jpg"
+# Ações ordenadas (fluxo misto: clicar → digitar → selecionar)
+sniffCSS -u https://example.net -s ".result" \
+  --action "click:#open-modal:5000" \
+  --action "type:#q:shoes" \
+  --action "click:.result-item"
 
 # Acesso a área restrita: header aplicado a todo request (sem token em URL)
-sniffCSS -u http://localhost:10011/cms -s "main" \
+sniffCSS -u https://example.net/cms -s "main" \
   --header "X-CMS-AI-Token: <token>"
-# ...ou configure uma vez e nunca repita:
-# export SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'
-
-# Login persiste entre capturas (cookies + localStorage sobrevivem a restarts)
-sniffCSS -u "$URL/login" -s ".dashboard" \
-  --type "#email:user@x.com" --type "#password:secret" \
-  --click "button[type=submit]" --save-storage-state /tmp/state.json
-sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
-
-# Map what happened at the UI level: what appeared, where (on/off-screen,
-# px from the action point), and whether the interaction did anything
-sniffCSS -u http://localhost:3000 -s ".modal" --click "#open-modal" \
-  | jq 'select(has("__actions")) | .__actions[0] | {effect, summary}'
-# -> {"effect":"revealed","summary":"... 1 element(s) appeared · biggest: DIV on-screen — 12px from click"}
 
 # Diff determinístico entre duas versões
 sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
@@ -65,6 +61,10 @@ sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
 # Checks offline: contraste AA, alvos ≥24px, foco, uniformidade
 sniffCSS-check --input snap.jsonl --uniform --rules
 ```
+
+Para o snapshot **completo** (entrada de diff/check/jq), use `--no-summary`.
+Auth por header, login persistente (`--storage-state`), uploads reais e o mapa
+de efeito `__actions`: [`docs/usage.md`](docs/usage.md).
 
 ## MCP (agentes de IA)
 
@@ -87,10 +87,15 @@ request; `headers` por chamada sobrescreve por chave), `SNIFF_STORAGE_STATE`
 | Doc | Conteúdo |
 |---|---|
 | [`docs/usage.md`](docs/usage.md) | Referência completa da CLI. |
-| [`docs/docker.md`](docs/docker.md) | Docker: quickstart, compose, MCP via container. |
 | [`docs/ai-usage.md`](docs/ai-usage.md) | Guia para IA: pipeline captura→diff→checks. |
 | [`docs/diff-checks.md`](docs/diff-checks.md) | `sniffCSS-diff` e `sniffCSS-check`. |
 | [`docs/accessibility.md`](docs/accessibility.md) | Auditoria de acessibilidade. |
+| [`docs/docker.md`](docs/docker.md) | Docker: quickstart, compose, MCP via container. |
+| [`docs/golden-run.md`](docs/golden-run.md) | Contrato de determinismo (padrão ouro). |
+| [`docs/eval-prompt.md`](docs/eval-prompt.md) | Prompt de avaliação semântica por IA. |
+| [`docs/architecture.md`](docs/architecture.md) | Arquitetura interna. |
+| [`SKILL.md`](SKILL.md) | Guia de uso ativo para agentes de IA. |
+| [`llms.txt`](llms.txt) | Índice para modelos de linguagem. |
 
 ## Licença
 

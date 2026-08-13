@@ -4,6 +4,10 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [Unreleased]
+
+(nada ainda)
+
 ## [0.3.1] — 2026-08-13
 
 ### Added
@@ -166,7 +170,3 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   - Imagem Docker publicada no Docker Hub (`stallonels/sniffcss`) multi-arch
     (linux/amd64 + linux/arm64), construída a partir dos binários do Release.
   - `rust-version` corrigido para `1.88` (MSRV real exigida pelo `rmcp`).
-
-## [Unreleased]
-
-(nada ainda)

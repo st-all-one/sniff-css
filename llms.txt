@@ -1,242 +1,62 @@
 # sniffCSS
 
-> sniffCSS is a high-performance Rust CLI that captures the **real computed CSS styles** of DOM elements from a live page (especially localhost) via the raw Chrome DevTools Protocol (CDP) over WebSocket — no puppeteer/chromiumoxide — and emits structured, compact JSONL optimized for consumption by AI agents. It also ships deterministic diffing (`sniffCSS-diff`), deterministic a11y/consistency checks (`sniffCSS-check`), and an MCP server (`sniffCSS-mcp`) so a model gets only a minimal delta to interpret instead of raw snapshots.
+> sniffCSS is a high-performance Rust CLI that captures the **real computed CSS
+> styles** of DOM elements from a live page (especially localhost) via the raw
+> Chrome DevTools Protocol (CDP) over WebSocket — no puppeteer/chromiumoxide —
+> and emits structured, compact JSONL optimized for consumption by AI agents. It
+> also ships deterministic diffing (`sniffCSS-diff`), deterministic
+> a11y/consistency checks (`sniffCSS-check`), and an MCP server
+> (`sniffCSS-mcp`) so a model gets only a minimal delta to interpret instead of
+> raw snapshots.
 
 Things to remember when using sniffCSS:
 
-- Talks to the browser over raw CDP (WebSocket); needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`). It can also attach to an already-running browser via `--connect` (accepts a `ws://` URL directly, or an HTTP origin like `http://127.0.0.1:9222` / `host:port` that is resolved through `/json/version`; defaults to the `SNIFF_CONNECT` environment variable).
-- Captures ~250 curated CSS properties (not the ~400 the browser exposes), grouped into 8 categories: `box-model`, `layout`, `typography`, `visual`, `transform`, `animation`, `interaction`, `accessibility`, `all`.
-- Default output is JSONL: one JSON document per matched root with nested `children`; `--output jsonl-flat` emits one node per line with `id`/`parent_id`; `--output json` emits a single array.
-- **AI-optimized by default**: a bare `sniffCSS -u URL -s SEL` already enables `--compact` (~55% fewer tokens: drops logical/physical duplicates, suppresses default noise values, scopes `css_variables` to one global `__meta` line plus per-node overrides), `--custom-props`, `--stabilize`, `--contrast`, and `--ax`. `--full` disables all five at once (full-fidelity); individual `--no-compact/--no-custom-props/--no-stabilize/--no-contrast/--no-ax` give fine control.
-- For deterministic diffs use the SAME mode on both runs (default+default, or `--full`+`--full` — never mixed); the `computed_style_hash` (xxHash64) only matches across identical modes.
-- Accessibility is measured, not guessed: `contrast` (default ON) resolves the effective background in-page (JS composites transparent/semi-transparent layers up to the html/body canvas, so it works at any capture depth) and only reports `unknown` for background images; `ax` (default ON) and `ax-tree` (opt-in) pull the browser's accessibility tree via CDP.
-- `is_user_noticeable` (per node) replaces the old `is_visible` boolean with two axes: `display_visible` (rendered: display≠none, visibility≠hidden, opacity>0, size>0 — independent of the viewport, so below-the-fold content stays `true`) and `accessibility_grade` (`NONE` = hidden from assistive tech, `AA` = exposed but off-screen/transparent/missing a required name, `AAA` = on screen + exposed + named).
-- `sniffCSS-check` is fully offline and LLM-free: `--uniform` finds the "odd card" among sibling instances; `--rules` emits PASS/WARN/FAIL for contrast AA/AAA, target size ≥24×24px (WCAG 2.2), visible focus indicator, hidden-but-focusable, and empty-alt-on-large-image.
-- `sniffCSS-diff` matches nodes by stable `selector` (fallback to sibling position), compares per-property with numeric tolerance, never treats different units as equal, and supports `--ignore-props`, `--no-structural`, and `--stats-only`.
-- `--stabilize` freezes animations/transitions (emulates prefers-reduced-motion + cancels running animations) for deterministic snapshots of dynamic pages. Default ON; disable with `--no-stabilize`.
-- `--stable-key data-testid` makes selectors stable across deploys that regenerate ids (e.g. `button[data-testid="submit"]` instead of `button#react-aria-123`).
-- Wait strategies are composable: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default pipeline: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
-- **Interactions reveal action-only elements**: `--click sel[:timeout[:settle]]`, `--hover sel[:timeout[:settle]]`, `--type sel:text`, `--upload sel:file1,file2` (repeatable) and `--action <spec>` (ordered, for mixed click/hover/type/upload flows) perform real trusted input events (`Input.dispatchMouseEvent` / `Input.insertText` / `DOM.setFileInputFiles`) before capture. Each action waits for its own target and scrolls it into view; the wait pipeline then runs against the post-interaction DOM (e.g. a `.modal` opened by the click), and `--stabilize` is re-applied for deterministic snapshots. Without the action, a `display:none` target fails with an `element-ready` timeout. Ordered chains (modal → mini-modal → input) list each step's selector; a broken step errors with its index, selector and prior steps. `upload` attaches local files to an `<input type=file>` (paths resolved by the browser process — mount them in a container) and works on visually hidden inputs; the browser fires `change` itself, so real upload handlers (e.g. a CMS image cropper) run.
-- **Restricted areas**: `--header "Name: Value"` (repeatable) sets extra HTTP headers on every request via `Network.setExtraHTTPHeaders` — e.g. `--header "X-CMS-AI-Token: <token>"` for a stateless CMS AI middleware (no URL token / `.env` / proxy needed). `SNIFF_DEFAULT_HEADERS` (a JSON object) is merged first; explicit `--header` wins on collision.
-- **Persistent session state**: `--storage-state PATH` restores cookies + localStorage (Playwright `storageState` JSON) before navigation — cookies via `Network.setCookies`, localStorage via a `Page.addScriptToEvaluateOnNewDocument` init script that runs before the page's own scripts. `--save-storage-state PATH` exports all cookies + the page's localStorage after the pipeline, so a login performed through `actions` survives browser/server restarts.
-- **UI-effect map (`__actions`)**: with actions set (default ON; `--no-effects`/`effects:false` to omit, `--effects-limit N` to cap), each action emits an entry in a reserved `__actions` line mapping what/where it changed: `effect` (`revealed`/`hidden`/`changed`/`moved`/`no_effect`), `appeared`/`removed`/`changed` with `rect`, `onscreen`, `out_of_view.{above,below,left,right}`, `distance_from_action`, `direction`, `css_before`/`css_after` (curated ~38-property visual signature) and a deterministic `summary`. `no_effect` flags an interaction that changed nothing. `sniffCSS-diff`/`sniffCSS_diff` compare the `__actions` blocks when both sides have them → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed` (UI regression: "did the modal still open on-screen at the same spot?").
+- Talks to the browser over raw CDP; needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`), or attaches to a running browser via `--connect`.
+- Default output is the **summary digest** (token-lean, ~5-10x smaller than full); `--no-summary` emits the full JSONL used by diff/check/jq.
+- **AI-optimized by default**: `-u URL -s SEL` already enables `--compact`, `--custom-props`, `--stabilize`, `--contrast` and `--ax`. `--full` disables all five; `--no-*` give fine control.
+- **Determinism is a contract**: both diff sides must share mode (default+default or `--full`+`--full`, never mixed), viewport, wait strategy and actions.
+- **The AI only judges**: cite the measured facets (`contrast.ratio`, `aria.name`, `accessibility_grade`, `ax.role`); never re-derive them or feed full snapshots to the model — diff/check first.
+- Interactions reveal action-only elements: `--click`/`--hover`/`--type`/`--upload`/`--action` (real trusted input events); `--header`/`--storage-state`/`--save-storage-state` handle auth + persistent sessions.
+- `sniffCSS-check` is fully offline and LLM-free (`--uniform` finds the odd card; `--rules` emits PASS/WARN/FAIL for contrast, 24px targets, focus, alt).
 
 ## Docs
 
-### Capturing (sniffCSS)
+### Index
 
-Core flags:
+- [`README.md`](README.md) — install + quickstart (pt-BR).
+- [`SKILL.md`](SKILL.md) — decision-oriented active usage guide for AI agents.
+- [`docs/usage.md`](docs/usage.md) — complete CLI reference: flags, waits, actions, output formats, persistence. The single source of truth for flags.
+- [`docs/ai-usage.md`](docs/ai-usage.md) — AI-consumption flows: capture → diff → checks → eval prompt; MCP tools; team defaults; CI monitoring.
+- [`docs/diff-checks.md`](docs/diff-checks.md) — `sniffCSS-diff` and `sniffCSS-check` reference.
+- [`docs/accessibility.md`](docs/accessibility.md) — accessibility audit workflow (facets, jq queries, judgment checklist).
+- [`docs/docker.md`](docs/docker.md) — self-contained Chromium container: quickstart, compose, MCP via Docker, env vars.
+- [`docs/golden-run.md`](docs/golden-run.md) — the determinism contract (golden run).
+- [`docs/eval-prompt.md`](docs/eval-prompt.md) — AI evaluation prompt template (takes only the delta).
+- [`docs/sniffCSS-eval.schema.json`](docs/sniffCSS-eval.schema.json) — response contract for the AI evaluation.
+- [`docs/architecture.md`](docs/architecture.md) — internal design: single `Runtime.evaluate` extraction, raw CDP, wait/action strategies as data, snapshot store.
+- [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
-- `-u, --url <URL>` and `-s, --selector <CSS>`: required. Sniffs every element matching the selector.
-- `--depth N`: how many levels of children to capture (0 = the element only).
-- `-c, --categories <list>`: comma-separated category subset, default `all`.
-- `--props a,b`: extra CSS properties beyond the catalog.
-- `--pseudo ::before,::after`: capture pseudo-element styles.
-- `--wait <spec>`: repeatable wait strategy (`delay:ms`, `network-idle:idle[:timeout]`, `fonts-loaded[:timeout]`, `selector:sel[:timeout]`, `element-ready:sel:cond1,cond2[:timeout]`, `app-flag:flag[:timeout]`).
-- Interactions (repeatable): `--click sel[:timeout[:settle]]` (real click at center), `--hover sel[:timeout[:settle]]` (mouseMoved), `--type sel:text` (focus + insertText), `--upload sel:file1,file2` (attach files to a file input, hidden ok). Ordered mixed flows: `--action click:sel[:timeout[:settle]]` · `--action hover:sel[:timeout[:settle]]` · `--action type:sel:text` · `--action upload:sel:file1,file2`.
-- Auth/session: `--header "Name: Value"` (extra HTTP headers, repeatable; `SNIFF_DEFAULT_HEADERS` env JSON merged first), `--storage-state PATH` (restore cookies+localStorage before navigation), `--save-storage-state PATH` (export them after the run).
-- Element filters: `--no-visible` (include invisible), `--min-width`, `--min-height`, `--exclude sel`.
-- Output: **default is `summary`** (intermediate digest: structural + curated `css` subset + `contrast` + `aria`, ~5-10x smaller than full); `--no-summary` forces the full non-summarized `jsonl`; explicit formats via `--output jsonl|jsonl-flat|json|summary`, `--pretty`, `--no-rect/--no-path/--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`. Compact (default ON) also hoists page-wide constant props to `__meta.style_defaults` and omits them per node (~50-80% smaller JSONL); diff/check merge them back, so whole-page style changes are still detected.
-- Extra evidence: `--screenshot PATH` (PNG of final page state; `--fullpage-screenshot` for the full document), `--attrs a,b` (verbatim DOM attributes per node under `attrs`, e.g. form `name` reindexing).
-- Browser: `--chrome PATH`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport WxH` (default `1366x768`). The launched Chromium accepts external CDP clients (`--remote-allow-origins=*`).
-- AI optimizations (all default ON): `--compact`, `--custom-props`, `--stabilize`, `--contrast`, `--ax`. Escapes: `--full` (disable all five), or per-flag `--no-compact`, `--no-custom-props`, `--no-stabilize`, `--no-contrast`, `--no-ax`. Opt-in extras: `--ax-tree`, `--stable-key attr`.
+### Key facts
 
-JSONL node shape (one line per root, `children` nested):
-
-```json
-{
-  "id": 1, "parent_id": null,
-  "tag": "DIV",
-  "selector": "div#primary",
-  "path": "body > main > div.card",
-  "depth": 0,
-  "rect": {"x": 8.0, "y": 8.0, "width": 300.0, "height": 56.0},
-  "metrics": {"z_index": "auto", "stacking_context": false},
-  "is_user_noticeable": {"display_visible": true, "accessibility_grade": "AAA"},
-  "computed_style_hash": "afbd33ba764bb8d4",
-  "aria": {"role": "button", "name": "Salvar", "focusable": true, "has_text": true},
-  "contrast": {"ratio": 5.17, "foreground": "#2563eb", "background": "#ffffff", "large": false, "aa": "pass", "aaa": "fail", "unknown_reason": null},
-  "ax": {"role": "button", "name": "Salvar", "focusable": true, "ignored": false},
-  "styles": {"box_model": {"width": "300px"}, "typography": {"font-size": "16px"}, "visual": {"background-color": "#2563eb"}},
-  "children": []
-}
-```
-
-Facts about the node fields:
-
-- `id`/`parent_id` are pre-order; use `jsonl-flat` to reference nodes across lines.
-- `selector`/`path` prefer `--stable-key` when given, otherwise the DOM id.
-- `aria` is computed in-page deterministically: role (explicit or implied by tag per HTML-ARIA), accessible name (`aria-labelledby` → `aria-label` → `alt` → `title` → `placeholder` → text content for named roles), `focusable`, `aria-*` attributes, `lang`, `alt`, `title`, `html_hidden`, `disabled`, `has_text`.
-- `contrast` is derived in Rust from captured colors + the in-page resolved effective background; AA/AAA uses large-text thresholds (≥24px, or ≥18.66px bold → 3.0/4.5, else 4.5/7.0). `unknown_reason` is `background image` when any layer paints an image.
-- `is_user_noticeable`: `display_visible` (rendered; viewport-independent) + `accessibility_grade` (`NONE` for aria-hidden/hidden/inert/display:none/visibility:hidden/zero-size; `AA` when off-screen, opacity 0, or a name-requiring role has no accessible name; `AAA` otherwise).
-- Known limitation: the accessible name of an `<a>` that wraps an `<img alt="...">` is not yet derived from the image's alt (the link's `aria.name` comes out empty even though the browser names it).
-
-### Deterministic diff (sniffCSS-diff)
-
-`sniffCSS-diff base.jsonl head.jsonl [--tolerance 0.5] [--ignore-props a,b] [--no-structural] [--stats-only]`
-
-- Matches by stable selector, falls back to sibling position.
-- Per-property before/after with numeric tolerance; `16px` vs `16.2px` are equal within `0.5`, `16px` vs `16rem` never.
-- Emits `CHANGED` (with `changes` before/after per property incl. `styles`, `pseudo`, `aria`, `contrast`, `ax`, `rect`, `metrics`, `is_user_noticeable`), `ADDED`/`REMOVED` (full snapshot), and a final `__diff_summary`.
-- `--no-structural` suppresses ADDED/REMOVED (for variable-count lists); `--stats-only` prints just `nodes: N -> M | changed/added/removed`.
-
-### Deterministic checks (sniffCSS-check)
-
-`sniffCSS-check --input snap.jsonl [--uniform] [--rules] [--tolerance 0.5]`
-
-- `--uniform`: among sibling instances of the same selector, computes the group norm (median for numbers, mode otherwise) and reports outliers with the deviating properties and magnitudes.
-- `--rules`: uses the measured `contrast` facet (real fail/warn, `warn` for background-image), `target-size` (<24×24px), `focus-indicator` (focusable with suppressed outline and no box-shadow), `hidden-focusable` (focusable with `accessibility_grade == NONE`), `empty-alt-image` (large image with empty alt).
-- Output is JSONL with `{"check","selector","tag","status","evidence"}` lines plus `{"__check_summary":{...}}`.
-
-### Accessibility audit workflow
-
-1. Capture broadly + focused regions (contrast works at any depth):
-
-```bash
-sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
-sniffCSS -u "$URL" -s "nav"    --depth 4 > nav.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 > main.jsonl
-```
-
-2. Run the deterministic rules and read the facets:
-
-```bash
-sniffCSS-check --input main.jsonl --rules
-jq -r '.. | objects | select(.tag=="A" or .tag=="BUTTON" or .tag=="IMG")
-  | select(.aria.name==null or .aria.name=="") | select(.is_user_noticeable.accessibility_grade!="NONE")
-  | [.tag,.selector] | @tsv' body.jsonl
-jq -r '.. | objects | select(.tag|test("^H[1-6]$")) | [.tag,(.aria.name//"-")] | @tsv' body.jsonl
-```
-
-3. Judge from measured evidence only: no `<h1>` or skipped heading levels is a 1.3.1/2.4.6 failure; `contrast.aa == "fail"` is 1.4.3; empty `aria.name` on a link/button/image is 1.1.1/2.4.4/4.1.2; rect < 24px on interactive elements is 2.5.8. Below-the-fold content with `display_visible:true` + grade `AA` is present in the accessibility tree — not a visibility failure.
-
-## API
-
-### CLI flags (sniffCSS)
-
-Full list with defaults:
-
-- `--url` (required), `--selector` (required)
-- `--depth` (default 0), `--categories` (default `all`), `--props`, `--pseudo`
-- `--wait` (repeatable), `--min-width`, `--min-height`, `--exclude`, `--no-visible`
-- `--action` (repeatable, ordered: `click:sel[:t[:s]]`, `hover:sel[:t[:s]]`, `type:sel:text`), `--click`, `--hover`, `--type` (repeatable convenience shorthands)
-- `--effects` (default ON with actions; `--no-effects` to omit the `__actions` map), `--effects-limit N` (default 10)
-- `--output` (default `summary`), `--summary` (shorthand for `--output summary`, the default), `--no-summary` (full non-summarized `jsonl`), `--pretty`, `--compact` (default ON), `--no-compact`
-- `--no-rect`, `--no-path`, `--no-metrics`, `--no-normalize-colors`, `--no-group`, `--no-visibility`, `--no-style-hash`, `--no-aria`
-- `--screenshot PATH` (PNG of final page state), `--fullpage-screenshot`, `--attrs a,b` (verbatim DOM attributes under `attrs`), `--persist` (write to the MCP-style `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` tree in the CWD or `SNIFF_SNAPSHOT_DIR`, git-ignored via an auto-created `.gitignore`)
-- `--chrome`, `--connect` (`ws://...` direct, or `http://host:port` resolved via `/json/version`; default `SNIFF_CONNECT` env), `--viewport` (default `1366x768`)
-- `--custom-props` (default ON), `--no-custom-props`, `--stable-key`, `--stabilize` (default ON), `--no-stabilize`, `--contrast` (default ON), `--no-contrast`, `--ax` (default ON), `--no-ax`, `--ax-tree`, `--full`
-
-### Categories
-
-`box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`
-
-### Wait strategies
-
-`selector:sel[:t]`, `network-idle:idle[:t]`, `element-ready:sel:cond1,cond2[:t]`, `fonts-loaded[:t]`, `app-flag:flag[:t]`, `delay:ms`. Defaults: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
-
-### MCP server (sniffCSS-mcp)
-
-Five tools over stdio:
-
-- `sniffCSS_page` — capture (url, selector, depth, categories, compact, custom_props, stable_key, attributes, pseudo, wait, actions, viewport, format, stabilize, contrast, include_ax, ax_tree, effects, effects_limit, include_invisible, exclude, min_width, min_height, screenshot (default false), screenshot_full_page, full, persist, return, headers, storage_state, save_storage_state). Defaults are the AI-optimized set: compact, custom_props, stabilize, contrast and include_ax all ON; pass `full:true` for full-fidelity or set any flag `false` to opt out. `actions` (default `[]`) takes an ordered array of `{type: "click"|"hover"|"type"|"upload", selector, text?, files?, timeout_ms?, settle_ms?}` to reveal action-only elements (e.g. `[{"type":"click","selector":"#open-modal"}]` before capturing the `.modal`; `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` drives a real file-input upload, e.g. opening a CMS cropper); chained flows just list each step. With actions set, the snapshot carries a `__actions` UI-effect map (default ON via `effects`, capped by `effects_limit`). `headers` (default from `SNIFF_DEFAULT_HEADERS`, a JSON object merged per-key) sets extra HTTP headers on every request (e.g. `{"X-CMS-AI-Token":"<token>"}` for restricted CMS areas); `storage_state`/`save_storage_state` (fallback `SNIFF_STORAGE_STATE`) round-trip cookies + localStorage so a login survives restarts; relative `url` values are prefixed with `SNIFF_BASE_URL`. `attributes:["name"]` captures verbatim DOM attributes under each node's `attrs`; `include_invisible:true` (+ `wait:["delay:..."]`) captures animation-hidden content; `screenshot:true` (+ `screenshot_full_page`) persists a PNG beside the snapshot and adds `screenshot_path` to the reference. `return` accepts `"summary"` (**default**; intermediate digest — structural + `css` subset + `contrast` + `aria` — full JSONL still persisted), `"reference"` (tiny `__sniff` handle only; requires persist) or `"jsonl"` (full inline). By default persists the snapshot to `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (root via `SNIFF_SNAPSHOT_DIR`). The store root carries an auto-created `.gitignore` (`*`) so the generated tree is never tracked by git; the CLI mirrors this layout with `--persist` and is the preferred interface when a shell is available. Emits `notifications/progress` per phase (acquiring browser slot → navigating → performing interactions (click/hover/type/upload) when actions → waiting → extracting → capturing accessibility tree → formatting N nodes).
-- `sniffCSS_snapshots` — list persisted snapshots (domain/target/path/created_at/size), newest first; filters domain/target/limit.
-- `sniffCSS_diff` — deterministic diff via persisted `base_path`/`head_path` (preferred, keeps JSONL out of the LLM context) or inline `base_jsonl`/`head_jsonl` (+ tolerance, ignore_props, ignore_structural) → delta + `__diff_summary`. When both sides carry `__actions`, those blocks are compared too → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`.
-- `sniffCSS_check` — deterministic checks over a persisted `path` or inline `jsonl` (uniform, rules, tolerance) → PASS/WARN/FAIL + outliers.
-- `sniffCSS_categories` — accepted categories.
-
-Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniffCSS://guides/golden`.
-
-### Docker (self-contained Chromium)
-
-`docker/` ships the whole toolchain + Chromium in a container independent of the host (fidelity-first: `docker compose -f docker/docker-compose.yml up -d`). The GUI Chromium runs on `http://localhost:3001` with FullColor 4:4:4 (true 8-bit color) and a CDP port on loopback; `SNIFF_CONNECT=http://127.0.0.1:9222` is the default, so `sniffCSS`/`sniffCSS-mcp` attach to the same browser that is displayed. Run tools with `docker compose -f docker/docker-compose.yml exec sniffcss sniffCSS ...`; run the MCP server with `docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp` (stdio; `SNIFF_SNAPSHOT_DIR=/config/sniffCSS` persists captures on the `./chromium-config:/config` volume). Full Docker docs (quickstart, compose for integration, MCP via Docker, env vars): `docs/docker.md`.
-
-The Docker Hub image is `stallonels/sniffcss` (multi-arch linux/amd64 + linux/arm64), tagged like the GitHub Release (`latest` points at the last one). The `docker/Dockerfile` **downloads the prebuilt binaries from the matching GitHub Release** (`--build-arg VERSION=v0.3.1`) and verifies the `sha256sums.txt` — no compilation at image build; use `--build-arg BUILD_FROM_SOURCE=1` (`scripts/docker.sh build-source`) for local dev without a published Release.
-
-### Installation & releases
-
-Prebuilt binaries for **Linux (glibc + musl static), macOS and Windows** are published on each [GitHub Release](https://github.com/st-all-one/sniff-css/releases), versioned by semver tag. Rustup-style installer (detects OS/arch, verifies SHA-256 from the Release's `sha256sums.txt`, installs to `~/.local/bin`):
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.3.1 sh
-```
-
-Overridables: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`. New releases: `git tag vX.Y.Z && git push origin vX.Y.Z` runs `.github/workflows/release.yml` (build matrix → GitHub Release + sha256sums → Docker Hub push). Requires `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets (`scripts/set-secrets.sh`). Cross-compiled musl targets use `cross` with image digests pinned in `Cross.toml`. Linux `rust-version` MSRV is 1.88.
-
-### Output schema of the AI evaluation
-
-`docs/sniffCSS-eval.schema.json` expects `{ "page_url", "status" ("IMPROVEMENT"|"NEUTRAL"|"REGRESSION_DETECTED"), "score_change" (-100..100), "summary", "changes_evaluated": [{ "node_selector", "impact" ("POSITIVE"|"NEGATIVE"), "category", "reason" }] }`.
+- Categories: `box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`.
+- Wait strategies: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
+- `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` emits `CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`; `--stats-only` for scale.
+- `sniffCSS-check --input snap.jsonl --uniform --rules` emits PASS/WARN/FAIL + `__check_summary`.
+- MCP tools over stdio: `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`, `sniffCSS_snapshots`, `sniffCSS_categories`. Snapshots persist to `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
+- Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniffCSS://guides/golden`.
+- Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.88.
 
 ## Examples
 
-- Capture a button's computed styles and extract one property:
-
-```bash
-sniffCSS --url http://localhost:3000 --selector ".btn-primary" \
-  | jq '.styles.box_model.width'
-```
-
-- Sniff a subtree with depth and stable keys (compact/optimizations are default ON):
-
-```bash
-sniffCSS --url http://localhost:3000 --selector ".card" \
-  --depth 2 --stable-key data-testid
-```
-
+- Capture a button's computed styles: `sniffCSS --url http://localhost:3000 --selector ".btn-primary"`.
 - Deterministic regression diff in CI:
 
 ```bash
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > snapshots/base.jsonl
-sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid > snapshots/head.jsonl
+sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/base.jsonl
+# ... deploy ...
+sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/head.jsonl
 sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
-# fail the job if changed/added/removed exceed the threshold
 ```
 
-- Find the "odd card" and real AA contrast failures in a captured section:
-
-```bash
-sniffCSS -u "$URL" -s "main" --depth 5 > main.jsonl
-sniffCSS-check --input main.jsonl --uniform --rules
-```
-
-- Full-fidelity capture (all ~400 browser props, no facets):
-
-```bash
-sniffCSS -u "$URL" -s "main" --depth 2 --full > raw.jsonl
-```
-
-- Animated pages (carousels) are already stabilized by default; if jitter persists, raise the diff tolerance:
-
-```bash
-sniffCSS -u "$URL" -s "body" --depth 4 --wait network-idle:800:60000 > snap.jsonl
-sniffCSS-diff base.jsonl head.jsonl --tolerance 1.0
-```
-
-- Elements that only exist after an interaction (modal/dropdown/menu):
-
-```bash
-sniffCSS -u "$URL" -s ".modal" --click "#open-modal"            # click to reveal
-sniffCSS -u "$URL" -s ".menu-panel" --hover "#user-menu"        # hover to reveal
-sniffCSS -u "$URL" -s ".search-results" --type "#q:shoes"       # type to reveal
-sniffCSS -u "$URL" -s ".result" --action "click:#open:5000" \
-  --action "type:#q:shoes" --action "click:.result-item"        # ordered mixed flow
-```
-
-- Accessibility audit summary: contrast fails, missing names, heading structure:
-
-```bash
-sniffCSS-check --input main.jsonl --rules | jq -r 'select(.check=="contrast-aa" and .status=="fail") | [.tag,.selector,.evidence] | @tsv'
-jq -r '.. | objects | select(.tag|test("^H[1-6]$")) | [.tag,(.aria.name//"-")] | @tsv' body.jsonl
-```
-
-- Serve as MCP for AI agents (Claude Desktop / Copilot):
-
-```bash
-sniffCSS-mcp   # stdio MCP server sharing one headless Chrome
-```
-
-## Optional
-
-- The workspace also ships `docs/eval-prompt.md` (the evaluation prompt template that takes only the delta), `docs/sniffCSS-eval.schema.json` (the response contract), `docs/golden-run.md` (the determinism contract: same viewport, same mode — default or `--full` — on both diff sides), and an accessibility guide at `docs/accessibility.md`.
+- Reveal action-only elements: `sniffCSS -u "$URL" -s ".modal" --click "#open-modal"`.
+- Serve as MCP for AI agents: `sniffCSS-mcp` (stdio, shares one headless Chrome).
