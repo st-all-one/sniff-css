@@ -173,6 +173,9 @@ docker compose -f docker/docker-compose.yml exec sniffcss \
 |---|---|---|
 | `SNIFF_CONNECT` | `http://127.0.0.1:9222` | CDP do Chromium da GUI (loopback) |
 | `SNIFF_SNAPSHOT_DIR` | `/config/sniffCSS` | Onde o MCP persiste snapshots |
+| `SNIFF_DEFAULT_HEADERS` | — | JSON de headers HTTP aplicados a todo request do MCP (ex. `{"X-CMS-AI-Token":"<token>"}`) — auth de área restrita sem repetir por chamada |
+| `SNIFF_STORAGE_STATE` | — | Path de estado de sessão (cookies + `localStorage`) restaurado antes de toda navegação; `--storage-state`/`storage_state` por chamada sobrescreve |
+| `SNIFF_BASE_URL` | — | Base URL prefixada a `url` relativas (ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`) |
 | `SELKIES_H264_FULLCOLOR` | `true` | FullColor 4:4:4 (fidelidade de cor) |
 | `CHROME_CLI` | `--remote-debugging-port=9222 --remote-allow-origins=*` | Flags do Chromium |
 | `PUID`/`PGID` | `1000`/`1000` | UID/GID do usuário linuxserver |

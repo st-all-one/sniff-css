@@ -185,11 +185,14 @@ pub struct SniffPageRequest {
     pub wait: Vec<String>,
     /// Ordered user interactions run before capture to reveal elements that
     /// only exist after an action (modals, dropdowns, hover menus, type-ahead
-    /// suggestions). Each entry is `{type: "click"|"hover"|"type", selector,
-    /// text?, timeout_ms?, settle_ms?}`; e.g. `[{"type":"click",
-    /// "selector":"#open-modal"}]` opens a modal before capturing its `.modal`.
-    /// Actions run in array order; chained flows (modal → mini-modal → input)
-    /// work by giving each step's selector.
+    /// suggestions). Each entry is `{type: "click"|"hover"|"type"|"upload",
+    /// selector, text?, files?, timeout_ms?, settle_ms?}`; e.g.
+    /// `[{"type":"click","selector":"#open-modal"}]` opens a modal before
+    /// capturing its `.modal`, and `{"type":"upload","selector":"#file",
+    /// "files":["/tmp/x.png"]}` attaches a file to a (possibly hidden) file
+    /// input — the browser fires `change`, so real upload handlers (e.g. a CMS
+    /// image cropper) run. Actions run in array order; chained flows
+    /// (modal → mini-modal → input) work by giving each step's selector.
     #[serde(default)]
     pub actions: Vec<ActionInput>,
     /// Map the UI effects of each action into a reserved `__actions` area in
@@ -402,18 +405,24 @@ impl SniffMcpServer {
                          false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
                          that stay matchable across deploys. For elements that only exist after an \
                          interaction, pass actions=[{type:\"click\", selector:\"#open-modal\"}, ...] \
-                         (click/hover/type, ordered — chains like modal → mini-modal → input just list \
-                         each step's selector) to reveal modals, dropdowns, hover menus and \
-                         type-ahead panels before the wait pipeline runs and capture happens. When \
-                         actions are set, the snapshot also carries a __actions UI-effect map (default \
-                         ON; effects:false to omit): per action, what appeared/disappeared/changed and \
-                         where — rect, on-screen flag, out-of-view offset, distance from the action \
-                         point — plus a no_effect marker when the interaction changed nothing. Extra \
+                         (click/hover/type/upload, ordered — chains like modal → mini-modal → input just \
+                         list each step's selector) to reveal modals, dropdowns, hover menus and \
+                         type-ahead panels before the wait pipeline runs and capture happens; \
+                         upload actions ({type:\"upload\", selector:\"#file\", files:[\"/tmp/x.png\"]}) \
+                         attach local files to a file input (hidden inputs ok) and run the real \
+                         upload handler. When actions are set, the snapshot also carries a __actions \
+                         UI-effect map (default ON; effects:false to omit): per action, what \
+                         appeared/disappeared/changed and where — rect, on-screen flag, out-of-view \
+                         offset, distance from the action point — plus a no_effect marker when the \
+                         interaction changed nothing. Extra \
                          evidence: attributes=[\"name\"] captures verbatim DOM attributes per node under \
                          attrs (e.g. form field reindexing); include_invisible=true (+ wait:[\"delay:...\"]) \
                          captures content hidden by scroll-reveal animations (WOW.js); screenshot=true \
                          (+ screenshot_full_page) persists a PNG beside the snapshot and adds \
-                         screenshot_path to the __sniff reference."
+                         screenshot_path to the __sniff reference. For restricted areas pass \
+                         headers={\"X-CMS-AI-Token\":\"<token>\"} (applied to every request; server \
+                         SNIFF_DEFAULT_HEADERS merged per-key) and storage_state/save_storage_state \
+                         to round-trip a login (cookies + localStorage) across restarts."
     )]
     pub async fn sniff_css_page(
         &self,
@@ -948,7 +957,7 @@ fn phase_message(phase: &sniff_engine::Phase) -> String {
     match phase {
         sniff_engine::Phase::Navigating => "navigating to page".to_string(),
         sniff_engine::Phase::Interacting => {
-            "performing interactions (click/hover/type)".to_string()
+            "performing interactions (click/hover/type/upload)".to_string()
         }
         sniff_engine::Phase::Waiting => "waiting for page readiness".to_string(),
         sniff_engine::Phase::Extracting => "extracting computed styles".to_string(),
@@ -1293,7 +1302,7 @@ mod tests {
         );
         assert_eq!(
             phase_message(&sniff_engine::Phase::Interacting),
-            "performing interactions (click/hover/type)"
+            "performing interactions (click/hover/type/upload)"
         );
         assert_eq!(sniff_engine::Phase::Extracting.progress(), 0.7);
         // Interacting sits between navigating (0.2) and the final wait (0.4)

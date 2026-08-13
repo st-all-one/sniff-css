@@ -411,6 +411,12 @@ resolvido) — `fail` é falha real de AA/AAA, `warn` é fundo-imagem (manual).
   `unknown` (honesto — não dá para medir sem a imagem). Avalie manualmente.
 - **Carrosséis/abas**: conteúdo em painel oculto ainda está na AX tree (grade
   `AA`, `display_visible:true`) — não é "invisível", apenas fora da tela.
+- **Upload**: os caminhos de arquivo são resolvidos pelo **processo do browser**
+  — em container, monte-os lá dentro. Ações de upload aceitam input oculto
+  (`display:none`), comum em botões de upload.
+- **Estado de sessão**: a exportação captura `localStorage` apenas da origem da
+  página atual (sub-origens de CDN não entram); cookies restaurados são
+  host-scoped (prefixo `.` normalizado para host-only).
 
 ## 6. Boas práticas / armadilhas
 

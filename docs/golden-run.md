@@ -23,7 +23,14 @@ Para que duas runs sejam comparáveis, os seguintes parâmetros devem ser
 | default otimizado | `compact`+`custom-props`+`stabilize`+`contrast`+`ax` (todos já ON) | Mesmo modo = mesmo hash/conteúdo. Não misture default com `--full`. |
 | `--stable-key data-testid` | sempre que houver | Seletores estáveis entre deploys. |
 | Wait strategy | mesmo em ambas | `network-idle`/`element-ready`/`delay` devem esperar o mesmo estado. |
-| Ações (`--click`/`--hover`/`--type`/`--action`, MCP `actions`) | mesmas em ambas | A interação define o estado revelado; runs com e sem ação capturam coisas diferentes. |
+| Ações (`--click`/`--hover`/`--type`/`--upload`/`--action`, MCP `actions`) | mesmas em ambas | A interação define o estado revelado; runs com e sem ação capturam coisas diferentes. |
+| Auth/sessão | mesmos em ambas | `--header`/`SNIFF_DEFAULT_HEADERS` e `--storage-state` definem **quem** é o request; lados com credenciais diferentes capturam estados de usuário diferentes. |
+
+> **Áreas restritas:** para um CMS com middleware stateless de IA, o token vai
+> por header (`--header "X-CMS-AI-Token: <token>"` ou `SNIFF_DEFAULT_HEADERS`
+> no MCP) — o request já nasce autenticado, sem token em URL. Um login por
+> formulário sobrevive entre capturas via `--save-storage-state` (exporta
+> cookies + `localStorage`) → `--storage-state` (restaura antes da navegação).
 
 > `__actions` (o mapa de efeito de UI) é **aditiva**: ligada/desligada num lado
 > só não quebra o diff de nós — só deixa de comparar `__actions` se um dos

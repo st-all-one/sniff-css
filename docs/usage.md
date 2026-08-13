@@ -62,7 +62,11 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--click sel[:t[:settle]]` | Clique real no centro de `sel` antes de capturar (repetível) — revela modais/dropdowns | — |
 | `--hover sel[:t[:settle]]` | `mouseMoved` para `sel` antes de capturar (repetível) — revela menus de `:hover` | — |
 | `--type sel:text` | Foca `sel` e digita `text` antes de capturar (repetível) — revela type-ahead | — |
-| `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` (repetível) | — |
+| `--upload sel:file1,file2` | Anexa arquivos locais a um `<input type=file>` antes de capturar (repetível) — funciona em inputs ocultos; o browser dispara `change` sozinho, então handlers reais (cropper do CMS) rodam | — |
+| `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` · `upload:<sel>:<file1,file2>` (repetível) | — |
+| `--header "Name: Value"` | Header HTTP extra aplicado a **todo** request da sessão (repetível), ex. `X-CMS-AI-Token` para auth stateless de CMS; `SNIFF_DEFAULT_HEADERS` (JSON) é mesclado antes, e `--header` explícito vence na colisão | — |
+| `--storage-state PATH` | Restaura estado de sessão persistido (cookies + `localStorage`, JSON storageState do Playwright) **antes** da navegação — login prévio sobrevive a este capture | — |
+| `--save-storage-state PATH` | Exporta cookies + `localStorage` da origem atual ao fim do pipeline — paire com `--storage-state` nas capturas seguintes para o login sobreviver a restarts | — |
 | `--effects` | Emitir a linha `__actions` com o mapa de efeito de UI por interação (o que apareceu/sumiu/mudou e onde) | **`on` com ações** (use `--no-effects`) |
 | `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (em `changed`, mudanças semânticas vêm antes das de posição; demais listas por área) | `10` |
 | `--no-visible` | Incluir elementos invisíveis | — |
@@ -115,17 +119,52 @@ Formato: `nome:arg1:arg2[:timeout_ms]`
 
 Cada ação espera o próprio alvo aparecer, rola até o centro e dispara um
 **evento confiável** (`Input.dispatchMouseEvent` para click/hover,
-`Input.insertText` para type) — não um `el.click()` sintético, então
-`:hover`/`:active`/`pointer`/`mouse`/`click` disparam de verdade. Com ações, o
-pipeline de waits roda **depois** delas, contra o DOM pós-interação (ex.: o
-`.modal` que o clique abriu), e o `--stabilize` é reaplicado para snapshots
-determinísticos.
+`Input.insertText` para type, `DOM.setFileInputFiles` para upload) — não um
+`el.click()` sintético, então `:hover`/`:active`/`pointer`/`mouse`/`click`
+disparam de verdade. Com ações, o pipeline de waits roda **depois** delas,
+contra o DOM pós-interação (ex.: o `.modal` que o clique abriu), e o
+`--stabilize` é reaplicado para snapshots determinísticos. Cadeias (modal →
+mini-modal → input) funcionam porque cada `prepare` espera o **próprio** alvo,
+que pode só existir após o passo anterior.
 
 | Ação | Exemplo | Observação |
 |---|---|---|
 | `click` | `click:#open-modal:5000:200` | espera `#open-modal` (5s), clica, espera 200ms |
 | `hover` | `hover:#user-menu` | move o ponteiro para o centro de `#user-menu` |
 | `type` | `type:#q:shoes` | foca `#q` e insere `shoes` (anexa; não limpa o campo) |
+| `upload` | `upload:#file:/tmp/foto.jpg` | anexa o arquivo a `#file` (aceita input oculto `display:none`); o browser dispara `change` e o handler real roda |
+
+> O caminho dos arquivos em `upload` é resolvido **pelo processo do browser** —
+> em container, monte o arquivo lá dentro. O `prepare` do upload não exige
+> visibilidade (inputs de arquivo costumam ser ocultos).
+
+### Acesso a áreas restritas
+
+Para um CMS com middleware stateless de IA, o token vai por header — o request
+já nasce autenticado, sem token em URL, `.env` ou proxy:
+
+```bash
+sniffCSS -u http://localhost:10011/cms -s "main" \
+  --header "X-CMS-AI-Token: <token>"
+# configure uma vez no shell e nunca repita:
+export SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'
+```
+
+Login por formulário persiste entre capturas (cookies + `localStorage`
+sobrevivem a restarts do browser):
+
+```bash
+# 1. faça login via ações e exporte o estado
+sniffCSS -u "$URL/login" -s ".dashboard" \
+  --type "#email:user@x.com" --type "#password:secret" \
+  --click "button[type=submit]" --save-storage-state /tmp/state.json
+# 2. nas capturas seguintes, restaure antes da navegação
+sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
+```
+
+O mesmo se aplica ao MCP via `headers`/`storage_state`/`save_storage_state`, com
+defaults de servidor em `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE` e
+`SNIFF_BASE_URL` (ver `docs/ai-usage.md`).
 
 > Os atalhos `--click`/`--hover`/`--type` aplicam nessa ordem de grupo
 > (clicks → hovers → types). Para fluxos mistos **intercalados** (ex.: clicar,
