@@ -18,6 +18,7 @@ Things to remember when using sniffCSS:
 - **The AI only judges**: cite the measured facets (`contrast.ratio`, `aria.name`, `accessibility_grade`, `ax.role`); never re-derive them or feed full snapshots to the model — diff/check first.
 - Interactions reveal action-only elements: `--click`/`--hover`/`--type`/`--upload`/`--action` (real trusted input events); `--header`/`--storage-state`/`--save-storage-state` handle auth + persistent sessions.
 - `sniffCSS-check` is fully offline and LLM-free (`--uniform` finds the odd card; `--rules` emits PASS/WARN/FAIL for contrast, 24px targets, focus, alt).
+- **Flutter/Dart backend**: `--backend flutter` (CLI) / `sniffFlutter_page` (MCP) captures a **debug-mode** Flutter app's widget tree on an Android emulator/device over the Dart VM Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`), emitting the same JSONL model (widget class as tag, colors normalized to `#rrggbb`, shared WCAG contrast) so the same `sniffCSS-diff`/`sniffCSS-check` work by path. Requires `--device <serial>` or `--avd <name>`; release builds (no VM Service) are unsupported.
 
 ## Docs
 
@@ -42,7 +43,7 @@ Things to remember when using sniffCSS:
 - Wait strategies: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
 - `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` emits `CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`; `--stats-only` for scale.
 - `sniffCSS-check --input snap.jsonl --uniform --rules` emits PASS/WARN/FAIL + `__check_summary`.
-- MCP tools over stdio: `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`, `sniffCSS_snapshots`, `sniffCSS_categories`. Snapshots persist to `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
+- MCP tools over stdio: `sniffCSS_page`, `sniffFlutter_page`, `sniffCSS_diff`, `sniffCSS_check`, `sniffCSS_snapshots`, `sniffCSS_categories`. Snapshots persist to `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
 - Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniffCSS://guides/golden`.
 - Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.88.
 

@@ -6,27 +6,14 @@
 //! typed.
 
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 /// An inbound CDP event delivered to subscribers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CdpEvent {
-    pub method: String,
-    pub params: Map<String, Value>,
-    pub session_id: Option<String>,
-}
-
-impl CdpEvent {
-    /// Convenience accessor for a nested string field.
-    pub fn param_str(&self, key: &str) -> Option<&str> {
-        self.params.get(key)?.as_str()
-    }
-
-    /// Convenience accessor for a nested integer field.
-    pub fn param_i64(&self, key: &str) -> Option<i64> {
-        self.params.get(key)?.as_i64()
-    }
-}
+///
+/// Re-exported from the shared JSON-RPC layer: the CDP event wire shape
+/// (`method` + `params` + optional `sessionId`) is identical to the generic
+/// one, so CDP subscribes to the same broadcast channel without conversion.
+pub use crate::jsonrpc::JsonRpcEvent as CdpEvent;
 
 /// Outbound command frame.
 #[derive(Debug, Serialize)]

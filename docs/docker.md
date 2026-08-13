@@ -184,7 +184,7 @@ docker compose -f docker/docker-compose.yml exec sniffcss \
 ## Como a imagem é construída
 
 - Por padrão o `docker/Dockerfile` **baixa os binários pré-compilados do
-  GitHub Release** (`--build-arg VERSION=v0.3.1`) e verifica o `sha256sums.txt`
+  GitHub Release** (`--build-arg VERSION=v0.4.0`) e verifica o `sha256sums.txt`
   — não compila nada.
 - Para desenvolvimento local sem Release publicado:
   `scripts/docker.sh build-source` (compila do fonte, `--build-arg BUILD_FROM_SOURCE=1`).

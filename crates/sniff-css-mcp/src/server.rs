@@ -290,6 +290,57 @@ pub struct SniffPageRequest {
     pub save_storage_state: Option<String>,
 }
 
+/// Parameters for the `sniffFlutter_page` tool (Flutter/Dart backend).
+///
+/// The widget tree is captured from a **debug-mode** Flutter app on an Android
+/// emulator/device over the Dart VM Service; `device` or `avd` selects the
+/// target, and the app is either run (`flutter run --machine`) or attached to
+/// (`flutter attach --machine`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct SniffFlutterRequest {
+    /// `adb` serial of the emulator/device (e.g. `emulator-5554`).
+    pub device: Option<String>,
+    /// Launch this AVD instead of attaching to a running device.
+    pub avd: Option<String>,
+    /// Flutter project directory (containing `pubspec.yaml`). Defaults to the
+    /// directory of `target` that owns a `pubspec.yaml`.
+    pub project: Option<String>,
+    /// App entry point (default `lib/main.dart`).
+    pub target: String,
+    /// Attach to an already-running debug app instead of `flutter run`.
+    pub attach: bool,
+    /// How many widget levels to capture below the app root (default 0).
+    pub depth: usize,
+    /// Snapshot label used for persistence naming (default `*`).
+    pub selector: String,
+    /// Persist the snapshot to disk under `sniffCSS/` (default true).
+    pub persist: bool,
+    /// Return mode: `reference` (default; tiny `__sniff` handle) or `jsonl`
+    /// (full snapshot inline).
+    pub return_mode: String,
+    /// Capture a PNG screenshot via `adb screencap` and persist it beside the
+    /// snapshot.
+    pub screenshot: bool,
+}
+
+impl Default for SniffFlutterRequest {
+    fn default() -> Self {
+        Self {
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".to_string(),
+            attach: false,
+            depth: 0,
+            selector: "*".to_string(),
+            persist: true,
+            return_mode: "reference".to_string(),
+            screenshot: false,
+        }
+    }
+}
+
 /// Parameters for the `sniffCSS_diff` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DiffRequest {
@@ -522,6 +573,184 @@ impl SniffMcpServer {
                 String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
             }
             _ => Ok(jsonl),
+        }
+    }
+
+    /// Capture the widget tree of a debug-mode Flutter app as JSONL.
+    #[tool(
+        name = "sniffFlutter_page",
+        description = "Capture the real widget/render tree of a Flutter/Dart app on an Android emulator or \
+                       device (the Flutter analogue of sniffCSS_page). The app must be built in DEBUG mode \
+                       (release builds strip the Dart VM Service). The snapshot is persisted to disk as \
+                       sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns the token-lean \
+                       __sniff handle (path, nodes) — pass return=\"jsonl\" for the full snapshot inline, \
+                       so the same sniffCSS_diff (base_path/head_path) and sniffCSS_check (path) tools work \
+                       on Flutter snapshots unchanged. Each node carries tag (widget class), selector/path \
+                       (widget breadcrumb), rect (render-object size + accumulated offset), styles grouped \
+                       by layout/typography/visual/box-model (widget diagnostics properties; Flutter colors \
+                       normalized to #rrggbb), and the derived WCAG contrast facet. Set device=\"emulator-5554\" \
+                       for an already-running device or avd=\"<name>\" to launch one; by default the app is \
+                       launched via flutter run --machine (project=<dir>, target=lib/main.dart); pass \
+                       attach=true to attach to an already-running debug app. Animations are frozen \
+                       (timeDilation) before capture for deterministic snapshots; screenshot=true persists \
+                       a PNG beside the snapshot via adb screencap."
+    )]
+    pub async fn sniff_flutter_page(
+        &self,
+        params: Parameters<SniffFlutterRequest>,
+        meta: RequestMetaObject,
+        peer: Peer<RoleServer>,
+    ) -> Result<String, ErrorData> {
+        let request = params.0;
+        let reporter = ProgressReporter::new(&meta, &peer);
+
+        // Resolve the target device.
+        let device = if let Some(avd) = &request.avd {
+            reporter.report(0.05, "launching emulator").await?;
+            let emulator = sniff_flutter::EmulatorProcess::launch(avd)
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let serial = emulator
+                .serial()
+                .ok_or_else(|| ErrorData::internal_error("emulator reported no serial", None))?
+                .to_string();
+            std::mem::forget(emulator);
+            serial
+        } else {
+            request.device.clone().ok_or_else(|| {
+                ErrorData::invalid_params(
+                    "sniffFlutter_page needs device=<adb serial> or avd=<name>",
+                    None,
+                )
+            })?
+        };
+
+        // Run (or attach) the app and discover the VM Service URI.
+        reporter.report(0.15, "starting Flutter app").await?;
+        let ws_uri = if request.attach {
+            let mut machine = sniff_flutter::FlutterMachine::attach(&device)
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            machine
+                .wait_for_vm_service(std::time::Duration::from_secs(90))
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        } else {
+            let project = request.project.clone().unwrap_or_else(|| {
+                sniff_flutter::device::find_project_root(&request.target)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let mut machine = sniff_flutter::FlutterMachine::run(
+                std::path::Path::new(&project),
+                &request.target,
+                &device,
+            )
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            machine
+                .wait_for_vm_service(std::time::Duration::from_secs(180))
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
+        };
+
+        // Extract the tree (freezing animations for determinism).
+        reporter.report(0.5, "extracting widget tree").await?;
+        let inspector = sniff_flutter::FlutterInspector::connect(&ws_uri)
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        inspector
+            .freeze_animations()
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let roots = sniff_flutter::extractor::extract(&inspector, request.depth)
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        // Screenshot via adb before closing.
+        let screenshot = if request.screenshot {
+            let emulator = sniff_flutter::EmulatorProcess::attach(&device)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            Some(
+                emulator
+                    .screenshot()
+                    .await
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+            )
+        } else {
+            None
+        };
+        inspector.close().await;
+
+        // Serialize into the shared JSONL model.
+        reporter.report(0.9, "serializing snapshot").await?;
+        let url = format!("flutter://{device}");
+        let selector = if request.selector.is_empty() {
+            "*".to_string()
+        } else {
+            request.selector.clone()
+        };
+        let config = flutter_sniff_config(&url, &selector);
+        let outcome = sniff_engine::extractor::SniffOutcome {
+            snapshots: roots,
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &config.output)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let jsonl =
+            String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        // Persist (and optionally the screenshot PNG).
+        let rel_path = if request.persist {
+            Some(
+                self.store
+                    .save(&config, &jsonl)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+            )
+        } else {
+            None
+        };
+        let screenshot_path = match (request.screenshot, screenshot) {
+            (true, Some(bytes)) => Some(
+                self.store
+                    .save_bytes(&config, "png", &bytes)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?,
+            ),
+            (true, None) => {
+                return Err(ErrorData::internal_error(
+                    "screenshot requested but adb returned nothing".to_string(),
+                    None,
+                ));
+            }
+            _ => None,
+        };
+
+        match request.return_mode.as_str() {
+            "jsonl" => Ok(jsonl),
+            _ => {
+                let path = rel_path.ok_or_else(|| {
+                    ErrorData::invalid_params("return=reference requires persist:true", None)
+                })?;
+                let mut reference = serde_json::json!({
+                    "__sniff": {
+                        "path": path.display().to_string(),
+                        "url": url,
+                        "selector": selector,
+                        "nodes": outcome.snapshots.len(),
+                    }
+                });
+                if let Some(shot) = &screenshot_path {
+                    reference["__sniff"]["screenshot_path"] =
+                        serde_json::Value::String(shot.display().to_string());
+                }
+                serde_json::to_string(&reference)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+            }
         }
     }
 
@@ -952,6 +1181,52 @@ fn load_snapshot(
     }
 }
 
+/// Build a `SniffConfig` for the Flutter backend: the shared JSONL model with
+/// the AI-optimized output defaults (compact, contrast, grouped), and a
+/// `flutter://<device>` url so the persistence/diff tooling names snapshots
+/// consistently.
+fn flutter_sniff_config(url: &str, selector: &str) -> SniffConfig {
+    SniffConfig {
+        url: url.to_string(),
+        selector: selector.to_string(),
+        depth: 0,
+        categories: parse_categories("box-model,layout,typography,visual").unwrap_or_default(),
+        custom_properties: Vec::new(),
+        pseudo_elements: Vec::new(),
+        wait: WaitStrategy::default_pipeline(selector),
+        filter: ElementFilter::default(),
+        output: OutputConfig {
+            format: OutputFormat::JsonLines,
+            include_rect: true,
+            include_path: true,
+            include_metrics: true,
+            normalize_colors: true,
+            group_by_category: true,
+            pretty: false,
+            compact: true,
+            include_visibility: true,
+            include_style_hash: true,
+            include_aria: true,
+            include_contrast: true,
+            include_ax: false,
+        },
+        viewport: None,
+        include_custom_properties: false,
+        stable_key: None,
+        attributes: vec![],
+        stabilize: true,
+        ax_tree: false,
+        actions: Vec::new(),
+        effects: true,
+        effects_limit: 10,
+        screenshot: false,
+        screenshot_full_page: false,
+        headers: Vec::new(),
+        storage_state_path: None,
+        save_storage_state: None,
+    }
+}
+
 /// Human-readable message for a pipeline phase.
 fn phase_message(phase: &sniff_engine::Phase) -> String {
     match phase {
@@ -1079,6 +1354,19 @@ mod tests {
         let cfg = build_sniff_config(&req).unwrap();
         assert!(cfg.output.include_ax, "ax_tree must imply include_ax");
         assert!(cfg.ax_tree);
+    }
+
+    #[test]
+    fn flutter_config_uses_shared_jsonl_defaults() {
+        let cfg = flutter_sniff_config("flutter://emulator-5554", "*");
+        assert_eq!(cfg.url, "flutter://emulator-5554");
+        assert_eq!(cfg.selector, "*");
+        assert_eq!(cfg.output.format, OutputFormat::JsonLines);
+        assert!(cfg.output.compact);
+        assert!(cfg.output.include_rect);
+        assert!(cfg.output.include_contrast);
+        assert!(cfg.output.group_by_category);
+        assert!(cfg.output.normalize_colors);
     }
 
     #[test]

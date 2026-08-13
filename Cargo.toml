@@ -4,6 +4,7 @@ members = [
     "crates/sniff-core",
     "crates/sniff-cdp",
     "crates/sniff-engine",
+    "crates/sniff-flutter",
     "crates/sniff-css",
     "crates/sniff-css-diff",
     "crates/sniff-css-check",
@@ -11,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 license = "CC0-1.0"

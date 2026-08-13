@@ -149,7 +149,7 @@ jq -e 'has("status") and has("score_change") and (.changes_evaluated|length)>0' 
 ### Agente/MCP (servidor `sniffCSS-mcp`)
 
 Exponha `sniffCSS-mcp` como servidor MCP (stdio) para agentes. O servidor
-mantém um Chrome headless compartilhado e oferece 5 tools; os defaults já são
+mantém um Chrome headless compartilhado e oferece 6 tools; os defaults já são
 os otimizados (`compact`, `custom_props`, `stabilize`, `contrast`,
 `include_ax`). Por padrão cada `sniffCSS_page` **persiste** o snapshot em
 `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` e responde o **digest
@@ -161,6 +161,7 @@ envia `notifications/progress` por fase.
 | Tool | Uso |
 |---|---|
 | `sniffCSS_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**). Para elementos que só existem após uma ação, passe `actions` (array **ordenado** de `{type, selector, text?, files?, timeout_ms?, settle_ms?}`); upload via `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` roda handlers reais. Com `actions`, o snapshot carrega a linha `__actions` (default ON; `effects:false` omite). |
+| `sniffFlutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot). Retorna o `__sniff` handle por padrão; os mesmos `sniffCSS_diff`/`sniffCSS_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
 | `sniffCSS_snapshots` | Lista os snapshots persistidos (domain/target/path/created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use para escolher o par base/head. |
 | `sniffCSS_diff` | Diff determinístico — **base_path/head_path** (o modo otimizado) ou base_jsonl/head_jsonl, tolerance, ignore_props, ignore_structural → delta + `__diff_summary`. Quando os dois lados carregam `__actions`, eles também são comparados (`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`). |
 | `sniffCSS_check` | Checks determinísticos offline — **path** ou jsonl, uniform, rules, tolerance → PASS/WARN/FAIL + outliers. |

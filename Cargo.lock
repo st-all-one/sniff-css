@@ -862,7 +862,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "sniff-cdp"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "base64",
  "futures-util",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-css"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -894,6 +894,7 @@ dependencies = [
  "sniff-cdp",
  "sniff-core",
  "sniff-engine",
+ "sniff-flutter",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -901,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-css-check"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -914,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-css-diff"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -925,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-css-mcp"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -937,6 +938,7 @@ dependencies = [
  "sniff-css-check",
  "sniff-css-diff",
  "sniff-engine",
+ "sniff-flutter",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -944,7 +946,7 @@ dependencies = [
 
 [[package]]
 name = "sniff-engine"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "futures-util",
  "serde",
@@ -955,6 +957,23 @@ dependencies = [
  "tokio",
  "tracing",
  "xxhash-rust",
+]
+
+[[package]]
+name = "sniff-flutter"
+version = "0.4.0"
+dependencies = [
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sniff-cdp",
+ "sniff-core",
+ "sniff-css-diff",
+ "sniff-engine",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]

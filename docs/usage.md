@@ -98,6 +98,44 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--viewport WxH` | Viewport emulado (afeta `%`, `vh`, media queries) | `1366x768` |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
 
+### Backend Flutter/Dart (`--backend flutter`)
+
+Captura a árvore de widgets de um app Flutter/Dart nativo em emulador/device
+(análogo do sniff web, mas sobre o **Dart VM Service** em vez de CDP). O app
+precisa estar em build **debug** (release não expõe o VM Service). O snapshot
+sai no **mesmo modelo JSONL** e os mesmos `sniffCSS-diff`/`sniffCSS-check`
+funcionam por path.
+
+```bash
+# Anexar a um device/emulador já rodando um app debug (flutter attach):
+sniffCSS --backend flutter --device emulator-5554 --depth 2 --no-summary
+
+# Lançar um AVD, rodar o app (flutter run --machine) e capturar:
+sniffCSS --backend flutter --avd pixel --project ~/projetos/app \
+  --target lib/main.dart --depth 2 --no-summary
+
+# Screenshot do device junto com a captura:
+sniffCSS --backend flutter --device emulator-5554 --screenshot out.png
+```
+
+| Opção | Descrição | Padrão |
+|---|---|---|
+| `--backend web\|flutter` | Backend de captura: `web` (Chromium/CDP) ou `flutter` (VM Service) | `web` |
+| `--device SERIAL` | Serial `adb` do emulador/device (ex.: `emulator-5554`) | — |
+| `--avd NAME` | Lançar este AVD em vez de anexar a um device já rodando | — |
+| `--project DIR` | Diretório do app (com `pubspec.yaml`); default: pai de `--target` que tem `pubspec.yaml` | — |
+| `--target ENTRY` | Entry do app | `lib/main.dart` |
+| `--attach` | Anexar a um app debug já rodando (`flutter attach`) em vez de `flutter run` | `off` |
+
+Campos do nó: `tag` (classe do widget, ex. `Text`, `ElevatedButton`),
+`selector`/`path` (breadcrumb de widgets, ex. `Center > Text[0]`), `rect`
+(tamanho do render object + offset acumulado do `parentData`), `styles`
+agrupadas (layout/typography/visual/box-model) com cores Flutter normalizadas
+para `#rrggbb`, e o facet `contrast` derivado compartilhado. Antes da captura
+as animações são congeladas (`ext.flutter.timeDilation`) para determinismo.
+**Limitações:** apenas builds debug; `rect` em coordenadas do device (não
+viewport CSS); widgets sem render box ficam sem `rect`.
+
 ### Categorias disponíveis
 
 `box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`

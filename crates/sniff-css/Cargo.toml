@@ -14,6 +14,7 @@ path = "src/main.rs"
 sniff-core = { path = "../sniff-core" }
 sniff-cdp = { path = "../sniff-cdp" }
 sniff-engine = { path = "../sniff-engine" }
+sniff-flutter = { path = "../sniff-flutter" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

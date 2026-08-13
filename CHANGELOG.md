@@ -4,9 +4,25 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-13
 
-(nada ainda)
+### Added
+
+- **Backend Flutter/Dart nativo** — novo crate `sniff-flutter` captura a árvore
+  de widgets de um app Flutter em emulador/device Android (build **debug**)
+  sobre o Dart VM Service: descoberta via `flutter run/attach --machine`
+  (`vmServiceUri`), extração via `ext.flutter.inspector.*`
+  (`getRootWidgetSummaryTree` + `getLayoutExplorerNode` + `getProperties`),
+  estabilização por `timeDilation` e screenshot via `adb exec-out screencap`.
+  O snapshot sai no **mesmo modelo JSONL** do web (cores Flutter normalizadas
+  para `#rrggbb`, chaves mapeadas para o padrão CSS), então os mesmos
+  `sniffCSS-diff`/`sniffCSS-check` funcionam por path. CLI `--backend flutter`
+  (`--device`/`--avd`/`--project`/`--target`/`--attach`) e tool MCP
+  `sniffFlutter_page`.
+- **`JsonRpcClient` genérico** (`sniff-cdp::jsonrpc`) — o roteamento
+  `{id, result/error}` + eventos do CdpClient foi generalizado para servir
+  tanto CDP quanto o Dart VM Service; `CdpClient` virou um wrapper (API e
+  output web intactos).
 
 ## [0.3.1] — 2026-08-13
 

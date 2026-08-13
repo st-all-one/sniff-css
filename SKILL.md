@@ -51,6 +51,14 @@ All steps before the AI are deterministic and cost ~0 tokens.
   `SNIFF_STORAGE_STATE` and `SNIFF_BASE_URL` — per-call values win on collision.
 - **Deterministic pipeline** — capture → diff → checks are ~0-token binaries;
   the AI interprets only the delta/evidence.
+- **Flutter/Dart backend** — `--backend flutter` (or MCP `sniffFlutter_page`)
+  captures the widget tree of a **debug-mode** Flutter app on an Android
+  emulator/device over the Dart VM Service (`flutter run/attach --machine` +
+  `ext.flutter.inspector.*`). Same JSONL model (tag = widget class, colors
+  normalized to `#rrggbb`, WCAG contrast derived), so `sniffCSS-diff` /
+  `sniffCSS-check` work by path unchanged. Detail:
+  [`docs/usage.md`](docs/usage.md#backend-flutterdart---backend-flutter) and
+  [`docs/architecture.md`](docs/architecture.md#backend-flutter-sniff-flutter).
 
 ### Quick Reference
 
@@ -69,6 +77,8 @@ All steps before the AI are deterministic and cost ~0 tokens.
 | Offline checks | `sniffCSS-check --input snap.jsonl --uniform --rules` |
 | Visual evidence | `sniffCSS -u URL -s SEL --screenshot out.png` |
 | Verbatim DOM attrs | `sniffCSS -u URL -s SEL --attrs name,value` |
+| Flutter app (attach) | `sniffCSS --backend flutter --device emulator-5554 --depth N --no-summary` |
+| Flutter app (run AVD) | `sniffCSS --backend flutter --avd pixel --project DIR --depth N --no-summary` |
 
 > **Prefer the CLI.** `sniffCSS`, `sniffCSS-diff` and `sniffCSS-check` stream to
 > stdout/redirectable files, accept `--persist` to mirror the MCP store layout,
@@ -202,7 +212,7 @@ curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
 curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.3.1 sh
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.0 sh
 ```
 
 Binaries: Linux glibc + musl (x86_64/aarch64), macOS, Windows — per GitHub
@@ -243,6 +253,7 @@ tracked in [`CHANGELOG.md`](CHANGELOG.md).
 - **DOM attributes are not captured by default** — the tool is computed-style. Use `--attrs a,b` / MCP `attributes` for the specific attributes you need.
 - **Server-side data is out of scope** — payloads, templates, routes and backend state are not sniffCSS's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.
 - **The tool captures whatever the server serves** — a stale page cache produces a stale snapshot. Clear/invalidate the cache before capturing.
+- **Flutter backend needs a debug build** — release APKs strip the Dart VM Service; `rect` is in device coordinates (not CSS viewport); widgets without a render box report no `rect`.
 
 ---
 

@@ -1,17 +1,14 @@
-//! WebSocket-based Chrome DevTools Protocol client.
+//! Chrome DevTools Protocol client.
+//!
+//! [`CdpClient`] is a thin, CDP-flavoured wrapper over the protocol-agnostic
+//! [`JsonRpcClient`] (`crate::jsonrpc`): it adds endpoint resolution and the
+//! `sessionId` multiplexing that the flattened CDP protocol needs. All
+//! transport/routing lives in the shared client.
 
-use crate::protocol::{CdpEvent, Command};
-use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, StreamExt};
-use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use crate::jsonrpc::{JsonRpcClient, JsonRpcError};
+use crate::protocol::CdpEvent;
+use serde_json::Value;
 use thiserror::Error;
-use tokio::net::TcpStream;
-use tokio::sync::oneshot;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// Error type for the CDP client layer.
 #[derive(Debug, Error)]
@@ -30,11 +27,21 @@ pub enum CdpError {
     Io(#[from] std::io::Error),
 }
 
-/// Result alias for the CDP client.
-pub type Result<T> = std::result::Result<T, CdpError>;
+impl From<JsonRpcError> for CdpError {
+    fn from(e: JsonRpcError) -> Self {
+        match e {
+            JsonRpcError::Connect(m) => CdpError::Connect(m),
+            JsonRpcError::Transport(m) => CdpError::Transport(m),
+            JsonRpcError::Protocol { method, message } => CdpError::Protocol { method, message },
+            JsonRpcError::Timeout(m) => CdpError::Timeout(m),
+            JsonRpcError::Closed => CdpError::Closed,
+            JsonRpcError::Io(e) => CdpError::Io(e),
+        }
+    }
+}
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = SplitSink<WsStream, WsMessage>;
+/// Result alias for the CDP client layer.
+pub type Result<T> = std::result::Result<T, CdpError>;
 
 /// A connection to one DevTools WebSocket endpoint.
 ///
@@ -43,17 +50,13 @@ type WsSink = SplitSink<WsStream, WsMessage>;
 /// targets (see [`crate::session::CdpSession`]).
 #[derive(Clone)]
 pub struct CdpClient {
-    next_id: Arc<AtomicU64>,
-    pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Value>>>>,
-    events: tokio::sync::broadcast::Sender<CdpEvent>,
-    sink: Arc<tokio::sync::Mutex<WsSink>>,
-    _reader: Arc<tokio::task::JoinHandle<()>>,
+    inner: JsonRpcClient,
 }
 
 impl std::fmt::Debug for CdpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CdpClient")
-            .field("next_id", &self.next_id)
+            .field("inner", &self.inner)
             .finish()
     }
 }
@@ -66,131 +69,33 @@ impl CdpClient {
     /// through `/json/version` to the browser's WebSocket URL.
     pub async fn connect(url: &str) -> Result<Self> {
         let ws_url = crate::endpoint::resolve_endpoint(url).await?;
-        let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
-            .await
-            .map_err(|e| CdpError::Connect(e.to_string()))?;
-        let (sink, mut stream) = ws.split();
-
-        let next_id = Arc::new(AtomicU64::new(1));
-        let pending = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (events_tx, _) = tokio::sync::broadcast::channel(256);
-
-        let pending_reader = pending.clone();
-        let events_reader = events_tx.clone();
-        let reader = tokio::spawn(async move {
-            while let Some(msg) = stream.next().await {
-                match msg {
-                    Ok(WsMessage::Text(text)) => {
-                        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                            Self::dispatch(value, &pending_reader, &events_reader);
-                        }
-                    }
-                    Ok(WsMessage::Close(_)) | Err(_) => break,
-                    _ => {}
-                }
-            }
-        });
-
-        Ok(Self {
-            next_id,
-            pending,
-            events: events_tx,
-            sink: Arc::new(tokio::sync::Mutex::new(sink)),
-            _reader: Arc::new(reader),
-        })
+        let inner = JsonRpcClient::connect(&ws_url).await?;
+        Ok(Self { inner })
     }
 
-    /// Route a decoded message to the pending map or the event bus.
-    fn dispatch(
-        value: Value,
-        pending: &StdMutex<HashMap<u64, oneshot::Sender<Value>>>,
-        events: &tokio::sync::broadcast::Sender<CdpEvent>,
-    ) {
-        if let Some(id) = value.get("id").and_then(Value::as_u64) {
-            if let Some(tx) = pending.lock().ok().and_then(|mut m| m.remove(&id)) {
-                let _ = tx.send(value);
-            }
-            return;
-        }
-        if let Some(method) = value.get("method").and_then(Value::as_str) {
-            let session_id = value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(String::from);
-            let params = value
-                .get("params")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            let event = CdpEvent {
-                method: method.to_string(),
-                params,
-                session_id,
-            };
-            let _ = events.send(event);
-        }
-    }
-
-    /// Subscribe to a stream of inbound events.
+    /// Subscribe to a stream of inbound CDP events.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<CdpEvent> {
-        self.events.subscribe()
+        self.inner.subscribe()
     }
 
-    /// Send a command and wait for its response.
+    /// Send a CDP command and wait for its response.
     pub async fn call(
         &self,
         method: &str,
         params: Value,
         session_id: Option<&str>,
     ) -> Result<Value> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().ok().and_then(|mut m| m.insert(id, tx));
-
-        let cmd = Command {
-            id,
-            method,
-            params,
-            session_id,
-        };
-        let frame = serde_json::to_string(&cmd).map_err(|e| CdpError::Transport(e.to_string()))?;
-        tracing::debug!(method, id, session = session_id, "sending command");
-
-        {
-            let mut sink = self.sink.lock().await;
-            sink.send(WsMessage::Text(frame.into()))
-                .await
-                .map_err(|e| CdpError::Transport(e.to_string()))?;
-        }
-
-        let response = rx.await.map_err(|_| CdpError::Closed)?;
-        self.pending.lock().ok().and_then(|mut m| m.remove(&id));
-        tracing::debug!(method, id, response = %response, "command response");
-
-        if let Some(err) = response.get("error") {
-            let message = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown CDP error")
-                .to_string();
-            return Err(CdpError::Protocol {
-                method: method.to_string(),
-                message,
-            });
-        }
-
-        Ok(response.get("result").cloned().unwrap_or(Value::Null))
+        Ok(self.inner.call(method, params, session_id).await?)
     }
 
-    /// Send a command with no parameters.
+    /// Send a CDP command with no parameters.
     pub async fn call_no_params(&self, method: &str, session_id: Option<&str>) -> Result<Value> {
-        self.call(method, Value::Object(Map::new()), session_id)
-            .await
+        Ok(self.inner.call_no_params(method, session_id).await?)
     }
 
     /// Close the underlying connection.
     pub async fn close(&self) {
-        let _ = self.sink.lock().await.send(WsMessage::Close(None)).await;
+        self.inner.close().await;
     }
 }
 
@@ -198,41 +103,50 @@ impl CdpClient {
 mod tests {
     use super::*;
 
-    type TestPending = std::sync::Mutex<HashMap<u64, oneshot::Sender<Value>>>;
+    /// The CDP layer must keep resolving HTTP origins (regression guard for
+    /// the JsonRpcClient generalization).
+    #[tokio::test]
+    async fn connect_resolves_http_origin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
 
-    #[test]
-    fn dispatch_routes_response_by_id() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (events_tx, _) = tokio::sync::broadcast::channel(16);
-        let (tx, mut rx) = oneshot::channel();
-        pending.lock().unwrap().insert(7, tx);
-        let msg: Value = serde_json::json!({"id": 7, "result": {"ok": true}});
-        CdpClient::dispatch(msg, &pending, &events_tx);
-        // The sender must have been removed and the value delivered.
-        assert!(pending.lock().unwrap().get(&7).is_none());
-        assert!(rx.try_recv().is_ok());
-    }
-
-    #[test]
-    fn dispatch_routes_event_with_session() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (events_tx, mut rx) = tokio::sync::broadcast::channel(16);
-        let msg: Value = serde_json::json!({
-            "method": "Network.loadingFinished",
-            "params": {"requestId": "r1"},
-            "sessionId": "s1"
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut req = Vec::new();
+            loop {
+                let mut chunk = [0u8; 1024];
+                match sock.read(&mut chunk).await.unwrap() {
+                    0 => break,
+                    n => {
+                        req.extend_from_slice(&chunk[..n]);
+                        if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                }
+            }
+            let body = format!(
+                "{{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{}/devtools/browser/abc\"}}",
+                addr.port()
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
         });
-        CdpClient::dispatch(msg, &pending, &events_tx);
-        let event = rx.try_recv().expect("event must be broadcast");
-        assert_eq!(event.method, "Network.loadingFinished");
-        assert_eq!(event.session_id.as_deref(), Some("s1"));
-    }
 
-    #[test]
-    fn dispatch_ignores_unknown_frames() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (events_tx, _) = tokio::sync::broadcast::channel(16);
-        CdpClient::dispatch(Value::Null, &pending, &events_tx);
-        assert!(pending.lock().unwrap().is_empty());
+        // Resolution succeeds; the ws handshake on the returned URL will fail
+        // (nothing listens there), which proves resolution ran.
+        let err = CdpClient::connect(&format!("http://{addr}"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CdpError::Connect(_)),
+            "connect to resolved-but-dead ws endpoint must surface Connect, got {err:?}"
+        );
+        server.await.unwrap();
     }
 }

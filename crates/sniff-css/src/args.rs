@@ -6,8 +6,17 @@ use sniff_core::{
     ElementFilter, OutputConfig, SniffConfig, SniffError, SniffResult, Viewport, WaitStrategy,
 };
 
+/// Which capture backend to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Backend {
+    /// Chromium over CDP (the classic computed-style capture).
+    Web,
+    /// A debug-mode Flutter app over the Dart VM Service.
+    Flutter,
+}
+
 /// High-performance computed-style sniffer for AI-driven development.
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(
     name = "sniffCSS",
     version,
@@ -103,6 +112,36 @@ pub struct Cli {
     /// later captures to keep the login alive across browser restarts.
     #[arg(long = "save-storage-state")]
     pub save_storage_state: Option<String>,
+
+    /// Backend to sniff against: `web` (Chromium over CDP, default) or
+    /// `flutter` (a debug-mode Flutter app over the Dart VM Service — needs
+    /// `--device`/`--avd` and a Flutter SDK).
+    #[arg(long, value_enum, default_value_t = Backend::Web)]
+    pub backend: Backend,
+
+    /// Flutter backend: `adb` serial of the emulator/device (e.g.
+    /// `emulator-5554`). Ignored for `--backend web`.
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Flutter backend: launch this AVD instead of attaching to a running
+    /// device. Ignored for `--backend web`.
+    #[arg(long)]
+    pub avd: Option<String>,
+
+    /// Flutter backend: directory containing the app's `pubspec.yaml`.
+    /// Defaults to the directory of `--target`.
+    #[arg(long)]
+    pub project: Option<String>,
+
+    /// Flutter backend: app entry (default `lib/main.dart`).
+    #[arg(long, default_value = "lib/main.dart")]
+    pub target: String,
+
+    /// Flutter backend: attach to an already-running debug app instead of
+    /// `flutter run`.
+    #[arg(long, default_value_t = false)]
+    pub attach: bool,
 
     /// Keep only visible elements (default true; use --no-visible).
     #[arg(long = "no-visible", default_value_t = false)]
@@ -575,6 +614,12 @@ mod tests {
             header: vec![],
             storage_state: None,
             save_storage_state: None,
+            backend: Backend::Web,
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".into(),
+            attach: false,
         };
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.categories, vec![StyleCategory::All]);
@@ -655,6 +700,12 @@ mod tests {
             header: vec![],
             storage_state: None,
             save_storage_state: None,
+            backend: Backend::Web,
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".into(),
+            attach: false,
         };
         cli.stable_key = Some("data-testid".into());
         let cfg = cli.into_config().unwrap();
@@ -806,6 +857,12 @@ mod tests {
             header: vec![],
             storage_state: None,
             save_storage_state: None,
+            backend: Backend::Web,
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".into(),
+            attach: false,
         };
         cli.full = true;
         let cfg = cli.into_config().unwrap();
@@ -877,6 +934,12 @@ mod tests {
             header: vec![],
             storage_state: None,
             save_storage_state: None,
+            backend: Backend::Web,
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".into(),
+            attach: false,
         };
         cli.no_compact = true;
         cli.no_contrast = true;
@@ -948,6 +1011,12 @@ mod tests {
             header: vec![],
             storage_state: None,
             save_storage_state: None,
+            backend: Backend::Web,
+            device: None,
+            avd: None,
+            project: None,
+            target: "lib/main.dart".into(),
+            attach: false,
         };
         cli.full = true;
         cli.ax_tree = true;
@@ -1114,6 +1183,50 @@ mod tests {
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.storage_state_path.as_deref(), Some("state.json"));
         assert_eq!(cfg.save_storage_state.as_deref(), Some("out.json"));
+    }
+
+    #[test]
+    fn flutter_backend_parses_device_and_attach() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "flutter://emulator-5554",
+            "-s",
+            "*",
+            "--backend",
+            "flutter",
+            "--device",
+            "emulator-5554",
+            "--target",
+            "lib/main.dart",
+        ])
+        .unwrap();
+        assert_eq!(cli.backend, Backend::Flutter);
+        assert_eq!(cli.device.as_deref(), Some("emulator-5554"));
+        assert!(!cli.attach);
+
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "flutter://emulator-5554",
+            "-s",
+            "*",
+            "--backend",
+            "flutter",
+            "--avd",
+            "pixel",
+            "--attach",
+        ])
+        .unwrap();
+        assert_eq!(cli.avd.as_deref(), Some("pixel"));
+        assert!(cli.attach);
+    }
+
+    #[test]
+    fn web_is_the_default_backend() {
+        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
+            .unwrap();
+        assert_eq!(cli.backend, Backend::Web);
     }
 
     #[test]

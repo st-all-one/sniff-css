@@ -12,6 +12,42 @@ O utilitário fala diretamente com o Chrome via Chrome DevTools Protocol. Nenhum
 framework de automação é usado: a camada `sniff-cdp` implementa o protocolo
 WebSocket do zero, com multiplexação de sessões por `sessionId`.
 
+### Backend Flutter (`sniff-flutter`)
+
+Além do Chrome, há um segundo backend para apps **Flutter/Dart nativos** em
+emulador/device Android (`--backend flutter` / tool MCP `sniffFlutter_page`):
+
+```
+CLI/MCP → FlutterMachine (flutter run/attach --machine) → ws://VM Service URI
+            │
+            └─ FlutterInspector (ext.flutter.inspector.*) → extractor → ElementSnapshot → JSONL
+```
+
+- **Transporte compartilhado:** o roteamento JSON-RPC (`{id, result/error}` +
+  eventos por `method`) vive no `sniff-cdp::jsonrpc::JsonRpcClient` — o mesmo
+  wire do CDP serve o Dart VM Service; `CdpClient` virou um wrapper CDP sobre
+  ele (`CdpEvent` é um alias de `JsonRpcEvent`).
+- **Descoberta do app:** `FlutterMachine` roda `flutter run --machine` (ou
+  `flutter attach --machine`) e parseia a linha `app.debugService.wsUri`,
+  normalizada para `ws://` (token no path).
+- **Extração:** `FlutterInspector` chama `getRootWidgetSummaryTree` (árvore
+  inteira com `valueId`), `getLayoutExplorerNode` (geometria: `size` +
+  `parentData` offset) e `getProperties` (diagnostics por nó). O `extractor`
+  caminha em pré-ordem com uma pilha (sem recursão async), numera irmãos
+  estáveis por classe (`Text[0]`, `Text[1]`) como `selector`, reconstrói a
+  árvore aninhada e mapeia as props para o modelo `ElementSnapshot`.
+- **Paridade com o web:** cores Flutter (`Color(0xff2563eb)`,
+  `fromARGB`/`fromRGBO`) são normalizadas para `#rrggbb`/`#rrggbbaa`, chaves
+  renomeadas para o padrão CSS (`backgroundColor` → `background-color`,
+  `fontSize` → `font-size`), e o `apply_contrast_all` do `sniff-core` roda nos
+  snapshots — o mesmo diff/check funciona nos dois backends por path.
+- **Estabilização:** `ext.flutter.timeDilation = 1e6` congela animações
+  (análogo do `STABILIZE_JS`); screenshot via `adb exec-out screencap -p`.
+
+Limitações documentadas: só builds **debug** (release não expõe VM Service),
+`rect` em coordenadas do device (não viewport CSS), widgets sem render box
+ficam sem `rect`.
+
 ## Decisões-chave
 
 ### 1. Extração em uma única chamada JS
