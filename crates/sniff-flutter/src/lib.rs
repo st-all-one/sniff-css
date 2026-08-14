@@ -9,16 +9,21 @@
 //! `VmService` connects to and drives via the `ext.flutter.inspector.*`
 //! service extensions to read the widget/render trees.
 
+pub mod action;
 pub mod color;
 pub mod device;
+pub mod driver;
 pub mod extractor;
 pub mod inspector;
 pub mod machine;
 pub mod vm;
 
+pub use action::{perform as perform_action, unsupported, target_finder};
 pub use device::{
-    Device, DeviceError, EmulatorProcess, adb, is_adb_available, is_flutter_available, list_devices,
+    Device, DeviceError, EmulatorProcess, ViewportGuard, adb, is_adb_available,
+    is_flutter_available, list_devices, restore_wm_size, set_wm_size, wm_size,
 };
+pub use driver::{DriverFinder, FlutterDriver, finder_from_spec};
 pub use inspector::FlutterInspector;
 pub use machine::{FlutterMachine, MachineError, MachineEvent, parse_machine_line};
 pub use sniff_core::types::ElementSnapshot;

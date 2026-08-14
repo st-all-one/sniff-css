@@ -44,12 +44,25 @@ pub struct MachineEvent {
 }
 
 /// Parse a single `flutter --machine` output line.
+///
+/// Accepts both a bare event object (`{"event":...}`) and the array-wrapped
+/// form newer Flutter tools emit (`[{"event":...}]`).
 pub fn parse_machine_line(line: &str) -> Option<MachineEvent> {
     let line = line.trim();
     if line.is_empty() {
         return None;
     }
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let value = match value {
+        serde_json::Value::Array(mut arr) => {
+            if arr.len() == 1 {
+                arr.pop().expect("single-element array")
+            } else {
+                return None;
+            }
+        }
+        v => v,
+    };
     let event = value.get("event")?.as_str()?.to_string();
     let params = value
         .get("params")
@@ -97,12 +110,16 @@ impl FlutterMachine {
     }
 
     /// Attach to an already-running debug app on a device.
-    pub async fn attach(device_id: &str) -> Result<Self, MachineError> {
+    ///
+    /// `project_dir` is the app root (containing `pubspec.yaml`); `flutter
+    /// attach` needs it to resolve the target entry.
+    pub async fn attach(project_dir: &Path, device_id: &str) -> Result<Self, MachineError> {
         let child = Command::new("flutter")
             .arg("attach")
             .arg("--machine")
             .arg("--device-id")
             .arg(device_id)
+            .current_dir(project_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -139,10 +156,10 @@ impl FlutterMachine {
 
 /// Scan a stream of `flutter --machine` lines for the VM Service URI.
 ///
-/// Keeps reading until it finds `app.debugService` (`Ok(Some(ws_uri))`), hits
-/// EOF (`Ok(None)`) or passes `deadline` (`Err(Timeout)`). Extracted from
-/// [`FlutterMachine::wait_for_vm_service`] so the scanner is testable against
-/// canned streams.
+/// Keeps reading until it finds `app.debugService`/`app.debugPort`
+/// (`Ok(Some(ws_uri))`), hits EOF (`Ok(None)`) or passes `deadline`
+/// (`Err(Timeout)`). Extracted from [`FlutterMachine::wait_for_vm_service`] so
+/// the scanner is testable against canned streams.
 async fn scan_machine_output<R: AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
     deadline: tokio::time::Instant,
@@ -162,7 +179,13 @@ async fn scan_machine_output<R: AsyncBufRead + Unpin>(
             continue;
         };
         tracing::debug!(target: "sniff_flutter::machine", event = %ev.event, "machine event");
-        if ev.event == "app.debugService"
+        let vm_service = matches!(ev.event.as_str(), "app.debugService" | "app.debugPort")
+            && ev
+                .params
+                .get("wsUri")
+                .and_then(serde_json::Value::as_str)
+                .is_some();
+        if vm_service
             && let Some(ws_uri) = ev.params.get("wsUri").and_then(serde_json::Value::as_str)
         {
             return Ok(Some(crate::vm::to_ws_uri(ws_uri)));
@@ -202,6 +225,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_debug_port_event() {
+        let ev = parse_machine_line(
+            r#"{"event":"app.debugPort","params":{"appId":"x","port":41005,"wsUri":"ws://127.0.0.1:41005/2rvqRdXfSUc=/ws","baseUri":"file:///data/app/"}}"#,
+        )
+        .expect("event");
+        assert_eq!(ev.event, "app.debugPort");
+        assert_eq!(ev.params["wsUri"], "ws://127.0.0.1:41005/2rvqRdXfSUc=/ws");
+    }
+
+    #[test]
     fn ignores_non_json_lines() {
         assert!(parse_machine_line("").is_none());
         assert!(parse_machine_line("not json").is_none());
@@ -213,6 +246,34 @@ mod tests {
         let ev = parse_machine_line(r#"{"event":"app.started"}"#).expect("event");
         assert_eq!(ev.event, "app.started");
         assert!(ev.params.is_empty());
+    }
+
+    #[test]
+    fn parses_array_wrapped_events() {
+        let ev = parse_machine_line(
+            r#"[{"event":"app.debugPort","params":{"port":41005,"wsUri":"ws://127.0.0.1:41005/2rvqRdXfSUc=/ws"}}]"#,
+        )
+        .expect("event");
+        assert_eq!(ev.event, "app.debugPort");
+        assert_eq!(ev.params["port"], 41005);
+    }
+
+    #[test]
+    fn rejects_empty_or_multi_element_arrays() {
+        assert!(parse_machine_line("[]").is_none());
+        assert!(parse_machine_line("[{},{}]").is_none());
+    }
+
+    #[test]
+    fn scanner_accepts_array_wrapped_debug_port_event() {
+        let uri = scan(
+            "Launching lib/main.dart on emulator-5554...\n\
+             [{\"event\":\"app.start\",\"params\":{}}]\n\
+             [{\"event\":\"app.debugPort\",\"params\":{\"port\":41005,\"wsUri\":\"ws://127.0.0.1:41005/2rvqRdXfSUc=/ws\"}}]\n",
+        )
+        .expect("scan")
+        .expect("uri");
+        assert_eq!(uri, "ws://127.0.0.1:41005/2rvqRdXfSUc=/ws");
     }
 
     #[test]
@@ -241,6 +302,25 @@ mod tests {
         .expect("scan")
         .expect("uri");
         assert_eq!(uri, "ws://127.0.0.1:54321/kL0g/ws");
+    }
+
+    #[test]
+    fn scanner_accepts_new_debug_port_event() {
+        let uri = scan(
+            "Launching lib/main.dart on emulator-5554...\n\
+             {\"event\":\"app.start\",\"params\":{}}\n\
+             {\"event\":\"app.debugPort\",\"params\":{\"port\":41005,\"wsUri\":\"ws://127.0.0.1:41005/2rvqRdXfSUc=/ws\"}}\n",
+        )
+        .expect("scan")
+        .expect("uri");
+        assert_eq!(uri, "ws://127.0.0.1:41005/2rvqRdXfSUc=/ws");
+    }
+
+    #[test]
+    fn scanner_ignores_debug_port_without_ws_uri() {
+        let uri =
+            scan("{\"event\":\"app.debugPort\",\"params\":{\"port\":41005}}\n").expect("scan");
+        assert!(uri.is_none());
     }
 
     #[test]

@@ -16,9 +16,10 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    match cli.backend {
+    match cli.effective_backend() {
         Backend::Flutter => run_flutter(&cli).await,
         Backend::Web => run_web(&cli).await,
+        Backend::Auto => unreachable!("effective_backend resolves Auto"),
     }
 }
 
@@ -61,11 +62,12 @@ async fn run_web(cli: &Cli) -> anyhow::Result<()> {
 /// Flutter backend: a debug-mode Flutter app over the Dart VM Service.
 async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
     use sniff_flutter::extractor::extract;
-    use sniff_flutter::{EmulatorProcess, FlutterInspector, FlutterMachine};
+    use sniff_flutter::{EmulatorProcess, FlutterDriver, FlutterInspector, FlutterMachine, ViewportGuard};
 
     let config = cli.clone().into_config().context("invalid configuration")?;
 
-    // Resolve the target device: an AVD to launch, or an attached serial.
+    // Resolve the target device: an AVD to launch, an attached serial, or the
+    // one implied by the `flutter://<device>` URL.
     let device = if let Some(avd) = &cli.avd {
         let emulator = EmulatorProcess::launch(avd)
             .await
@@ -78,14 +80,38 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
         std::mem::forget(emulator);
         serial
     } else {
-        cli.device.clone().ok_or_else(|| {
-            anyhow::anyhow!("flutter backend needs --device <serial> or --avd <name>")
+        cli.device.clone().or_else(|| cli.flutter_device()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "flutter backend needs --device <serial>, --avd <name> or a flutter://<device> URL"
+            )
         })?
+    };
+
+    // Apply --viewport on the device (`adb shell wm size`) before launching the
+    // app so the Flutter MediaQuery/layout reflect the requested size. The
+    // guard restores the previous size afterwards (and on any error path).
+    let viewport_guard = match &cli.viewport {
+        Some(spec) => {
+            let vp = sniff_core::Viewport::parse_cli(spec)
+                .map_err(|e| anyhow::anyhow!("invalid --viewport: {e}"))?;
+            Some(
+                ViewportGuard::apply(&device, vp.width, vp.height)
+                    .await
+                    .context("applying --viewport on device (adb wm size)")?,
+            )
+        }
+        None => None,
     };
 
     // Run (or attach to) the app and discover the VM Service URI.
     let ws_uri = if cli.attach {
-        let mut machine = FlutterMachine::attach(&device)
+        let project = cli.project.clone().unwrap_or_else(|| {
+            sniff_flutter::device::find_project_root(&cli.target)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .to_string_lossy()
+                .into_owned()
+        });
+        let mut machine = FlutterMachine::attach(std::path::Path::new(&project), &device)
             .await
             .context("flutter attach")?;
         machine
@@ -108,17 +134,45 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
             .context("waiting for VM Service (is the app built in debug mode?)")?
     };
 
-    // Freeze animations for deterministic snapshots, then extract the tree.
+    // Connect the widget inspector (and the Flutter Driver extension when
+    // actions are configured). Animations are frozen AFTER the actions so a
+    // reveal transition (modal, dropdown) completes at normal speed first —
+    // freezing first would capture the interaction mid-animation.
     let inspector = FlutterInspector::connect(&ws_uri)
         .await
         .context("connecting to VM Service")?;
-    inspector
-        .freeze_animations()
-        .await
-        .context("freezing animations")?;
-    let roots = extract(&inspector, config.depth)
-        .await
-        .context("extracting Flutter widget tree")?;
+    let roots = if config.actions.is_empty() {
+        inspector
+            .freeze_animations()
+            .await
+            .context("freezing animations")?;
+        extract(&inspector, config.depth)
+            .await
+            .context("extracting Flutter widget tree")?
+    } else {
+        let driver = FlutterDriver::connect(&ws_uri)
+            .await
+            .context("connecting to Flutter Driver extension")?;
+        if !driver.is_available().await {
+            anyhow::bail!(
+                "flutter --action needs the app to call `enableFlutterDriverExtension()` in \
+                 main() (add `flutter_driver` to dev_dependencies; see docs/flutter.md)"
+            );
+        }
+        for act in &config.actions {
+            sniff_flutter::perform_action(&driver, act)
+                .await
+                .with_context(|| format!("performing {} `{}`", act.kind(), act.selector()))?;
+            tokio::time::sleep(std::time::Duration::from_millis(act.settle_ms())).await;
+        }
+        inspector
+            .freeze_animations()
+            .await
+            .context("freezing animations after actions")?;
+        extract(&inspector, config.depth)
+            .await
+            .context("extracting Flutter widget tree after actions")?
+    };
     let screenshot_path = cli.screenshot.clone();
     let mut screenshot = None;
     if screenshot_path.is_some() {
@@ -129,15 +183,22 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
     }
     inspector.close().await;
 
+    // Restore the device size captured before `--viewport` was applied. The
+    // Drop backstop on `ViewportGuard` covers the error paths above.
+    if let Some(guard) = &viewport_guard
+        && let Err(e) = guard.restore().await
+    {
+        eprintln!("warning: restoring device viewport after capture: {e}");
+    }
+
     let url = format!("flutter://{device}");
-    let selector = cli.selector.clone();
     emit(
         &config,
         roots,
         cli.persist,
         screenshot_path.as_deref(),
         &url,
-        &selector,
+        &config.selector,
     )?;
 
     if let Some(bytes) = screenshot {

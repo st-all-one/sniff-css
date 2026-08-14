@@ -13,6 +13,8 @@ pub enum Backend {
     Web,
     /// A debug-mode Flutter app over the Dart VM Service.
     Flutter,
+    /// Infer from `--url`: `flutter://<device>` → Flutter, otherwise web.
+    Auto,
 }
 
 /// High-performance computed-style sniffer for AI-driven development.
@@ -28,9 +30,10 @@ pub struct Cli {
     #[arg(long, short = 'u')]
     pub url: String,
 
-    /// CSS selector of the element(s) to sniff.
+    /// CSS selector of the element(s) to sniff. Required for the web
+    /// backend; the Flutter backend defaults to `root`.
     #[arg(long, short = 's')]
-    pub selector: String,
+    pub selector: Option<String>,
 
     /// How many levels of children to capture (0 = element only).
     #[arg(long, default_value_t = 0)]
@@ -113,14 +116,15 @@ pub struct Cli {
     #[arg(long = "save-storage-state")]
     pub save_storage_state: Option<String>,
 
-    /// Backend to sniff against: `web` (Chromium over CDP, default) or
-    /// `flutter` (a debug-mode Flutter app over the Dart VM Service — needs
-    /// `--device`/`--avd` and a Flutter SDK).
-    #[arg(long, value_enum, default_value_t = Backend::Web)]
+    /// Backend to sniff against. `auto` (default) infers it from `--url`:
+    /// a `flutter://<device>` URL means the Flutter/Dart VM Service backend
+    /// (and that device), anything else is the web (Chromium/CDP) backend.
+    #[arg(long, value_enum, default_value_t = Backend::Auto)]
     pub backend: Backend,
 
     /// Flutter backend: `adb` serial of the emulator/device (e.g.
-    /// `emulator-5554`). Ignored for `--backend web`.
+    /// `emulator-5554`). Defaults to the device in the `flutter://<device>`
+    /// URL when `--backend auto`. Ignored for `--backend web`.
     #[arg(long)]
     pub device: Option<String>,
 
@@ -340,10 +344,48 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// The effective backend: `--backend auto` (default) infers Flutter from
+    /// a `flutter://` URL scheme, otherwise web. Explicit `--backend` wins.
+    pub fn effective_backend(&self) -> Backend {
+        match self.backend {
+            Backend::Auto => {
+                if self.url.starts_with("flutter://") {
+                    Backend::Flutter
+                } else {
+                    Backend::Web
+                }
+            }
+            b => b,
+        }
+    }
+
+    /// The `adb` serial implied by a `flutter://<device>` URL (the URL host).
+    pub fn flutter_device(&self) -> Option<String> {
+        let rest = self.url.strip_prefix("flutter://")?;
+        let host = rest.split('/').next()?;
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
+        }
+    }
+
     /// Convert parsed CLI arguments into a full sniffing config.
     pub fn into_config(self) -> SniffResult<SniffConfig> {
+        let is_flutter = self.effective_backend() == Backend::Flutter;
+        let selector = match self.selector {
+            Some(s) => s,
+            None if is_flutter => "root".to_string(),
+            None => {
+                return Err(SniffError::Other(
+                    "web backend needs --selector <css> (or use a `flutter://<device>` URL to sniff Flutter)"
+                        .into(),
+                ))
+            }
+        };
+
         let wait = if self.wait.is_empty() {
-            WaitStrategy::default_pipeline(&self.selector)
+            WaitStrategy::default_pipeline(&selector)
         } else {
             self.wait
                 .iter()
@@ -447,7 +489,7 @@ impl Cli {
 
         Ok(SniffConfig {
             url: self.url,
-            selector: self.selector,
+            selector,
             depth: self.depth,
             categories: parse_categories(&self.categories)?,
             custom_properties: self.props,
@@ -561,7 +603,7 @@ mod tests {
     fn cli_to_config_defaults() {
         let cli = Cli {
             url: "http://localhost:3000".into(),
-            selector: ".card".into(),
+            selector: Some(".card".into()),
             depth: 0,
             categories: "all".into(),
             props: vec![],
@@ -647,7 +689,7 @@ mod tests {
     fn cli_to_config_wires_stable_key() {
         let mut cli = Cli {
             url: "http://localhost:3000".into(),
-            selector: ".card".into(),
+            selector: Some(".card".into()),
             depth: 0,
             categories: "all".into(),
             props: vec![],
@@ -804,7 +846,7 @@ mod tests {
     fn full_mode_disables_all_optimizations() {
         let mut cli = Cli {
             url: "http://localhost:3000".into(),
-            selector: ".card".into(),
+            selector: Some(".card".into()),
             depth: 0,
             categories: "all".into(),
             props: vec![],
@@ -881,7 +923,7 @@ mod tests {
     fn individual_no_flags_override_defaults() {
         let mut cli = Cli {
             url: "http://localhost:3000".into(),
-            selector: ".card".into(),
+            selector: Some(".card".into()),
             depth: 0,
             categories: "all".into(),
             props: vec![],
@@ -958,7 +1000,7 @@ mod tests {
     fn ax_tree_implies_ax_even_in_full_mode() {
         let mut cli = Cli {
             url: "http://localhost:3000".into(),
-            selector: ".card".into(),
+            selector: Some(".card".into()),
             depth: 0,
             categories: "all".into(),
             props: vec![],
@@ -1226,7 +1268,73 @@ mod tests {
     fn web_is_the_default_backend() {
         let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
             .unwrap();
-        assert_eq!(cli.backend, Backend::Web);
+        assert_eq!(cli.backend, Backend::Auto);
+        assert_eq!(cli.effective_backend(), Backend::Web);
+    }
+
+    #[test]
+    fn flutter_url_infers_backend_device_and_selector() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "flutter://emulator-5554",
+            "--project",
+            "/tmp/app",
+            "--depth",
+            "10",
+        ])
+        .unwrap();
+        assert_eq!(cli.backend, Backend::Auto);
+        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        assert_eq!(cli.flutter_device().as_deref(), Some("emulator-5554"));
+        assert_eq!(cli.device, None);
+
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.selector, "root");
+    }
+
+    #[test]
+    fn flutter_url_with_path_still_yields_device() {
+        let cli =
+            Cli::try_parse_from(["sniffCSS", "-u", "flutter://emulator-5554/home", "-s", "*"])
+                .unwrap();
+        assert_eq!(cli.flutter_device().as_deref(), Some("emulator-5554"));
+    }
+
+    #[test]
+    fn explicit_backend_and_device_override_inference() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "flutter://emulator-5554",
+            "--backend",
+            "web",
+            "-s",
+            ".card",
+        ])
+        .unwrap();
+        assert_eq!(cli.effective_backend(), Backend::Web);
+
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "--backend",
+            "flutter",
+            "--device",
+            "emulator-5554",
+            "-s",
+            "root",
+        ])
+        .unwrap();
+        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        assert_eq!(cli.device.as_deref(), Some("emulator-5554"));
+    }
+
+    #[test]
+    fn web_backend_requires_selector() {
+        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000"]).unwrap();
+        assert!(cli.into_config().is_err());
     }
 
     #[test]

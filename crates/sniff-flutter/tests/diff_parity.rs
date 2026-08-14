@@ -46,7 +46,7 @@ async fn flutter_node_shape_matches_web_golden() {
     // backend, so sniffCSS-diff / sniffCSS-check are backend-agnostic.
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");
-    let roots = capture(&uri, 3).await;
+    let roots = capture(&uri, 5).await;
     let flutter_jsonl = jsonl_of(roots);
     let flutter_root: serde_json::Value = flutter_jsonl
         .lines()
@@ -104,23 +104,23 @@ async fn single_color_change_diffs_as_one_changed() {
     // Base capture: text color #ffffff on Scaffold bg #2563eb.
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");
-    let base = capture(&uri, 3).await;
+    let base = capture(&uri, 5).await;
     let base_jsonl = jsonl_of(base);
 
     // Head capture: same tree, text color now #000000.
     let mut props = default_properties();
     props.insert(
-        "inspector-3".into(),
+        "inspector-4".into(),
         r#"[
           {"name":"data","value":"Olá, sniff","propertyType":"String","description":"Olá, sniff"},
-          {"name":"color","propertyType":"Color","description":"Color(0xff000000)"},
-          {"name":"fontSize","value":"16.0","propertyType":"double","description":"16.0"},
-          {"name":"fontWeight","value":"400.0","propertyType":"double","description":"400.0"}
+          {"name":"color","propertyType":"Color","description":"Color(alpha: 1.0000, red: 0.0, green: 0.0, blue: 0.0, colorSpace: ColorSpace.sRGB)","valueProperties":{"red":0,"green":0,"blue":0,"alpha":255}},
+          {"name":"size","value":24.0,"propertyType":"double","description":"24.0"},
+          {"name":"weight","propertyType":"FontWeight","description":"700"}
         ]"#,
     );
     let addr2 = spawn_mock_vm_service(props).await;
     let uri2 = format!("ws://{addr2}/token/ws");
-    let head = capture(&uri2, 3).await;
+    let head = capture(&uri2, 5).await;
     let head_jsonl = jsonl_of(head);
 
     let base_doc = sniff_css_diff::load_str(&base_jsonl).expect("base doc");
@@ -133,8 +133,8 @@ async fn single_color_change_diffs_as_one_changed() {
     };
     let (deltas, stats) = sniff_css_diff::diff_trees(&base_doc, &head_doc, &opts);
 
-    assert_eq!(stats.base_nodes, 4);
-    assert_eq!(stats.head_nodes, 4);
+    assert_eq!(stats.base_nodes, 5);
+    assert_eq!(stats.head_nodes, 5);
     assert_eq!(stats.added, 0, "no nodes added: {deltas:?}");
     assert_eq!(stats.removed, 0, "no nodes removed: {deltas:?}");
     assert_eq!(stats.changed, 1, "exactly one changed node: {deltas:?}");

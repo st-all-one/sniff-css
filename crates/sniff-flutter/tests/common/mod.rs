@@ -29,18 +29,27 @@ pub const ROOT_TREE: &str = r#"{
       "children": [
         {
           "valueId": "inspector-2",
-          "description": "Center",
-          "name": "Center",
+          "description": "ColoredBox",
+          "name": "ColoredBox",
           "type": "_ElementDiagnosticsNode",
           "summaryTree": true,
           "children": [
             {
               "valueId": "inspector-3",
-              "description": "Text(\"Olá, sniff\")",
-              "name": "Text",
+              "description": "Center",
+              "name": "Center",
               "type": "_ElementDiagnosticsNode",
               "summaryTree": true,
-              "children": []
+              "children": [
+                {
+                  "valueId": "inspector-4",
+                  "description": "Text(\"Olá, sniff\")",
+                  "name": "Text",
+                  "type": "_ElementDiagnosticsNode",
+                  "summaryTree": true,
+                  "children": []
+                }
+              ]
             }
           ]
         }
@@ -52,27 +61,37 @@ pub const ROOT_TREE: &str = r#"{
 pub fn default_properties() -> HashMap<String, &'static str> {
     let mut m = HashMap::new();
     m.insert("inspector-0".into(), "[]");
-    m.insert(
-        "inspector-1".into(),
-        r#"[{"name":"backgroundColor","propertyType":"Color","description":"Color(0xff2563eb)"}]"#,
-    );
+    m.insert("inspector-1".into(), "[]");
     m.insert(
         "inspector-2".into(),
-        r#"[{"name":"alignment","value":"center","propertyType":"AlignmentGeometry","description":"AlignmentGeometry.center"}]"#,
+        r#"[{"name":"color","propertyType":"Color","description":"Color(alpha: 1.0000, red: 0.1451, green: 0.3882, blue: 0.9216, colorSpace: ColorSpace.sRGB)","valueProperties":{"red":37,"green":99,"blue":235,"alpha":255}}]"#,
     );
     m.insert(
         "inspector-3".into(),
+        r#"[{"name":"alignment","value":"center","propertyType":"AlignmentGeometry","description":"AlignmentGeometry.center"}]"#,
+    );
+    m.insert(
+        "inspector-4".into(),
         r#"[
           {"name":"data","value":"Olá, sniff","propertyType":"String","description":"Olá, sniff"},
-          {"name":"color","propertyType":"Color","description":"Color(0xffffffff)"},
-          {"name":"fontSize","value":"16.0","propertyType":"double","description":"16.0"},
-          {"name":"fontWeight","value":"400.0","propertyType":"double","description":"400.0"}
+          {"name":"color","propertyType":"Color","description":"Color(alpha: 1.0000, red: 1.0000, green: 1.0000, blue: 1.0000, colorSpace: ColorSpace.sRGB)","valueProperties":{"red":255,"green":255,"blue":255,"alpha":255}},
+          {"name":"size","value":24.0,"propertyType":"double","description":"24.0"},
+          {"name":"weight","propertyType":"FontWeight","description":"700"}
         ]"#,
     );
     m
 }
 
 fn respond(method: &str, params: &Value, props: &HashMap<String, &'static str>) -> Value {
+    // Service-extension responses are wrapped by the VM Service in an
+    // `_extensionType` envelope; `VmService::call` must strip both layers.
+    let extension = |payload: Value| {
+        json!({
+            "result": payload,
+            "type": "_extensionType",
+            "method": method,
+        })
+    };
     match method {
         "getVM" => json!({
             "result": {
@@ -83,39 +102,38 @@ fn respond(method: &str, params: &Value, props: &HashMap<String, &'static str>) 
         }),
         "ext.flutter.inspector.getRootWidgetSummaryTree" => {
             let tree: Value = serde_json::from_str(ROOT_TREE).expect("tree");
-            json!({ "result": tree })
+            json!({ "result": extension(tree) })
         }
         "ext.flutter.inspector.getLayoutExplorerNode" => {
             let id = params.get("id").and_then(Value::as_str).unwrap_or("");
-            match id {
+            let payload = match id {
+                "inspector-4" => json!({
+                    "isBox": true,
+                    "size": {"width": "100.0", "height": "20.0"},
+                    "parentData": {"offsetX": "12.0", "offsetY": "8.0"}
+                }),
                 "inspector-3" => json!({
-                    "result": {
-                        "isBox": true,
-                        "size": {"width": "100.0", "height": "20.0"},
-                        "parentData": {"offsetX": "12.0", "offsetY": "8.0"}
-                    }
+                    "isBox": true,
+                    "size": {"width": "300.0", "height": "200.0"},
+                    "parentData": {"offsetX": "0.0", "offsetY": "0.0"}
                 }),
-                "inspector-2" => json!({
-                    "result": {
-                        "isBox": true,
-                        "size": {"width": "300.0", "height": "200.0"},
-                        "parentData": {"offsetX": "0.0", "offsetY": "0.0"}
-                    }
-                }),
-                _ => json!({ "result": {
+                _ => json!({
                     "size": {"width": "400.0", "height": "400.0"},
                     "parentData": {"offsetX": "0.0", "offsetY": "0.0"}
-                } }),
-            }
+                }),
+            };
+            json!({ "result": extension(payload) })
         }
         "ext.flutter.inspector.getProperties" => {
             let id = params.get("arg").and_then(Value::as_str).unwrap_or("");
             let props = props.get(id).copied().unwrap_or("[]");
             let arr: Value = serde_json::from_str(props).expect("props");
-            json!({ "result": arr })
+            json!({ "result": extension(arr) })
         }
         "ext.flutter.timeDilation" => json!({
-            "result": { "timeDilation": params.get("timeDilation").cloned().unwrap_or(Value::Null) }
+            "result": extension(json!({
+                "timeDilation": params.get("timeDilation").cloned().unwrap_or(Value::Null)
+            }))
         }),
         _ => json!({ "error": { "code": -32601, "message": "unhandled mock method" } }),
     }

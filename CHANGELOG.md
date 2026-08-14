@@ -4,6 +4,55 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [Unreleased]
+
+### Added
+
+- **Backend auto-inferido do URL** — `--backend` agora tem o default `auto`:
+  `sniffCSS -u flutter://emulator-5554 --project DIR --depth N` captura um app
+  Flutter sem `--backend`/`--device`/`-s` (o serial sai do host do URL e o
+  `-s` vira `root`). Flags explícitas (`--backend`, `--device`, `--avd`)
+  sempre vencem a inferência; o backend web continua exigindo `--selector`.
+- **Guia dedicado do backend Flutter** — novo [`docs/flutter.md`](docs/flutter.md):
+  instalação completa no Linux (Ubuntu/Fedora/Arch), configuração do app
+  (permissão `INTERNET` no debug), modo `auto`, flags do cenário e formato da
+  saída com exemplo real.
+- **`--viewport` no backend Flutter** — aplica `adb shell wm size WxH` no
+  device antes da captura (o Flutter relê o `MediaQuery`/layout) e restaura o
+  tamanho anterior ao final, inclusive em caminhos de erro
+  (`sniff_flutter::ViewportGuard`). Antes a flag era aceita mas silenciosamente
+  ignorada no modo Flutter.
+
+### Fixed
+
+- **Backend Flutter compatível com Flutter 3.40+/3.47** — validação real em
+  emulador Android corrigiu o pipeline ponta a ponta:
+  - `machine.rs` aceita o evento `app.debugPort` (Flutter 3.40+ substituiu
+    `app.debugService`) **e** linhas `--machine` embrulhadas em array
+    (`[{"event":...}]`), que o parse anterior ignorava silenciosamente e o
+    CLI/MCP estourava em *timeout*;
+  - `vm.rs` desenrola o envelope duplo das service-extensions
+    (`{"result": {"result": ..., "type": "_extensionType"}}`) — sem isso a
+    extração via mock passava mas num device real retornava só o nó raiz;
+  - `FlutterMachine::attach` agora recebe o diretório do projeto
+    (`flutter attach` precisa do `pubspec.yaml` para resolver o `target`) —
+    corrige `--attach` na CLI e no MCP;
+  - `color.rs` entende a serialização nova `Color(alpha: 1.0, red: 1.0, ...)`
+    e prioriza os canais 0-255 de `valueProperties`; `extractor.rs` lê valores
+    numéricos/booleanos, mapeia `size`→`font-size`/`weight`→`font-weight` e
+    widgets de superfície (`ColoredBox`, `Container`, `Material`, `Card`,
+    `DecoratedBox`, `Ink`) viram `background-color` — o `contrast` (ex. branco
+    em `#2563eb` ≈ 5.17 AA) agora deriva em captures reais;
+  - fixture `sniff_flutter_fixture`: adicionado
+    `android/app/src/debug/AndroidManifest.xml` com a permissão `INTERNET`
+    (sem ela o app debug não cria sockets e o Dart VM Service nunca sobe —
+    `EPERM` no bind) e o fundo `#2563eb` movido para um `ColoredBox` (exposto
+    nos diagnostics, diferentemente de `Scaffold.backgroundColor`).
+- **Testes do backend Flutter alinhados à realidade** — o mock do VM Service
+  agora modela o envelope `_extensionType`, o formato novo de cor e as props
+  `size`/`weight`; testes de integração device-gated rodam contra device real
+  via `SNIFF_TEST_DEVICE`.
+
 ## [0.4.0] — 2026-08-13
 
 ### Added

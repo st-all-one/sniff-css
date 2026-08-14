@@ -132,6 +132,7 @@ request; `headers` por chamada sobrescreve por chave), `SNIFF_STORAGE_STATE`
 | Doc | Conteúdo |
 |---|---|
 | [`docs/usage.md`](docs/usage.md) | Referência completa da CLI. |
+| [`docs/flutter.md`](docs/flutter.md) | Backend Flutter/Dart: instalação no Linux, modo `auto`, flags e resultado. |
 | [`docs/ai-usage.md`](docs/ai-usage.md) | Guia para IA: pipeline captura→diff→checks. |
 | [`docs/diff-checks.md`](docs/diff-checks.md) | `sniffCSS-diff` e `sniffCSS-check`. |
 | [`docs/accessibility.md`](docs/accessibility.md) | Auditoria de acessibilidade. |

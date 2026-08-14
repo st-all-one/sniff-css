@@ -6,6 +6,7 @@
 //! fetched through the `ext.flutter.inspector.*` service extensions in
 //! `crate::extractor` (T4/T5).
 
+use serde_json::Value;
 use sniff_cdp::jsonrpc::JsonRpcClient;
 use sniff_cdp::jsonrpc::JsonRpcError;
 
@@ -59,10 +60,12 @@ impl VmService {
 
     /// Call any VM Service method (e.g. `getVM`, `ext.flutter.inspector.*`).
     pub async fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-        self.client
+        let raw = self
+            .client
             .call(method, params, None)
             .await
-            .map_err(|e| VmError::Call(method.to_string(), e.to_string()))
+            .map_err(|e| VmError::Call(method.to_string(), e.to_string()))?;
+        Ok(unwrap_extension_result(method, raw))
     }
 
     /// Call a VM Service method with no params.
@@ -84,6 +87,27 @@ impl VmService {
     }
 }
 
+/// Service-extension responses (`ext.*`) carry a second envelope:
+///
+/// ```json
+/// {"result": {"result": <payload>, "type": "_extensionType", "method": "..."}}
+/// ```
+///
+/// The shared client already unwraps the outer `result`; this removes the
+/// `_extensionType` layer so callers see the payload directly (the same shape
+/// `getVM` and friends return). Non-extension methods are returned unchanged.
+fn unwrap_extension_result(method: &str, raw: serde_json::Value) -> serde_json::Value {
+    let Value::Object(obj) = &raw else {
+        return raw;
+    };
+    if !method.starts_with("ext.flutter.")
+        || obj.get("type").and_then(Value::as_str) != Some("_extensionType")
+    {
+        return raw;
+    }
+    obj.get("result").cloned().unwrap_or(Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +120,35 @@ mod tests {
         );
         assert_eq!(to_ws_uri("https://x:1/y/ws"), "wss://x:1/y/ws");
         assert_eq!(to_ws_uri("ws://h:1/a/ws"), "ws://h:1/a/ws");
+    }
+
+    #[test]
+    fn unwraps_extension_type_envelope() {
+        let raw = serde_json::json!({
+            "result": {"valueId": "inspector-0", "children": []},
+            "type": "_extensionType",
+            "method": "ext.flutter.inspector.getRootWidgetSummaryTree"
+        });
+        let out = unwrap_extension_result("ext.flutter.inspector.getRootWidgetSummaryTree", raw);
+        assert_eq!(out["valueId"], "inspector-0");
+    }
+
+    #[test]
+    fn leaves_regular_methods_and_errors_untouched() {
+        let raw = serde_json::json!({"isolates": []});
+        assert_eq!(
+            unwrap_extension_result("getVM", raw.clone()),
+            raw,
+            "non-extension method result passes through"
+        );
+        let raw2 = serde_json::json!({
+            "result": 1,
+            "type": "not_an_extension",
+            "method": "ext.flutter.foo"
+        });
+        assert_eq!(
+            unwrap_extension_result("ext.flutter.foo", raw2.clone()),
+            raw2
+        );
     }
 }

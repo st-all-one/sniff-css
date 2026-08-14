@@ -95,7 +95,7 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--no-group` | Estilos achatados (sem categorias) | — |
 | `--chrome PATH` | Binário do Chrome | autodetect |
 | `--connect ENDPOINT` | Conectar em browser existente — `ws://...` direto, ou `http://host:port` / `host:port` que resolve via `/json/version` | env `SNIFF_CONNECT` |
-| `--viewport WxH` | Viewport emulado (afeta `%`, `vh`, media queries) | `1366x768` |
+| `--viewport WxH` | Viewport emulado: web usa `Emulation.setDeviceMetricsOverride` (afeta `%`, `vh`, media queries); Flutter aplica `adb shell wm size WxH` no device (afeta o `MediaQuery`/layout) e restaura ao final | `1366x768` (web) / device (flutter) |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
 
 ### Backend Flutter/Dart (`--backend flutter`)
@@ -107,25 +107,41 @@ sai no **mesmo modelo JSONL** e os mesmos `sniffCSS-diff`/`sniffCSS-check`
 funcionam por path.
 
 ```bash
+# Forma enxuta: o URL `flutter://<serial>` infere o backend e o device
+# (`-s` vira `root` se omitido):
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 2
+
+# Equivalente explícito:
+sniffCSS --backend flutter --device emulator-5554 --project ~/projetos/app \
+  --target lib/main.dart --depth 2 -s root
+
 # Anexar a um device/emulador já rodando um app debug (flutter attach):
-sniffCSS --backend flutter --device emulator-5554 --depth 2 --no-summary
+sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 2
 
 # Lançar um AVD, rodar o app (flutter run --machine) e capturar:
-sniffCSS --backend flutter --avd pixel --project ~/projetos/app \
-  --target lib/main.dart --depth 2 --no-summary
+sniffCSS -u flutter://pixel --avd pixel --project ~/projetos/app --depth 2
 
 # Screenshot do device junto com a captura:
-sniffCSS --backend flutter --device emulator-5554 --screenshot out.png
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
+
+# Viewport do app (media queries/layout do Flutter) em runtime:
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
 ```
+
+> O `--backend` padrão é `auto`: um `--url flutter://<serial>` (ou
+> `flutter://<serial>/<path>`) seleciona o backend Flutter e usa `<serial>`
+> como device; qualquer outra URL usa o backend web. Flags explícitas
+> (`--backend`, `--device`, `--avd`) sempre vencem a inferência.
 
 | Opção | Descrição | Padrão |
 |---|---|---|
-| `--backend web\|flutter` | Backend de captura: `web` (Chromium/CDP) ou `flutter` (VM Service) | `web` |
-| `--device SERIAL` | Serial `adb` do emulador/device (ex.: `emulator-5554`) | — |
+| `--backend web\|flutter\|auto` | Backend de captura: `web` (Chromium/CDP), `flutter` (VM Service) ou `auto` (inferido de `--url`) | `auto` |
+| `--device SERIAL` | Serial `adb` do emulador/device (ex.: `emulator-5554`); default: host do `flutter://<serial>` | — |
 | `--avd NAME` | Lançar este AVD em vez de anexar a um device já rodando | — |
 | `--project DIR` | Diretório do app (com `pubspec.yaml`); default: pai de `--target` que tem `pubspec.yaml` | — |
 | `--target ENTRY` | Entry do app | `lib/main.dart` |
 | `--attach` | Anexar a um app debug já rodando (`flutter attach`) em vez de `flutter run` | `off` |
+| `--viewport WxH` | Tamanho lógico do app no device (`adb shell wm size`); restaurado ao final | device |
 
 Campos do nó: `tag` (classe do widget, ex. `Text`, `ElevatedButton`),
 `selector`/`path` (breadcrumb de widgets, ex. `Center > Text[0]`), `rect`

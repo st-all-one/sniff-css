@@ -146,7 +146,7 @@ async fn walk(
         out.push(ElementSnapshot {
             id,
             parent_id: frame.parent_id,
-            tag: class,
+            tag: class.clone(),
             selector: identity.clone(),
             path: identity,
             depth: depth_here,
@@ -158,7 +158,7 @@ async fn walk(
             contrast: None,
             ax: None,
             attributes: None,
-            styles: map_styles(&properties),
+            styles: map_styles(&class, &properties),
             pseudo: Vec::new(),
             children: Vec::new(),
         });
@@ -253,8 +253,10 @@ pub fn map_rect(geometry: &Value, pos: (f64, f64)) -> Option<Rect> {
 /// normalized to `#rrggbb`/`#rrggbbaa` and a few keys are renamed to their web
 /// equivalents (`backgroundColor` → `background-color`, `fontSize` →
 /// `font-size`, ...) so `sniff_core::contrast` and `sniffCSS-check` work on
-/// Flutter snapshots unchanged.
-pub fn map_styles(properties: &[Value]) -> ComputedStyles {
+/// Flutter snapshots unchanged. Widgets whose `color` is a surface color
+/// (`ColoredBox`, `Container`, ...) map it to `background-color` so it can
+/// serve as the effective background for contrast.
+pub fn map_styles(class: &str, properties: &[Value]) -> ComputedStyles {
     let mut groups: Vec<(StyleCategory, Vec<ComputedProperty>)> = Vec::new();
     let mut push = |category: StyleCategory, name: String, value: String| {
         if let Some((_, props)) = groups.iter_mut().find(|(c, _)| *c == category) {
@@ -268,22 +270,29 @@ pub fn map_styles(properties: &[Value]) -> ComputedStyles {
         let Some(name) = prop.get("name").and_then(Value::as_str) else {
             continue;
         };
-        let value = prop
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| {
-                prop.get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string()
-            });
+        let value = match prop.get("value") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            Some(Value::Bool(b)) => b.to_string(),
+            _ => prop
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        };
         if value.is_empty() {
             continue;
         }
-        let web_key = to_web_key(name);
+        let mut web_key = to_web_key(name);
+        if web_key == "color" && is_surface_widget(class) {
+            web_key = "background-color";
+        }
         let value = if crate::color::is_color_property(name) {
-            crate::color::parse_flutter_color(&value).unwrap_or(value)
+            crate::color::parse_color_value(
+                prop.get("valueProperties").and_then(Value::as_object),
+                &value,
+            )
+            .unwrap_or(value)
         } else {
             value
         };
@@ -293,15 +302,26 @@ pub fn map_styles(properties: &[Value]) -> ComputedStyles {
     ComputedStyles { groups }
 }
 
+/// Widgets whose `color` property paints the surface *behind* their children
+/// (so it maps to `background-color` for contrast).
+fn is_surface_widget(class: &str) -> bool {
+    matches!(
+        class,
+        "ColoredBox" | "Container" | "Material" | "Card" | "DecoratedBox" | "Ink"
+    )
+}
+
 /// Rename Flutter property names to the web-CSS keys the shared contrast and
-/// check machinery reads.
+/// check machinery reads. Includes the names the Flutter `Text`/`TextStyle`
+/// diagnostics actually expose (`size`, `weight`, `family`) in current
+/// Flutter versions, alongside the older `fontSize`/`fontWeight` spellings.
 fn to_web_key(name: &str) -> &str {
     match name {
         "backgroundColor" => "background-color",
         "foregroundColor" => "color",
-        "fontSize" => "font-size",
-        "fontWeight" => "font-weight",
-        "fontFamily" => "font-family",
+        "fontSize" | "size" => "font-size",
+        "fontWeight" | "weight" => "font-weight",
+        "fontFamily" | "family" => "font-family",
         "letterSpacing" => "letter-spacing",
         "wordSpacing" => "word-spacing",
         "textAlign" => "text-align",
@@ -387,7 +407,7 @@ mod tests {
             json!({"name": "mainAxisAlignment", "value": "center", "propertyType": "String"}),
             json!({"name": "customThing", "description": "x"}),
         ];
-        let styles = map_styles(&props);
+        let styles = map_styles("Text", &props);
         assert_eq!(styles.get("font-size"), Some("16.0"));
         assert_eq!(
             styles.get("color"),
@@ -418,6 +438,23 @@ mod tests {
 
     #[test]
     fn empty_properties_give_empty_styles() {
-        assert!(map_styles(&[]).is_empty());
+        assert!(map_styles("Text", &[]).is_empty());
+    }
+
+    #[test]
+    fn surface_widget_color_maps_to_background_color() {
+        let props = vec![json!({
+            "name": "color",
+            "propertyType": "Color",
+            "description": "Color(alpha: 1.0000, red: 0.1451, green: 0.3882, blue: 0.9216, colorSpace: ColorSpace.sRGB)",
+            "valueProperties": {"red": 37, "green": 99, "blue": 235, "alpha": 255}
+        })];
+        let box_styles = map_styles("ColoredBox", &props);
+        assert_eq!(box_styles.get("background-color"), Some("#2563eb"));
+        assert_eq!(box_styles.get("color"), None);
+
+        let text_styles = map_styles("Text", &props);
+        assert_eq!(text_styles.get("color"), Some("#2563eb"));
+        assert_eq!(text_styles.get("background-color"), None);
     }
 }

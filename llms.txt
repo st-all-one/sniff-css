@@ -18,7 +18,7 @@ Things to remember when using sniffCSS:
 - **The AI only judges**: cite the measured facets (`contrast.ratio`, `aria.name`, `accessibility_grade`, `ax.role`); never re-derive them or feed full snapshots to the model — diff/check first.
 - Interactions reveal action-only elements: `--click`/`--hover`/`--type`/`--upload`/`--action` (real trusted input events); `--header`/`--storage-state`/`--save-storage-state` handle auth + persistent sessions.
 - `sniffCSS-check` is fully offline and LLM-free (`--uniform` finds the odd card; `--rules` emits PASS/WARN/FAIL for contrast, 24px targets, focus, alt).
-- **Flutter/Dart backend**: `--backend flutter` (CLI) / `sniffFlutter_page` (MCP) captures a **debug-mode** Flutter app's widget tree on an Android emulator/device over the Dart VM Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`), emitting the same JSONL model (widget class as tag, colors normalized to `#rrggbb`, shared WCAG contrast) so the same `sniffCSS-diff`/`sniffCSS-check` work by path. Requires `--device <serial>` or `--avd <name>`; release builds (no VM Service) are unsupported.
+- **Flutter/Dart backend**: `--backend flutter` (CLI, or default `auto` inferred from a `flutter://<device>` URL) / `sniffFlutter_page` (MCP) captures a **debug-mode** Flutter app's widget tree on an Android emulator/device over the Dart VM Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`), emitting the same JSONL model (widget class as tag, colors normalized to `#rrggbb`, shared WCAG contrast) so the same `sniffCSS-diff`/`sniffCSS-check` work by path. The device is inferred from `flutter://<serial>` (or `--device <serial>` / `--avd <name>`); release builds (no VM Service) are unsupported.
 
 ## Docs
 
@@ -27,6 +27,7 @@ Things to remember when using sniffCSS:
 - [`README.md`](README.md) — install + quickstart (pt-BR).
 - [`SKILL.md`](SKILL.md) — decision-oriented active usage guide for AI agents.
 - [`docs/usage.md`](docs/usage.md) — complete CLI reference: flags, waits, actions, output formats, persistence. The single source of truth for flags.
+- [`docs/flutter.md`](docs/flutter.md) — Flutter/Dart backend: Linux setup (Ubuntu/Fedora/Arch), `auto` mode, flutter flags, output shape.
 - [`docs/ai-usage.md`](docs/ai-usage.md) — AI-consumption flows: capture → diff → checks → eval prompt; MCP tools; team defaults; CI monitoring.
 - [`docs/diff-checks.md`](docs/diff-checks.md) — `sniffCSS-diff` and `sniffCSS-check` reference.
 - [`docs/accessibility.md`](docs/accessibility.md) — accessibility audit workflow (facets, jq queries, judgment checklist).

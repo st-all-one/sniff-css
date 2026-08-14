@@ -27,7 +27,7 @@ async fn extractor_round_trips_over_vm_service() {
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");
 
-    let snapshots = capture(&uri, 3).await;
+    let snapshots = capture(&uri, 5).await;
 
     assert_eq!(snapshots.len(), 1, "single root: MaterialApp");
     let app = &snapshots[0];
@@ -36,8 +36,8 @@ async fn extractor_round_trips_over_vm_service() {
     assert_eq!(app.depth, 0);
     assert_eq!(
         app.node_count(),
-        4,
-        "MaterialApp + Scaffold + Center + Text"
+        5,
+        "MaterialApp + Scaffold + ColoredBox + Center + Text"
     );
 
     // Find Text via the nested tree.
@@ -51,8 +51,8 @@ async fn extractor_round_trips_over_vm_service() {
         node.children.iter().find_map(|c| find(c, tag))
     }
     let text = find(app, "Text").expect("Text node");
-    assert_eq!(text.parent_id, Some(3), "Text parent is Center (id 3)");
-    assert_eq!(text.depth, 3);
+    assert_eq!(text.parent_id, Some(4), "Text parent is Center (id 4)");
+    assert_eq!(text.depth, 4);
     assert_eq!(text.styles.get("data"), Some("Olá, sniff"));
     assert_eq!(
         text.styles.get("color"),
@@ -60,8 +60,14 @@ async fn extractor_round_trips_over_vm_service() {
         "Flutter Color normalized"
     );
 
-    // Contrast: Scaffold's background-color inherited by the Text, whose own
-    // color is #ffffff → measured WCAG ratio via the shared derivation.
+    // The ColoredBox surface color maps to background-color, is inherited by
+    // the Text, whose own color is #ffffff → measured WCAG ratio ≈ 5.17.
+    let color_box = find(app, "ColoredBox").expect("ColoredBox node");
+    assert_eq!(
+        color_box.styles.get("background-color"),
+        Some("#2563eb"),
+        "surface color → background-color"
+    );
     let contrast = text.contrast.as_ref().expect("contrast derived");
     assert_eq!(contrast.foreground, "#ffffff");
     assert_eq!(contrast.background, "#2563eb");

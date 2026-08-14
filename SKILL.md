@@ -51,12 +51,16 @@ All steps before the AI are deterministic and cost ~0 tokens.
   `SNIFF_STORAGE_STATE` and `SNIFF_BASE_URL` — per-call values win on collision.
 - **Deterministic pipeline** — capture → diff → checks are ~0-token binaries;
   the AI interprets only the delta/evidence.
-- **Flutter/Dart backend** — `--backend flutter` (or MCP `sniffFlutter_page`)
-  captures the widget tree of a **debug-mode** Flutter app on an Android
-  emulator/device over the Dart VM Service (`flutter run/attach --machine` +
-  `ext.flutter.inspector.*`). Same JSONL model (tag = widget class, colors
-  normalized to `#rrggbb`, WCAG contrast derived), so `sniffCSS-diff` /
-  `sniffCSS-check` work by path unchanged. Detail:
+- **Flutter/Dart backend** — the default backend is `auto`: a
+  `flutter://<device>` URL selects Flutter and that device
+  (`sniffCSS -u flutter://emulator-5554 --project DIR --depth N`); MCP
+  `sniffFlutter_page` is the tool form. Captures the widget tree of a
+  **debug-mode** Flutter app on an Android emulator/device over the Dart VM
+  Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`). Same
+  JSONL model (tag = widget class, colors normalized to `#rrggbb`, WCAG
+  contrast derived), so `sniffCSS-diff` / `sniffCSS-check` work by path
+  unchanged. Detail:
+  [`docs/flutter.md`](docs/flutter.md) (setup + usage),
   [`docs/usage.md`](docs/usage.md#backend-flutterdart---backend-flutter) and
   [`docs/architecture.md`](docs/architecture.md#backend-flutter-sniff-flutter).
 
@@ -77,8 +81,8 @@ All steps before the AI are deterministic and cost ~0 tokens.
 | Offline checks | `sniffCSS-check --input snap.jsonl --uniform --rules` |
 | Visual evidence | `sniffCSS -u URL -s SEL --screenshot out.png` |
 | Verbatim DOM attrs | `sniffCSS -u URL -s SEL --attrs name,value` |
-| Flutter app (attach) | `sniffCSS --backend flutter --device emulator-5554 --depth N --no-summary` |
-| Flutter app (run AVD) | `sniffCSS --backend flutter --avd pixel --project DIR --depth N --no-summary` |
+| Flutter app (attach) | `sniffCSS -u flutter://emulator-5554 --attach --project DIR --depth N` |
+| Flutter app (run AVD) | `sniffCSS -u flutter://pixel --avd pixel --project DIR --depth N` |
 
 > **Prefer the CLI.** `sniffCSS`, `sniffCSS-diff` and `sniffCSS-check` stream to
 > stdout/redirectable files, accept `--persist` to mirror the MCP store layout,

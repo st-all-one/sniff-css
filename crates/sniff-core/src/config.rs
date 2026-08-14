@@ -266,6 +266,46 @@ impl Action {
     /// Default settle time after an action (ms), letting the interaction
     /// and any resulting layout settle before the next step.
     pub const DEFAULT_SETTLE_MS: u64 = 150;
+
+    /// The kind of this action (`click`, `hover`, `type` or `upload`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Action::Click { .. } => "click",
+            Action::Hover { .. } => "hover",
+            Action::Type { .. } => "type",
+            Action::Upload { .. } => "upload",
+        }
+    }
+
+    /// The target selector of this action.
+    pub fn selector(&self) -> &str {
+        match self {
+            Action::Click { selector, .. }
+            | Action::Hover { selector, .. }
+            | Action::Type { selector, .. }
+            | Action::Upload { selector, .. } => selector,
+        }
+    }
+
+    /// Milliseconds to wait for the target to become ready.
+    pub fn timeout_ms(&self) -> u64 {
+        match self {
+            Action::Click { timeout_ms, .. }
+            | Action::Hover { timeout_ms, .. }
+            | Action::Type { timeout_ms, .. }
+            | Action::Upload { timeout_ms, .. } => *timeout_ms,
+        }
+    }
+
+    /// Milliseconds to settle after the interaction.
+    pub fn settle_ms(&self) -> u64 {
+        match self {
+            Action::Click { settle_ms, .. }
+            | Action::Hover { settle_ms, .. }
+            | Action::Type { settle_ms, .. }
+            | Action::Upload { settle_ms, .. } => *settle_ms,
+        }
+    }
 }
 
 /// Element filter applied after matching the selector.

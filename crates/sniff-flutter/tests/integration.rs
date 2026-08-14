@@ -31,7 +31,8 @@ async fn machine_discovery_against_real_device() {
 
     // Attach to a debug app on the device; without one the VM service never
     // appears and the attach call times out — acceptable as an explicit skip.
-    let mut machine = match FlutterMachine::attach(&device).await {
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/app");
+    let mut machine = match FlutterMachine::attach(&project, &device).await {
         Ok(m) => m,
         Err(e) => {
             eprintln!("skipping: cannot attach on {device}: {e}");

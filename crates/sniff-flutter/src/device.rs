@@ -217,6 +217,91 @@ pub fn find_project_root(main_dart: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+/// Read the current `wm size` override of a device (`None` when only the
+/// physical size is set — i.e. nothing to restore later).
+pub async fn wm_size(serial: &str) -> Result<Option<(u32, u32)>, DeviceError> {
+    let stdout = adb(&["-s", serial, "shell", "wm", "size"]).await?;
+    Ok(wm_override_size(&String::from_utf8_lossy(&stdout)))
+}
+
+/// Set the logical window size of a device (`adb shell wm size WxH`). The
+/// Flutter engine picks up the new size through `MediaQuery` and relayouts,
+/// which the captured widget-tree `rect`s reflect.
+pub async fn set_wm_size(serial: &str, width: u32, height: u32) -> Result<(), DeviceError> {
+    adb(&[
+        "-s",
+        serial,
+        "shell",
+        "wm",
+        "size",
+        &format!("{width}x{height}"),
+    ])
+    .await?;
+    Ok(())
+}
+
+/// Restore a previously-read `wm size` override, or reset to the physical size
+/// when none was active before.
+pub async fn restore_wm_size(serial: &str, prev: Option<(u32, u32)>) -> Result<(), DeviceError> {
+    match prev {
+        Some((w, h)) => set_wm_size(serial, w, h).await,
+        None => {
+            adb(&["-s", serial, "shell", "wm", "size", "reset"]).await?;
+            Ok(())
+        }
+    }
+}
+
+/// The `Override size: WxH` line of `wm size` output, if present.
+fn wm_override_size(text: &str) -> Option<(u32, u32)> {
+    text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Override size:")
+            .and_then(parse_wxh)
+    })
+}
+
+/// Parse a `WxH` (or `WxHx...`) dimension pair.
+fn parse_wxh(input: &str) -> Option<(u32, u32)> {
+    let (w, h) = input.trim().split_once(['x', 'X'])?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+/// Applies a `--viewport` on a device (`wm size`) and restores the previous
+/// size when dropped (best-effort backstop for early-return error paths).
+pub struct ViewportGuard {
+    serial: String,
+    prev: Option<(u32, u32)>,
+}
+
+impl ViewportGuard {
+    /// Set the device window size to `width`x`height`, remembering the
+    /// previous override so it can be restored.
+    pub async fn apply(serial: &str, width: u32, height: u32) -> Result<Self, DeviceError> {
+        let prev = wm_size(serial).await?;
+        set_wm_size(serial, width, height).await?;
+        Ok(Self {
+            serial: serial.to_string(),
+            prev,
+        })
+    }
+
+    /// Restore the previous device size.
+    pub async fn restore(&self) -> Result<(), DeviceError> {
+        restore_wm_size(&self.serial, self.prev).await
+    }
+}
+
+impl Drop for ViewportGuard {
+    fn drop(&mut self) {
+        let serial = self.serial.clone();
+        let prev = self.prev;
+        tokio::spawn(async move {
+            let _ = restore_wm_size(&serial, prev).await;
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +321,27 @@ mod tests {
             return;
         }
         let _ = list_devices().await;
+    }
+
+    #[test]
+    fn parses_wm_override_size() {
+        assert_eq!(
+            wm_override_size("Physical size: 1080x2340\nOverride size: 540x1200"),
+            Some((540, 1200))
+        );
+        assert_eq!(
+            wm_override_size("Physical size: 1080x2340"),
+            None,
+            "no override → nothing to restore"
+        );
+        assert_eq!(wm_override_size(""), None);
+    }
+
+    #[test]
+    fn parses_wxh_dimensions() {
+        assert_eq!(parse_wxh("540x1200"), Some((540, 1200)));
+        assert_eq!(parse_wxh(" 540X1200 "), Some((540, 1200)));
+        assert!(parse_wxh("1080x2340x3").is_none());
+        assert!(parse_wxh("abc").is_none());
     }
 }

@@ -628,9 +628,16 @@ impl SniffMcpServer {
         // Run (or attach) the app and discover the VM Service URI.
         reporter.report(0.15, "starting Flutter app").await?;
         let ws_uri = if request.attach {
-            let mut machine = sniff_flutter::FlutterMachine::attach(&device)
-                .await
-                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let project = request.project.clone().unwrap_or_else(|| {
+                sniff_flutter::device::find_project_root(&request.target)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .to_string_lossy()
+                    .into_owned()
+            });
+            let mut machine =
+                sniff_flutter::FlutterMachine::attach(std::path::Path::new(&project), &device)
+                    .await
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             machine
                 .wait_for_vm_service(std::time::Duration::from_secs(90))
                 .await
