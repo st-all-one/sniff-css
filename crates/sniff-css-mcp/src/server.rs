@@ -322,6 +322,18 @@ pub struct SniffFlutterRequest {
     /// Capture a PNG screenshot via `adb screencap` and persist it beside the
     /// snapshot.
     pub screenshot: bool,
+    /// Logical window size of the device as `WxH` (`adb shell wm size WxH`),
+    /// applied before launching the app and restored afterwards. Empty (the
+    /// default) leaves the device size untouched.
+    #[serde(default)]
+    pub viewport: String,
+    /// Ordered user interactions run on the app before capture, mirroring
+    /// `sniffCSS_page.actions`. Supported kinds: `click` (tap a widget found
+    /// by `ValueKey`/type/text — the app must call
+    /// `enableFlutterDriverExtension()` in `main()`), `type` (tap then enter
+    /// text). `hover`/`upload` are web-only and rejected with a clear error.
+    #[serde(default)]
+    pub actions: Vec<ActionInput>,
 }
 
 impl Default for SniffFlutterRequest {
@@ -337,6 +349,8 @@ impl Default for SniffFlutterRequest {
             persist: true,
             return_mode: "reference".to_string(),
             screenshot: false,
+            viewport: String::new(),
+            actions: Vec::new(),
         }
     }
 }
@@ -625,6 +639,23 @@ impl SniffMcpServer {
             })?
         };
 
+        // Apply `viewport` (`adb shell wm size WxH`) before launching so the
+        // app's MediaQuery/layout reflect the requested size; restored at the
+        // end (the Drop backstop also covers early-return error paths).
+        let viewport_guard = if request.viewport.is_empty() {
+            None
+        } else {
+            let vp = sniff_core::Viewport::parse_cli(&request.viewport)
+                .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+            Some(
+                sniff_flutter::ViewportGuard::apply(&device, vp.width, vp.height)
+                    .await
+                    .map_err(|e| {
+                        ErrorData::internal_error(format!("applying viewport on device: {e}"), None)
+                    })?,
+            )
+        };
+
         // Run (or attach) the app and discover the VM Service URI.
         reporter.report(0.15, "starting Flutter app").await?;
         let ws_uri = if request.attach {
@@ -662,16 +693,70 @@ impl SniffMcpServer {
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
         };
 
-        // Extract the tree (freezing animations for determinism).
+        // Extract the tree. When actions are configured they run first (each
+        // followed by its settle pause) so a reveal transition completes at
+        // normal speed — only then are animations frozen for the capture.
         reporter.report(0.5, "extracting widget tree").await?;
         let inspector = sniff_flutter::FlutterInspector::connect(&ws_uri)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        // A previous capture may have left the app frozen (`timeDilation` 1e6),
+        // which blocks driver actions (their `endOfFrame` pump never completes);
+        // restore real time before doing anything.
         inspector
-            .freeze_animations()
+            .set_time_dilation(1.0)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        if request.actions.is_empty() {
+            inspector
+                .freeze_animations()
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        } else {
+            let actions = request
+                .actions
+                .iter()
+                .map(action_from_input)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| ErrorData::invalid_params(e, None))?;
+            let driver = sniff_flutter::FlutterDriver::connect(&ws_uri)
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            if !driver.is_available().await {
+                return Err(ErrorData::invalid_params(
+                    "flutter actions need the app to call `enableFlutterDriverExtension()` in \
+                     main() (add `flutter_driver` to dev_dependencies; see docs/flutter.md)",
+                    None,
+                ));
+            }
+            driver.keep_frames_alive().await.map_err(|e| {
+                ErrorData::internal_error(format!("keeping app frames alive: {e}"), None)
+            })?;
+            for act in &actions {
+                sniff_flutter::perform_action(&driver, act)
+                    .await
+                    .map_err(|e| {
+                        ErrorData::internal_error(
+                            format!("performing {} `{}`: {e}", act.kind(), act.selector()),
+                            None,
+                        )
+                    })?;
+                tokio::time::sleep(std::time::Duration::from_millis(act.settle_ms())).await;
+            }
+            driver.close().await;
+            inspector
+                .freeze_animations()
+                .await
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        }
         let roots = sniff_flutter::extractor::extract(&inspector, request.depth)
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        // Leave the app running at real time (the freeze is only for a
+        // deterministic capture; a permanently-frozen app breaks later actions).
+        inspector
+            .set_time_dilation(1.0)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
@@ -736,6 +821,13 @@ impl SniffMcpServer {
             }
             _ => None,
         };
+
+        // Restore the device size captured before `viewport` was applied.
+        if let Some(guard) = &viewport_guard
+            && let Err(e) = guard.restore().await
+        {
+            eprintln!("warning: restoring device viewport after capture: {e}");
+        }
 
         match request.return_mode.as_str() {
             "jsonl" => Ok(jsonl),

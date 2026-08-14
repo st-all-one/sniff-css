@@ -16,6 +16,11 @@ use crate::vm::{Result, VmError, VmService};
 use serde_json::{Map, Value, json};
 use std::time::Duration;
 
+/// Default deadline (ms) for driver commands, sent to the extension so a
+/// command that stalls (target never found, `endOfFrame` never completing)
+/// aborts with an error instead of hanging the whole capture.
+const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 10_000;
+
 /// Which widget finder locates the interaction target inside the app.
 ///
 /// Mirrors the serialization of the Flutter Driver `SerializableFinder`
@@ -98,7 +103,8 @@ fn extract_value_key(spec: &str) -> Option<String> {
 fn is_widget_type(s: &str) -> bool {
     !s.is_empty()
         && s.chars().next().is_some_and(char::is_uppercase)
-        && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
 }
 
 /// A session against the app's Flutter Driver extension.
@@ -132,10 +138,7 @@ impl FlutterDriver {
     pub async fn is_available(&self) -> bool {
         match self
             .vm
-            .call(
-                "getIsolate",
-                json!({ "isolateId": self.isolate_id }),
-            )
+            .call("getIsolate", json!({ "isolateId": self.isolate_id }))
             .await
         {
             Ok(info) => info
@@ -149,9 +152,76 @@ impl FlutterDriver {
         }
     }
 
+    /// Install a self-chaining `addPostFrameCallback` loop that keeps the app
+    /// producing frames continuously.
+    ///
+    /// Driver gestures are dispatched through `LiveWidgetController.pump`,
+    /// whose `await binding.endOfFrame` only completes when the app renders a
+    /// frame. On an idle app — or a headless emulator whose vsync stops when
+    /// nothing is presented — the next frame can take seconds or never come,
+    /// so every driver command appears to hang. Keeping a frame requested at
+    /// all times makes `endOfFrame` complete within one vsync.
+    ///
+    /// The loop is installed by evaluating a Dart expression in the app's main
+    /// library (via the VM Service), so no app-side change is required. It is
+    /// harmless to leave running (it only schedules frames) and stops when the
+    /// app is restarted.
+    pub async fn keep_frames_alive(&self) -> Result<()> {
+        let main_lib = self.main_library_id().await?;
+        let expression = "(() { void loop(Duration _) { \
+            WidgetsBinding.instance.scheduleFrame(); \
+            WidgetsBinding.instance.addPostFrameCallback(loop); \
+        } \
+        WidgetsBinding.instance.scheduleFrame(); \
+        WidgetsBinding.instance.addPostFrameCallback(loop); \
+        return true; })()";
+        self.vm
+            .call(
+                "evaluate",
+                json!({
+                    "isolateId": self.isolate_id,
+                    "targetId": main_lib,
+                    "expression": expression,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Resolve the app's main library id (where `main()` lives), for
+    /// [`Self::keep_frames_alive`] to evaluate expressions in.
+    async fn main_library_id(&self) -> Result<String> {
+        let info = self
+            .vm
+            .call("getIsolate", json!({ "isolateId": self.isolate_id }))
+            .await?;
+        info.get("libraries")
+            .and_then(Value::as_array)
+            .and_then(|libs| {
+                libs.iter().find(|l| {
+                    l.get("uri")
+                        .and_then(Value::as_str)
+                        .is_some_and(|u| u.ends_with("main.dart") || u.contains("main.dart"))
+                })
+            })
+            .and_then(|l| l.get("id").and_then(Value::as_str))
+            .map(str::to_string)
+            .ok_or_else(|| {
+                VmError::Other(
+                    "could not locate the app's main library for frame scheduling".into(),
+                )
+            })
+    }
+
     /// Tap the center of the widget located by `finder`.
+    ///
+    /// A `timeout` is passed to the driver command so a target that never
+    /// resolves (or an app whose `endOfFrame` stalls) fails with an error
+    /// instead of hanging forever in the driver's internal `getCenter` pump.
     pub async fn tap(&self, finder: &DriverFinder) -> Result<()> {
-        self.call_command("tap", Some(finder), Map::new()).await?;
+        let mut extra = Map::new();
+        extra.insert("timeout".into(), json!(DEFAULT_COMMAND_TIMEOUT_MS));
+        self.call_command("tap", Some(finder), extra).await?;
         Ok(())
     }
 
@@ -160,6 +230,7 @@ impl FlutterDriver {
     pub async fn enter_text(&self, text: &str) -> Result<()> {
         let mut extra = Map::new();
         extra.insert("text".into(), json!(text));
+        extra.insert("timeout".into(), json!(DEFAULT_COMMAND_TIMEOUT_MS));
         self.call_command("enter_text", None, extra).await?;
         Ok(())
     }
@@ -232,7 +303,10 @@ mod tests {
             extract_value_key("FilledButton-[<'counter'>][0]"),
             Some("counter".to_string())
         );
-        assert_eq!(extract_value_key("TextField-[<'field'>][0]"), Some("field".to_string()));
+        assert_eq!(
+            extract_value_key("TextField-[<'field'>][0]"),
+            Some("field".to_string())
+        );
         assert_eq!(extract_value_key("Text[0]"), None);
         assert_eq!(extract_value_key("Open modal"), None);
     }
@@ -243,8 +317,14 @@ mod tests {
             finder_from_spec("FilledButton-[<'counter'>][0]"),
             DriverFinder::ByValueKey("counter".into())
         );
-        assert_eq!(finder_from_spec("Text"), DriverFinder::ByType("Text".into()));
-        assert_eq!(finder_from_spec("Text[0]"), DriverFinder::ByType("Text".into()));
+        assert_eq!(
+            finder_from_spec("Text"),
+            DriverFinder::ByType("Text".into())
+        );
+        assert_eq!(
+            finder_from_spec("Text[0]"),
+            DriverFinder::ByType("Text".into())
+        );
         assert_eq!(
             finder_from_spec("Open modal"),
             DriverFinder::ByText("Open modal".into())

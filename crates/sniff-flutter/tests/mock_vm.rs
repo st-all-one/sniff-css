@@ -23,6 +23,81 @@ async fn freeze_animations_sets_time_dilation() {
 }
 
 #[tokio::test]
+async fn driver_reports_extension_availability() {
+    let addr = spawn_mock_vm_service(default_properties()).await;
+    let uri = format!("ws://{addr}/token/ws");
+    let driver = sniff_flutter::FlutterDriver::connect(&uri)
+        .await
+        .expect("connect");
+    assert!(
+        driver.is_available().await,
+        "getIsolate.extensionRPCs includes ext.flutter.driver"
+    );
+    driver.close().await;
+}
+
+#[tokio::test]
+async fn keep_frames_alive_evaluates_in_main_library() {
+    let addr = spawn_mock_vm_service(default_properties()).await;
+    let uri = format!("ws://{addr}/token/ws");
+    let driver = sniff_flutter::FlutterDriver::connect(&uri)
+        .await
+        .expect("connect");
+    // Resolves the main.dart library from getIsolate, then evaluates the frame
+    // loop expression — both served by the mock.
+    driver.keep_frames_alive().await.expect("keep frames alive");
+    driver.close().await;
+}
+
+#[tokio::test]
+async fn driver_tap_and_wait_for_round_trip() {
+    let addr = spawn_mock_vm_service(default_properties()).await;
+    let uri = format!("ws://{addr}/token/ws");
+    let driver = sniff_flutter::FlutterDriver::connect(&uri)
+        .await
+        .expect("connect");
+    driver
+        .tap(&sniff_flutter::DriverFinder::ByValueKey("counter".into()))
+        .await
+        .expect("tap ok");
+    driver
+        .wait_for(
+            &sniff_flutter::DriverFinder::ByText("Counter: 1".into()),
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .expect("waitFor ok");
+    driver.close().await;
+}
+
+#[tokio::test]
+async fn driver_error_responses_become_errors() {
+    let addr = spawn_mock_vm_service(default_properties()).await;
+    let uri = format!("ws://{addr}/token/ws");
+    let driver = sniff_flutter::FlutterDriver::connect(&uri)
+        .await
+        .expect("connect");
+    // The mock answers a waitFor for the MISSING text with the driver's spread
+    // isError envelope; the client must surface it instead of swallowing it.
+    let err = driver
+        .wait_for(
+            &sniff_flutter::DriverFinder::ByText("MISSING".into()),
+            std::time::Duration::from_secs(2),
+        )
+        .await
+        .expect_err("driver isError becomes an error");
+    assert!(
+        err.to_string().contains("waitFor"),
+        "error mentions the command: {err}"
+    );
+    assert!(
+        err.to_string().contains("Timeout"),
+        "error surfaces the driver message: {err}"
+    );
+    driver.close().await;
+}
+
+#[tokio::test]
 async fn extractor_round_trips_over_vm_service() {
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");

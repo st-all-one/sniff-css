@@ -85,24 +85,30 @@ mod tests {
 
     #[test]
     fn hover_and_upload_fail_with_clear_message() {
-        let err = unsupported(&action("hover", "Text")).unwrap_err().to_string();
+        let err = unsupported(&action("hover", "Text"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("hover"), "err: {err}");
         assert!(err.contains("web-only"), "err: {err}");
 
-        let err = unsupported(&action("upload", "Text")).unwrap_err().to_string();
+        let err = unsupported(&action("upload", "Text"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("file input"), "err: {err}");
     }
 
     #[test]
     fn click_and_type_pass_the_guard() {
         assert!(unsupported(&action("click", "Text[0]")).is_ok());
-        assert!(unsupported(&Action::Type {
-            selector: "TextField-[<'field'>][0]".into(),
-            text: "hi".into(),
-            timeout_ms: 10_000,
-            settle_ms: 150,
-        })
-        .is_ok());
+        assert!(
+            unsupported(&Action::Type {
+                selector: "TextField-[<'field'>][0]".into(),
+                text: "hi".into(),
+                timeout_ms: 10_000,
+                settle_ms: 150,
+            })
+            .is_ok()
+        );
     }
 
     #[test]

@@ -1,19 +1,37 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://sniff.dev/schemas/sniffCSS-eval-response.schema.json",
+  "$id": "https://sniff.dev/schemas/sniffCSS-eval.schema.json",
   "title": "SniffEvalResponse",
-  "description": "Structured answer the LLM must return when evaluating a sniffCSS-diff delta for a page. A rigid schema lets the pipeline filter critical regressions automatically.",
+  "description": "Structured answer the LLM must return when evaluating a sniffCSS-diff delta (+ optional sniffCSS-check evidence) for a web page or a Flutter/Dart app. Rigid schema: every field is bounded and `measured` mirrors only the values the tool actually emits, so the pipeline can filter critical regressions automatically without trusting invented numbers.",
   "type": "object",
   "required": ["page_url", "status", "score_change", "summary", "changes_evaluated"],
+  "additionalProperties": false,
+  "definitions": {
+    "tristate": {
+      "type": "string",
+      "enum": ["pass", "fail", "unknown"],
+      "description": "Tri-state compliance exactly as emitted by the `contrast` facet / check rules."
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number" },
+        "height": { "type": "number" }
+      }
+    }
+  },
   "properties": {
     "page_url": {
       "type": "string",
-      "description": "URL of the evaluated page."
+      "description": "Evaluated target: a page URL, or `flutter://<device>` for a Flutter/Dart app."
     },
     "status": {
       "type": "string",
       "enum": ["IMPROVEMENT", "NEUTRAL", "REGRESSION_DETECTED"],
-      "description": "Overall verdict for the delta."
+      "description": "Overall verdict: REGRESSION_DETECTED if any change is negative, else IMPROVEMENT if there is a clear improvement, else NEUTRAL."
     },
     "score_change": {
       "type": "integer",
@@ -23,17 +41,18 @@
     },
     "summary": {
       "type": "string",
-      "description": "One-paragraph human summary of the change and its impact."
+      "description": "One-paragraph human summary of the change and its impact, citing the strongest measured evidence."
     },
     "changes_evaluated": {
       "type": "array",
       "items": {
         "type": "object",
         "required": ["node_selector", "impact", "category", "reason"],
+        "additionalProperties": false,
         "properties": {
           "node_selector": {
             "type": "string",
-            "description": "Selector of the changed node, as emitted by sniffCSS-diff."
+            "description": "Identity of the changed node exactly as sniffCSS-diff emits it: a web selector/path (e.g. `button[data-testid=\"submit\"]`), a Flutter widget identity (e.g. `FilledButton-[<'counter'>][0]`, widget class as tag), or an interaction-effect delta line (`__actions[N]` for ACTION_CHANGED/ADDED/REMOVED)."
           },
           "impact": {
             "type": "string",
@@ -46,26 +65,135 @@
               "LAYOUT_STABILITY",
               "VISUAL_HIERARCHY",
               "DESIGN_SYSTEM",
+              "INTERACTION",
               "PERFORMANCE",
               "OTHER"
             ],
-            "description": "Pillar affected: a11y contrast/ARIA, CLS/stability, hierarchy, design-system consistency, etc."
+            "description": "Pillar affected. ACCESSIBILITY: contrast (WCAG AA/AAA), aria/ax role-name-focusable, target size, focus indicator, hidden focusables, empty alt. LAYOUT_STABILITY: rect/metrics deltas, z-index/overlap, is_user_noticeable flips (display_visible, accessibility_grade). VISUAL_HIERARCHY: typography/scale alignment (4px/8px grid), font unification. DESIGN_SYSTEM: uniformity outliers, tokens, surface colors. INTERACTION: UI-effect deltas from actions (modal revealed/hidden, effect moved off-screen, no_effect). PERFORMANCE: judgment-based only, never cite numbers the tool did not emit. OTHER: anything else."
           },
           "reason": {
             "type": "string",
-            "description": "Evidence-based explanation (e.g. 'contrast fell from 4.5:1 to 2.1:1')."
+            "description": "Evidence-based explanation citing the before/after values present in the delta or check evidence (e.g. 'contrast.ratio fell from 4.5 to 2.1 (fail AA)' or 'target-size now 22x22 < 24x24'). Never invent numbers."
           },
           "measured": {
             "type": "object",
-            "description": "Optional measured signals backing the reason — only values actually emitted by the tool (contrast.ratio/aa, aria.role/name, ax.role, uniformity deviation).",
+            "description": "Optional measured signals backing the reason. ONLY fields the tool actually emitted (a delta facet, a snapshot field, check evidence, or an __actions entry). Mirror the tool's field names; do not hand-derive or invent.",
+            "additionalProperties": false,
             "properties": {
-              "contrast_ratio": { "type": "number" },
-              "contrast_aa": { "type": "string", "enum": ["pass", "fail", "unknown"] },
-              "aria_role": { "type": "string" },
-              "aria_name": { "type": "string" },
-              "uniformity_deviation": { "type": "string" }
-            },
-            "additionalProperties": false
+              "contrast": {
+                "type": "object",
+                "description": "The `contrast` facet (both backends).",
+                "additionalProperties": false,
+                "properties": {
+                  "ratio": { "type": "number" },
+                  "aa": { "$ref": "#/definitions/tristate" },
+                  "aaa": { "$ref": "#/definitions/tristate" },
+                  "large": {
+                    "type": "boolean",
+                    "description": "Whether the WCAG large-text thresholds applied."
+                  },
+                  "unknown_reason": {
+                    "type": "string",
+                    "description": "Why the value could not be measured, when unknown."
+                  }
+                }
+              },
+              "aria": {
+                "type": "object",
+                "description": "The `aria` facet (computed deterministically in-page).",
+                "additionalProperties": false,
+                "properties": {
+                  "role": { "type": "string" },
+                  "name": { "type": "string" },
+                  "focusable": { "type": "boolean" }
+                }
+              },
+              "ax": {
+                "type": "object",
+                "description": "The `ax` facet (browser-computed accessibility tree node).",
+                "additionalProperties": false,
+                "properties": {
+                  "role": { "type": "string" },
+                  "name": { "type": "string" },
+                  "ignored": { "type": "boolean" }
+                }
+              },
+              "noticeability": {
+                "type": "object",
+                "description": "The `is_user_noticeable` facet.",
+                "additionalProperties": false,
+                "properties": {
+                  "display_visible": { "type": "boolean" },
+                  "accessibility_grade": {
+                    "type": "string",
+                    "enum": ["NONE", "AA", "AAA"]
+                  }
+                }
+              },
+              "geometry": {
+                "type": "object",
+                "description": "From a `rect`/`metrics` delta. Web: CSS px; Flutter: device/logical px as emitted.",
+                "additionalProperties": false,
+                "properties": {
+                  "rect_before": { "$ref": "#/definitions/rect" },
+                  "rect_after": { "$ref": "#/definitions/rect" }
+                }
+              },
+              "uniformity": {
+                "type": "object",
+                "description": "A uniformity outlier (odd instance vs group norm) from sniffCSS-check.",
+                "additionalProperties": false,
+                "properties": {
+                  "property": { "type": "string" },
+                  "group_norm": { "type": "string" },
+                  "value": { "type": "string" }
+                }
+              },
+              "rule": {
+                "type": "object",
+                "description": "A derived-rule result from sniffCSS-check.",
+                "additionalProperties": false,
+                "properties": {
+                  "check": {
+                    "type": "string",
+                    "enum": ["contrast-aa", "target-size", "focus-indicator", "hidden-focusable", "empty-alt-image"]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["pass", "warn", "fail"]
+                  },
+                  "evidence": { "type": "string" }
+                }
+              },
+              "action": {
+                "type": "object",
+                "description": "From an __actions entry / ACTION_* delta: what an interaction revealed/moved and where.",
+                "additionalProperties": false,
+                "properties": {
+                  "effect": {
+                    "type": "string",
+                    "enum": ["revealed", "hidden", "changed", "moved", "no_effect"]
+                  },
+                  "onscreen": { "type": "boolean" },
+                  "distance_from_action": { "type": "number" }
+                }
+              },
+              "flutter": {
+                "type": "object",
+                "description": "Flutter-backend-only signals.",
+                "additionalProperties": false,
+                "properties": {
+                  "tag": {
+                    "type": "string",
+                    "description": "Widget class used as the node identity, e.g. `FilledButton`."
+                  },
+                  "accessibility_enabled": {
+                    "type": "boolean",
+                    "description": "The `accessibility.enabled` snapshot field (e.g. false for a disabled button)."
+                  }
+                }
+              }
+            }
           }
         }
       }

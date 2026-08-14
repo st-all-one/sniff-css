@@ -105,7 +105,14 @@ fn unwrap_extension_result(method: &str, raw: serde_json::Value) -> serde_json::
     {
         return raw;
     }
-    obj.get("result").cloned().unwrap_or(Value::Null)
+    // Most `ext.flutter.*` extensions nest their payload under `result`
+    // (`{type, method, result: {...}}`). `ext.flutter.driver` is the exception:
+    // it spreads `isError`/`response` at the top level of the envelope with no
+    // `result` key, so it must pass through unchanged for error handling.
+    if let Some(result) = obj.get("result") {
+        return result.clone();
+    }
+    raw
 }
 
 #[cfg(test)]
@@ -149,6 +156,25 @@ mod tests {
         assert_eq!(
             unwrap_extension_result("ext.flutter.foo", raw2.clone()),
             raw2
+        );
+    }
+
+    #[test]
+    fn driver_spread_envelope_passes_through_unchanged() {
+        // `ext.flutter.driver` spreads isError/response at the top level of the
+        // `_extensionType` envelope instead of nesting them under `result`.
+        // Dropping them to `Null` (the old `unwrap_or` behaviour) hides driver
+        // errors — the `waitFor` timeout used to report Ok.
+        let raw = serde_json::json!({
+            "isError": true,
+            "response": "Timeout while executing waitFor",
+            "type": "_extensionType",
+            "method": "ext.flutter.driver"
+        });
+        assert_eq!(
+            unwrap_extension_result("ext.flutter.driver", raw.clone()),
+            raw,
+            "spread driver envelope must not be unwrapped to null"
         );
     }
 }

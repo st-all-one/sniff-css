@@ -178,14 +178,19 @@ device. Um URL `flutter://<serial>` significa backend Flutter no device
 ### 4.1 Subir o emulador
 
 ```bash
-emulator -avd sniff_test -no-window -no-audio -no-boot-anim -gpu host -no-snapshot &
+emulator -avd sniff_test -no-audio -no-boot-anim -gpu host -no-snapshot &
 adb wait-for-device
 adb root && adb shell setenforce 0   # imagem google_apis (ver §2.3)
 ```
 
+> **Sem `-no-window`** (emulador **com janela**) é o necessário para **actions**:
+> o Flutter Driver só completa os comandos quando o app produz frames, e num
+> emulador headless o vsync morre quando nada é apresentado — o `tap` estoura em
+> *timeout*. Capturas **sem** ações funcionam no headless; ações exigem janela
+> (num host sem display, use `xvfb-run` ou um device físico).
+>
 > `-gpu host`: em alguns hosts o renderizador de software (`swiftshader`)
 > segfaulta na inicialização do emulador; `-gpu host` usa o GPU da máquina.
-> `-no-window` é para uso headless/CI.
 
 ### 4.2 Capturar (run)
 
@@ -268,16 +273,198 @@ Tabela resumida (referência completa: [`docs/usage.md`](usage.md)):
 | `--min-width`, `--min-height` | Filtrar por tamanho do `rect` | — |
 | `--exclude SEL` | Pular widgets pelo `selector` (repetível) | — |
 | `--no-rect`, `--no-path` | Omitir `rect`/`path` | — |
+| `--click SEL[:t[:settle]]` | Toca o widget em `SEL` antes de capturar (repetível) | — |
+| `--type SEL:text` | Toca `SEL` (foca o campo) e insere `text` (repetível) | — |
+| `--action spec` | Forma **ordenada** p/ fluxos mistos (repetível); `hover`/`upload` são **web-only** e falham com erro claro | — |
 
 Flags **exclusivas do backend web** (ignoradas no modo Flutter): `--categories`,
-`--props`, `--pseudo`, `--wait`, `--click`/`--hover`/`--type`/`--action`,
-`--header`, `--storage-state`, `--connect`, `--chrome`, `--fullpage-screenshot`.
+`--props`, `--pseudo`, `--wait`, `--hover`, `--upload`, `--header`,
+`--storage-state`, `--connect`, `--chrome`, `--fullpage-screenshot`.
+
+### 5.1 Ações de interação (tap / type)
+
+O `--click`/`--type`/`--action` do backend Flutter dirige o app pela extensão
+**Flutter Driver** (`ext.flutter.driver`), localizando o widget alvo **dentro
+do app** por `ValueKey` (extraído de `selector` como `<'counter'>`), por tipo
+de widget ou por texto — não usa retângulos da captura (os `rect` de filhos de
+`Flex` têm offset impreciso). Cada ação espera o próprio alvo, toca o centro,
+e a captura roda **depois**, sobre o estado pós-interação (ex.: o
+`AlertDialog` que o clique abriu):
+
+```bash
+# toca o FilledButton de key `counter` (o snapshot passa a mostrar "Counter: 1")
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+  --attach --depth 15 "--action=click:FilledButton-[<'counter'>][0]"
+
+# abre o modal antes de capturar:
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+  --attach --depth 15 "--action=click:OutlinedButton-[<'modal'>][0]"
+
+# foca o TextField e digita (após o tap, o campo recebe o texto):
+sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+  --attach --depth 15 "--action=type:TextField-[<'field'>][0]:hello"
+```
+
+> **Requisito:** o `main()` do app precisa chamar
+> `enableFlutterDriverExtension()` (de `package:flutter_driver/driver_extension.dart`)
+> e o app precisa ter `flutter_driver` em `dev_dependencies` — exatamente como o
+> fixture em `crates/sniff-flutter/fixtures/app`. Sem isso, a ação falha com uma
+> mensagem clara em vez de ser ignorada. `hover`/`upload` são web-only (não há
+> cursor ou file input numa superfície Flutter mobile) e retornam erro.
+>
+> As animações são congeladas **depois** das ações (a transição do modal
+> completa em tempo real antes de congelar) e o `timeDilation` é restaurado ao
+> final da captura — o app nunca fica travado para a próxima execução.
 
 ---
 
-## 6. O resultado
+## 6. Testar de fato num app real (checklist)
 
-### 6.1 Formato padrão (`--output summary`)
+Roteiro passo a passo para alguém que vai rodar a `sniffCSS` contra **o próprio
+app Flutter** pela primeira vez — do setup ao diff. Vale para emulador ou
+device físico.
+
+### 6.1 Preparar o app alvo (3 mudanças no mínimo)
+
+```bash
+cd ~/projetos/meu-app
+```
+
+1. **`pubspec.yaml`** — adicione `flutter_driver` em `dev_dependencies`:
+
+   ```yaml
+   dev_dependencies:
+     flutter_test:
+       sdk: flutter
+     flutter_driver:
+       sdk: flutter
+   ```
+
+2. **`lib/main.dart`** — chame `enableFlutterDriverExtension()` **antes** do
+   `runApp` (importa `package:flutter_driver/driver_extension.dart`):
+
+   ```dart
+   import 'package:flutter/material.dart';
+   import 'package:flutter_driver/driver_extension.dart';
+
+   void main() {
+     enableFlutterDriverExtension();
+     runApp(const MeuApp());
+   }
+   ```
+
+   > Necessário **apenas se você for usar `--action`/`--click`/`--type`**. Sem
+   > ele, capturas normais funcionam e a ação falha com mensagem clara (não
+   > silenciosamente).
+
+3. **`android/app/src/debug/AndroidManifest.xml`** — permissão `INTERNET`
+   (ver §3). Os templates Flutter já geram esse arquivo.
+
+Opcional (para o `contrast` derivar): pinte o fundo com um widget de superfície
+(`ColoredBox`/`Container`/`Material`), não `Scaffold.backgroundColor` (ver §3).
+
+Depois:
+
+```bash
+flutter pub get
+flutter build apk --debug   # primeiro build baixa Gradle/AGP — demora
+```
+
+### 6.2 Subir o emulador (com janela) e rodar o app
+
+```bash
+emulator -avd sniff_test -no-audio -no-boot-anim -gpu host -no-snapshot &
+adb wait-for-device
+adb root && adb shell setenforce 0
+
+# no diretório do app:
+flutter run --machine -d emulator-5554   # mantém aberto (a sniffCSS anexa nele)
+```
+
+> Sem a janela (`-no-window`), actions estouram em *timeout* (vsync morto) —
+> ver §4.1. Se o app for rodar com `flutter run --machine` próprio da sniffCSS
+> (`--backend flutter` sem `--attach`), pode pular o `flutter run` manual.
+
+### 6.3 Smoke test — captura sem ações
+
+```bash
+sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+  --depth 10 --output jsonl-flat > base.jsonl
+```
+
+Esperado: uma linha JSON por widget (`tag`, `selector`, `rect`, `styles`,
+`contrast`). Veja o conteúdo de um nó de texto para conferir que os diagnostics
+chegam:
+
+```bash
+rg '"tag":"Text"' base.jsonl | head -1
+```
+
+Sinais de problema:
+
+| Sintoma | Causa | Solução |
+|---|---|---|
+| `timed out waiting for the VM Service` | App não em debug / `--project` errado | `flutter run --machine` manual; build debug |
+| `SocketException ... errno = 1` no log do app | Sem `INTERNET` no debug (ou imagem playstore) | Ver §3 |
+| Só o nó raiz (`MaterialApp`) | Flutter < 3.40 | Use Flutter ≥ 3.40 |
+| `contrast` todo `unknown` | Fundo não exposto nos diagnostics | Use `ColoredBox`/`Container` (ver §3) |
+
+### 6.4 Testar ações (se o app tiver elementos interativos)
+
+1. **Capture antes** e guarde o texto de um botão com `ValueKey`, por exemplo:
+
+   ```bash
+   # snapshot do contador antes
+   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+     --depth 10 --output jsonl-flat | rg -o '"data":"Counter: [0-9]+"' | head -1
+   ```
+
+2. **Rode a ação** e confira que o estado mudou:
+
+   ```bash
+   # ATENÇÃO às aspas: o selector carrega apóstrofos — aspas simples do shell
+   # quebram (vira ByText, o alvo não é achado e dá timeout). Use aspas duplas.
+   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+     --depth 10 --output jsonl-flat \
+     "--action=click:FilledButton-[<'counter'>][0]" \
+     | rg -o '"data":"Counter: [0-9]+"' | head -1
+   ```
+
+3. **O fluxo completo com ações + diff** — capture o estado pós-interação como
+   base, mude o app, capture o head e compare:
+
+   ```bash
+   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+     --depth 10 --output jsonl-flat \
+     "--action=click:OutlinedButton-[<'modal'>][0]" > base.jsonl
+   # ... edite o app (hot-restart 'R' no flutter run), re-capture:
+   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+     --depth 10 --output jsonl-flat \
+     "--action=click:OutlinedButton-[<'modal'>][0]" > head.jsonl
+   sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
+   sniffCSS-check --input base.jsonl --rules
+   ```
+
+   > O `selector`/`path` dos nós (ex. `AlertDialog[0]`) é o identificador estável
+   > do diff. Para ações, dê `ValueKey` aos widgets-alvo — o finder do driver
+   > prefere a key e o diff fica robusto a mudanças de layout.
+
+### 6.5 Sinais de sucesso / erros comuns de ações
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `flutter actions need the app to call enableFlutterDriverExtension()` | Falta a chamada no `main()` / `flutter_driver` ausente | Ver §6.1 |
+| `flutter driver tap: Timeout` e o alvo **existe** | App congelado de uma captura anterior, ou emulador headless (`-no-window`) | Rode uma captura nova (restaura o `timeDilation` sozinho) e use emulador **com janela** |
+| `flutter driver tap: Timeout` e o alvo **não existe** / selector quebrado | `ByText` no lugar de `ByValueKey` por causa de aspas ou de `<'...'>` errado | Use aspas duplas no shell; confira o selector no `base.jsonl` |
+| Ação não surte efeito (sem erro) | Alvo coberto por um modal/barreira ainda aberto | Feche o modal (ou capture com o estado desejado já aberto) |
+| Texto não aparece no snapshot do `TextField` | O `TextEditingController` não é exposto nos diagnostics do widget | Confirme o texto no app (o `--type` insere de verdade) |
+| Emulador some do `adb devices` com o qemu vivo | Daemon `adb` dessincronizado | `adb kill-server && adb start-server` |
+
+---
+
+## 7. O resultado
+
+### 7.1 Formato padrão (`--output summary`)
 
 Uma linha JSON por nó (digest: `id`, `parent_id`, `tag`, `selector`/`path`,
 `depth`, `rect`, `contrast` e o subconjunto `css`). Exemplo real do fixture
@@ -306,7 +493,7 @@ Os campos importantes:
   `unknown_reason` quando não há fundo resolvível);
 - `accessibility.enabled` — ex.: `false` para um `ElevatedButton` desabilitado.
 
-### 6.2 Formatos completos
+### 7.2 Formatos completos
 
 - `--output jsonl` — uma linha por raiz com `children` aninhados (snapshot
   completo, inclui `styles`, `computed_style_hash`).
@@ -314,7 +501,7 @@ Os campos importantes:
   (o mais direto para alimentar `sniffCSS-diff`/`sniffCSS-check`).
 - `--output json` — um único documento JSON.
 
-### 6.3 Diff e checks (mesmo pipeline do web)
+### 7.3 Diff e checks (mesmo pipeline do web)
 
 ```bash
 # Captura base e head em jsonl-flat, depois compara:
@@ -333,7 +520,7 @@ capturas; apenas mudanças reais aparecem como `CHANGED`/`ADDED`/`REMOVED`
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Sintoma | Causa provável | Solução |
 |---|---|---|
@@ -341,12 +528,12 @@ capturas; apenas mudanças reais aparecem como `CHANGED`/`ADDED`/`REMOVED`
 | `SocketException: ... errno = 1` no log do app | Sem permissão `INTERNET` no build debug (ou imagem playstore sem `adb root`) | Adicione `src/debug/AndroidManifest.xml` (ver §3); use imagem `google_apis` + `setenforce 0` |
 | Emulador morre no boot (core dump) | SwiftShader crashando no host | Inicie com `-gpu host` e use `--device` |
 | App não aparece em `flutter devices` | Servidor `adb` dessincronizado | `adb kill-server && adb start-server` |
-| Flutter muito antigo (evento `app.debugService` ausente) | Flutter < 3.40 | Use Flutter ≥ 3.40 (evento `app.debugPort`, aceito desde v0.4.0) |
+| Flutter muito antigo (evento `app.debugService` ausente) | Flutter < 3.40 | Use Flutter ≥ 3.40 (que emite `app.debugPort`) |
 | `rect` zero / widgets sem geometria | Widget sem render box | Filtrar com `--no-visible` se necessário |
 
 ---
 
-## 8. Referências
+## 9. Referências
 
 - [`docs/usage.md`](usage.md#backend-flutterdart---backend-flutter) — flags e
   exemplos (fonte única de verdade para a CLI).

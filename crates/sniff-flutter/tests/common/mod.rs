@@ -100,6 +100,43 @@ fn respond(method: &str, params: &Value, props: &HashMap<String, &'static str>) 
                 ]
             }
         }),
+        "getIsolate" => json!({
+            "result": {
+                "id": "isolates/123",
+                "extensionRPCs": ["ext.flutter.driver"],
+                "libraries": [
+                    {"id": "libraries/main", "uri": "package:fixture/main.dart"}
+                ]
+            }
+        }),
+        "evaluate" => json!({
+            "result": extension(json!({
+                "type": "@Instance",
+                "kind": "Bool",
+                "valueAsString": "true"
+            }))
+        }),
+        "ext.flutter.driver" => {
+            // The real driver extension spreads `isError`/`response` at the
+            // top level of the `_extensionType` envelope (no nested `result`),
+            // unlike the inspector methods above. `VmService::call` must pass
+            // this shape through unchanged so `isError` is visible.
+            let command = params.get("command").and_then(Value::as_str).unwrap_or("");
+            let is_error = command == "waitFor"
+                && params.get("text").and_then(Value::as_str) == Some("MISSING");
+            json!({
+                "result": {
+                    "isError": is_error,
+                    "response": if is_error {
+                        "Timeout while executing waitFor"
+                    } else {
+                        "ok"
+                    },
+                    "type": "_extensionType",
+                    "method": "ext.flutter.driver"
+                }
+            })
+        }
         "ext.flutter.inspector.getRootWidgetSummaryTree" => {
             let tree: Value = serde_json::from_str(ROOT_TREE).expect("tree");
             json!({ "result": extension(tree) })

@@ -62,7 +62,9 @@ async fn run_web(cli: &Cli) -> anyhow::Result<()> {
 /// Flutter backend: a debug-mode Flutter app over the Dart VM Service.
 async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
     use sniff_flutter::extractor::extract;
-    use sniff_flutter::{EmulatorProcess, FlutterDriver, FlutterInspector, FlutterMachine, ViewportGuard};
+    use sniff_flutter::{
+        EmulatorProcess, FlutterDriver, FlutterInspector, FlutterMachine, ViewportGuard,
+    };
 
     let config = cli.clone().into_config().context("invalid configuration")?;
 
@@ -141,6 +143,13 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
     let inspector = FlutterInspector::connect(&ws_uri)
         .await
         .context("connecting to VM Service")?;
+    // A previous capture may have left the app frozen (`timeDilation` 1e6),
+    // which blocks driver actions (their `endOfFrame` pump never completes);
+    // restore real time before doing anything.
+    inspector
+        .set_time_dilation(1.0)
+        .await
+        .context("restoring app time dilation")?;
     let roots = if config.actions.is_empty() {
         inspector
             .freeze_animations()
@@ -159,6 +168,10 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
                  main() (add `flutter_driver` to dev_dependencies; see docs/flutter.md)"
             );
         }
+        driver
+            .keep_frames_alive()
+            .await
+            .context("keeping app frames alive for actions")?;
         for act in &config.actions {
             sniff_flutter::perform_action(&driver, act)
                 .await
@@ -173,6 +186,13 @@ async fn run_flutter(cli: &Cli) -> anyhow::Result<()> {
             .await
             .context("extracting Flutter widget tree after actions")?
     };
+    // Leave the app running at real time: the freeze above is only for a
+    // deterministic capture, and a permanently-frozen app breaks later driver
+    // actions and the developer's own hot-reload.
+    inspector
+        .set_time_dilation(1.0)
+        .await
+        .context("restoring app time dilation after capture")?;
     let screenshot_path = cli.screenshot.clone();
     let mut screenshot = None;
     if screenshot_path.is_some() {
