@@ -69,7 +69,7 @@
               "PERFORMANCE",
               "OTHER"
             ],
-            "description": "Pillar affected. ACCESSIBILITY: contrast (WCAG AA/AAA), aria/ax role-name-focusable, target size, focus indicator, hidden focusables, empty alt. LAYOUT_STABILITY: rect/metrics deltas, z-index/overlap, is_user_noticeable flips (display_visible, accessibility_grade). VISUAL_HIERARCHY: typography/scale alignment (4px/8px grid), font unification. DESIGN_SYSTEM: uniformity outliers, tokens, surface colors. INTERACTION: UI-effect deltas from actions (modal revealed/hidden, effect moved off-screen, no_effect). PERFORMANCE: judgment-based only, never cite numbers the tool did not emit. OTHER: anything else."
+            "description": "Pillar affected. ACCESSIBILITY: contrast (WCAG AA/AAA), aria/ax role-name-focusable, target size, focus indicator, hidden focusables, empty alt. LAYOUT_STABILITY: rect/metrics deltas, z-index/overlap, is_user_noticeable flips (display_visible, accessibility_grade), occluded elements (behind an overlapping element). VISUAL_HIERARCHY: typography/scale alignment (4px/8px grid), font unification. DESIGN_SYSTEM: uniformity outliers, tokens, surface colors. INTERACTION: UI-effect deltas from actions (modal revealed/hidden, effect moved off-screen, no_effect). PERFORMANCE: judgment-based only, never cite numbers the tool did not emit. OTHER: anything else."
           },
           "reason": {
             "type": "string",
@@ -156,7 +156,7 @@
                 "properties": {
                   "check": {
                     "type": "string",
-                    "enum": ["contrast-aa", "target-size", "focus-indicator", "hidden-focusable", "empty-alt-image"]
+                    "enum": ["contrast-aa", "target-size", "focus-indicator", "hidden-focusable", "empty-alt-image", "occluded"]
                   },
                   "status": {
                     "type": "string",

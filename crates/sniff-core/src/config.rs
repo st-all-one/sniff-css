@@ -536,12 +536,20 @@ pub fn parse_wait_strategy(spec: &str) -> Result<WaitStrategy, SniffError> {
 /// `hover:<selector>[:<timeout_ms>[:<settle_ms>]]` |
 /// `type:<selector>:<text>` (text may contain colons) |
 /// `upload:<selector>:<file1,file2>` (files may contain colons).
+///
+/// For `click`/`hover` the **selector may itself contain `:`** (CSS
+/// pseudo-classes such as `:nth-child(2)`, `:hover`, `:not(...)`): only
+/// *trailing* `:N` / `:N:M` fields that are all digits are interpreted as
+/// `timeout_ms` / `settle_ms`. Example:
+/// `click:.btn-group:nth-child(2) .dropdown-toggle:3000` → selector
+/// `.btn-group:nth-child(2) .dropdown-toggle`, timeout 3000 ms. For
+/// `type`/`upload` the selector is the first token after the action name
+/// (so it must not contain `:`; prefer an attribute or `aria-label` anchor
+/// when it would).
 pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
-    // splitn(3) keeps `type` text and `upload` file paths (which may
-    // themselves contain `:`) intact.
-    let mut parts = spec.splitn(3, ':');
+    let mut parts = spec.splitn(2, ':');
     let name = parts.next().unwrap_or("").trim();
-    let selector = parts.next().unwrap_or("").trim().to_string();
+    let body = parts.next().unwrap_or("");
 
     let err = |e: String| {
         SniffError::InvalidAction(format!(
@@ -550,32 +558,49 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
              type:<selector>:<text> | upload:<selector>:<file1,file2>"
         ))
     };
-    let take_ms = |value: Option<&str>, what: &str| -> Result<u64, SniffError> {
-        match value {
-            Some(t) => t.parse().map_err(|_| {
-                err(format!(
-                    "invalid {what} (expected milliseconds) for `{name}` action"
-                ))
-            }),
-            None => Ok(Action::DEFAULT_TIMEOUT_MS),
-        }
-    };
 
     match name {
         "click" | "hover" => {
+            // `body` may contain `:` in the selector (pseudo-classes such as
+            // `:nth-child(2)`, `:hover`, `:not(...)`). Only trailing
+            // all-digit tokens are options (`[:<timeout_ms>[:<settle_ms>]]`).
+            let toks: Vec<&str> = body.split(':').collect();
+            let mut trailing: Vec<&str> = Vec::new();
+            for t in toks.iter().rev() {
+                let t = t.trim();
+                if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+                    trailing.push(t);
+                } else {
+                    break;
+                }
+            }
+            if trailing.len() > 2 {
+                return Err(err(format!(
+                    "too many numeric options in `{name}` action (a selector ending in `:digits` is ambiguous)"
+                )));
+            }
+            let selector = toks[..toks.len() - trailing.len()].join(":");
+            let selector = selector.trim().to_string();
             if selector.is_empty() {
                 return Err(err("missing selector".into()));
             }
-            let rest = parts.next().unwrap_or("");
-            let mut toks = rest.split(':').map(str::trim).filter(|s| !s.is_empty());
-            let timeout_ms = take_ms(toks.next(), "timeout_ms")?;
-            let settle_ms = match toks.next() {
-                Some(t) => t.parse().map_err(|_| {
+            // trailing is built from the end: [settle, timeout].
+            let timeout_ms = match trailing.as_slice() {
+                [] => Action::DEFAULT_TIMEOUT_MS,
+                [to] | [_, to] => to.parse().map_err(|_| {
+                    err(format!(
+                        "invalid timeout_ms (expected milliseconds) for `{name}` action"
+                    ))
+                })?,
+                _ => unreachable!(),
+            };
+            let settle_ms = match trailing.as_slice() {
+                [se, _] => se.parse().map_err(|_| {
                     err(format!(
                         "invalid settle_ms (expected milliseconds) for `{name}` action"
                     ))
                 })?,
-                None => Action::DEFAULT_SETTLE_MS,
+                _ => Action::DEFAULT_SETTLE_MS,
             };
             Ok(if name == "click" {
                 Action::Click {
@@ -591,40 +616,42 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
                 }
             })
         }
-        "type" => {
+        "type" | "upload" => {
+            // splitn(2) keeps `type` text and `upload` file paths (which may
+            // themselves contain `:`) intact after the selector.
+            let mut sp = body.splitn(2, ':');
+            let selector = sp.next().unwrap_or("").trim().to_string();
             if selector.is_empty() {
                 return Err(err("missing selector".into()));
             }
-            let text = parts.next().unwrap_or("").trim().to_string();
-            if text.is_empty() {
-                return Err(err("missing text for `type` action".into()));
+            let rest = sp.next().unwrap_or("");
+            if name == "type" {
+                let text = rest.trim().to_string();
+                if text.is_empty() {
+                    return Err(err("missing text for `type` action".into()));
+                }
+                Ok(Action::Type {
+                    selector,
+                    text,
+                    timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                    settle_ms: Action::DEFAULT_SETTLE_MS,
+                })
+            } else {
+                if rest.trim().is_empty() {
+                    return Err(err("missing files for `upload` action".into()));
+                }
+                let files = rest
+                    .split(',')
+                    .map(|f| f.trim().to_string())
+                    .filter(|f| !f.is_empty())
+                    .collect::<Vec<_>>();
+                Ok(Action::Upload {
+                    selector,
+                    files,
+                    timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                    settle_ms: Action::DEFAULT_SETTLE_MS,
+                })
             }
-            Ok(Action::Type {
-                selector,
-                text,
-                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
-                settle_ms: Action::DEFAULT_SETTLE_MS,
-            })
-        }
-        "upload" => {
-            if selector.is_empty() {
-                return Err(err("missing selector".into()));
-            }
-            let files = parts.next().unwrap_or("");
-            if files.trim().is_empty() {
-                return Err(err("missing files for `upload` action".into()));
-            }
-            let files = files
-                .split(',')
-                .map(|f| f.trim().to_string())
-                .filter(|f| !f.is_empty())
-                .collect::<Vec<_>>();
-            Ok(Action::Upload {
-                selector,
-                files,
-                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
-                settle_ms: Action::DEFAULT_SETTLE_MS,
-            })
         }
         other => Err(err(format!("unknown action `{other}`"))),
     }
@@ -759,6 +786,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_action_click_keeps_colons_in_selector() {
+        // Regression: CSS pseudo-classes (`:nth-child(2)`, `:not(...)`)
+        // inside the selector must not be mistaken for the trailing
+        // timeout/settle options.
+        assert_eq!(
+            parse_action("click:#toolbar-content .btn-group:nth-child(2) .dropdown-toggle")
+                .unwrap(),
+            Action::Click {
+                selector: "#toolbar-content .btn-group:nth-child(2) .dropdown-toggle".into(),
+                timeout_ms: Action::DEFAULT_TIMEOUT_MS,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+        // The exact reported regression: `:nth-child(2)` + trailing timeout.
+        assert_eq!(
+            parse_action("click:#toolbar-content .btn-group:nth-child(2) .dropdown-toggle:3000")
+                .unwrap(),
+            Action::Click {
+                selector: "#toolbar-content .btn-group:nth-child(2) .dropdown-toggle".into(),
+                timeout_ms: 3000,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+        assert_eq!(
+            parse_action("click:.btn-group:nth-child(2) .dropdown-toggle:3000").unwrap(),
+            Action::Click {
+                selector: ".btn-group:nth-child(2) .dropdown-toggle".into(),
+                timeout_ms: 3000,
+                settle_ms: Action::DEFAULT_SETTLE_MS,
+            }
+        );
+        assert_eq!(
+            parse_action("hover:li:nth-child(3) a:5000:250").unwrap(),
+            Action::Hover {
+                selector: "li:nth-child(3) a".into(),
+                timeout_ms: 5000,
+                settle_ms: 250,
+            }
+        );
+        assert_eq!(
+            parse_action("click:div:not(.x):2000:100").unwrap(),
+            Action::Click {
+                selector: "div:not(.x)".into(),
+                timeout_ms: 2000,
+                settle_ms: 100,
+            }
+        );
+        // A numeric pseudo-looking token is ambiguous → explicit error.
+        let err = parse_action("click:.a:1:2:3").unwrap_err().to_string();
+        assert!(err.contains("too many numeric options"), "got: {err}");
+    }
+
+    #[test]
     fn parse_action_click_with_defaults() {
         assert_eq!(
             parse_action("click:#open-modal").unwrap(),
@@ -851,8 +931,12 @@ mod tests {
         assert!(err.contains("missing text"), "got: {err}");
         let err = parse_action("dblclick:#x").unwrap_err().to_string();
         assert!(err.contains("unknown action `dblclick`"), "got: {err}");
-        let err = parse_action("click:#x:abc").unwrap_err().to_string();
-        assert!(err.contains("invalid timeout_ms"), "got: {err}");
+        // A non-numeric trailing token is now part of the selector (it could
+        // be a pseudo-class), so it must not be rejected as a timeout; the
+        // ambiguous all-numeric case still errors.
+        assert_eq!(parse_action("click:#x:abc").unwrap().selector(), "#x:abc");
+        let err = parse_action("click:.a:1:2:3").unwrap_err().to_string();
+        assert!(err.contains("too many numeric options"), "got: {err}");
     }
 
     #[test]

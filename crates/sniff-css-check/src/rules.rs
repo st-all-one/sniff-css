@@ -13,11 +13,19 @@
 //! - `hidden-focusable`: focusable but not exposed to assistive tech
 //!   (`accessibility_grade == NONE`).
 //! - `empty-alt-image`: non-decorative image with an empty `alt`.
+//! - `occluded`: an element's rect is substantially covered by another
+//!   (non-ancestor, non-descendant) element painted above it — the element
+//!   is visually *behind* an overlapping element. Paint order is a
+//!   deterministic heuristic over the captured tree: higher `z-index`
+//!   (from `metrics`) wins, then later DOM order. Approximates the CSS
+//!   stacking order within the captured subtree; an element outside the
+//!   capture depth can still occlude unseen.
 
 use serde_json::Value;
 use sniff_core::TriState;
 use sniff_core::contrast::derive_contrast_values;
 use sniff_css_diff::DiffNode;
+use std::collections::HashMap;
 
 /// Contrast data used by the rule, from either the engine's `contrast`
 /// facet (preferred) or a fallback derivation from raw styles.
@@ -93,13 +101,188 @@ const TEXT_TAGS: &[&str] = &[
 const INTERACTIVE_TAGS: &[&str] = &["BUTTON", "INPUT", "SELECT", "TEXTAREA", "SUMMARY"];
 
 /// Run all derived rule checks over a snapshot forest (recursively).
+///
+/// Per-node checks run over every node; the `occluded` check runs once over
+/// the whole forest so cross-subtree coverage (e.g. a page-level overlay over
+/// a deeply nested button) is reported exactly once.
 pub fn run_rules(nodes: &[DiffNode]) -> Vec<CheckLine> {
     let mut out = Vec::new();
     for node in nodes {
         check_node(node, &mut out);
         out.extend(run_rules(&node.children));
     }
+    out.extend(check_occlusion(nodes));
     out
+}
+
+/// A flattened node with pre-order index and subtree range, used by the
+/// occlusion sweep for O(1) ancestry tests and DOM paint order.
+struct Flat<'a> {
+    node: &'a DiffNode,
+    /// Pre-order index (document order for equal z-index tie-breaks).
+    idx: usize,
+    /// Last pre-order index in this node's subtree.
+    end: usize,
+    rect: Option<(f64, f64, f64, f64)>,
+}
+
+/// Detect occlusion: a node whose rect is substantially covered by a
+/// different (non-ancestor, non-descendant) node painted above it.
+///
+/// Optimized via an x-interval sweep (only x-overlapping candidate pairs are
+/// y-tested), so the cost is near O(n log n) + O(k) for k overlapping pairs
+/// instead of a full O(n²) pairwise comparison.
+///
+/// Coverage semantics: `Fail` when a single other node covers ≥ 75% of the
+/// element's area, `Warn` when ≥ 50%. Ancestor/descendant pairs are ignored
+/// (a child inside its parent is "contained by design"). Paint order is a
+/// heuristic: numeric `z-index` (from `metrics`, falling back to
+/// `styles.layout.z-index`) wins, then later document order.
+pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
+    let mut flat = Vec::new();
+    flatten(nodes, &mut flat, &mut 0);
+
+    let mut cands: Vec<usize> = (0..flat.len())
+        .filter(|&i| flat[i].rect.is_some() && flat[i].node.display_visible() != Some(false))
+        .collect();
+    cands.sort_by_key(|&i| flat[i].rect.unwrap().0 as i64);
+
+    // covered node index -> (covering node index, coverage fraction), keeping
+    // the worst (highest-coverage) coverer per covered node.
+    let mut covered: HashMap<usize, (usize, f64)> = HashMap::new();
+
+    for (ci, &i) in cands.iter().enumerate() {
+        let (xi, yi, wi, hi) = flat[i].rect.unwrap();
+        let area_i = wi * hi;
+        for &j in &cands[ci + 1..] {
+            let (xj, yj, wj, hj) = flat[j].rect.unwrap();
+            if xj >= xi + wi {
+                // Sorted by x; no later node can overlap i in x.
+                break;
+            }
+            let ix0 = xi.max(xj);
+            let ix1 = (xi + wi).min(xj + wj);
+            if ix1 <= ix0 {
+                continue;
+            }
+            let iy0 = yi.max(yj);
+            let iy1 = (yi + hi).min(yj + hj);
+            if iy1 <= iy0 {
+                continue;
+            }
+            if related(&flat, i, j) {
+                continue;
+            }
+            let inter = (ix1 - ix0) * (iy1 - iy0);
+            let cov_i_by_j = inter / area_i;
+            let cov_j_by_i = inter / (wj * hj);
+            // Only the one painted *below* can be reported as covered.
+            if cov_i_by_j >= 0.5 && paints_above(&flat, j, i) {
+                record_cover(&mut covered, i, j, cov_i_by_j);
+            }
+            if cov_j_by_i >= 0.5 && paints_above(&flat, i, j) {
+                record_cover(&mut covered, j, i, cov_j_by_i);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut keys: Vec<usize> = covered.keys().copied().collect();
+    keys.sort_unstable();
+    for k in keys {
+        let (coverer, cover) = covered[&k];
+        let covered_sel = &flat[k].node.selector;
+        let coverer_sel = &flat[coverer].node.selector;
+        let pct = (cover * 100.0).round() as u32;
+        out.push(CheckLine {
+            check: "occluded".into(),
+            selector: covered_sel.clone(),
+            tag: flat[k].node.tag.clone(),
+            status: if cover >= 0.75 {
+                RuleStatus::Fail
+            } else {
+                RuleStatus::Warn
+            },
+            evidence: format!(
+                "{pct}% of {covered_sel} is covered by {coverer_sel} — \
+                 the element is visually behind an overlapping element"
+            ),
+        });
+    }
+    out
+}
+
+fn flatten<'a>(nodes: &'a [DiffNode], out: &mut Vec<Flat<'a>>, next: &mut usize) {
+    for node in nodes {
+        let idx = *next;
+        *next += 1;
+        out.push(Flat {
+            node,
+            idx,
+            end: idx,
+            rect: rect_coords(node),
+        });
+        flatten(&node.children, out, next);
+        // Subtree range is closed by the last descendant pushed.
+        out[idx].end = *next - 1;
+    }
+}
+
+/// `a` is an ancestor of `b` or vice versa (subtree interval containment).
+fn related(flat: &[Flat], a: usize, b: usize) -> bool {
+    let (ai, ae) = (flat[a].idx, flat[a].end);
+    let (bi, be) = (flat[b].idx, flat[b].end);
+    (ai <= bi && bi <= ae) || (bi <= ai && ai <= be)
+}
+
+/// Whether `a` paints above `b` (deterministic stacking heuristic).
+fn paints_above(flat: &[Flat], a: usize, b: usize) -> bool {
+    let za = node_z_index(flat[a].node);
+    let zb = node_z_index(flat[b].node);
+    match (za, zb) {
+        (Some(va), Some(vb)) if va != vb => va > vb,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        _ => flat[a].idx > flat[b].idx,
+    }
+}
+
+/// Read a node's rect as `(x, y, width, height)`, if present and non-empty.
+fn rect_coords(node: &DiffNode) -> Option<(f64, f64, f64, f64)> {
+    let rect = node.rect.as_ref()?;
+    let x = rect.get("x")?.as_f64()?;
+    let y = rect.get("y")?.as_f64()?;
+    let w = rect.get("width")?.as_f64()?;
+    let h = rect.get("height")?.as_f64()?;
+    (w > 0.0 && h > 0.0).then_some((x, y, w, h))
+}
+
+/// Numeric z-index from `metrics.z_index` (string or int) or
+/// `styles.layout.z-index`. `None` for `auto`/unset.
+fn node_z_index(node: &DiffNode) -> Option<i64> {
+    if let Some(metrics) = node.metrics.as_ref()
+        && let Some(z) = metrics.get("z_index")
+    {
+        if let Some(i) = z.as_i64() {
+            return Some(i);
+        }
+        if let Some(s) = z.as_str()
+            && let Ok(i) = s.parse::<i64>()
+        {
+            return Some(i);
+        }
+    }
+    style_val(node, "layout", "z-index")?.parse().ok()
+}
+
+/// Keep the highest-coverage coverer for a covered node.
+fn record_cover(covered: &mut HashMap<usize, (usize, f64)>, who: usize, by: usize, cov: f64) {
+    match covered.get(&who) {
+        Some((_, best)) if *best >= cov => {}
+        _ => {
+            covered.insert(who, (by, cov));
+        }
+    }
 }
 
 fn check_node(node: &DiffNode, out: &mut Vec<CheckLine>) {
@@ -549,5 +732,182 @@ mod tests {
             },
         ]);
         assert_eq!((pass, warn, fail), (1, 1, 1));
+    }
+
+    // --- occlusion ---
+
+    fn occ_node(
+        selector: &str,
+        tag: &str,
+        rect: (f64, f64, f64, f64),
+        z_index: Option<i64>,
+        visible: bool,
+    ) -> DiffNode {
+        let (x, y, w, h) = rect;
+        DiffNode {
+            id: 0,
+            parent_id: None,
+            selector: selector.into(),
+            tag: Some(tag.into()),
+            path: None,
+            depth: Some(0),
+            rect: Some(serde_json::json!({"x": x, "y": y, "width": w, "height": h})),
+            metrics: z_index
+                .map(|z| serde_json::json!({"z_index": z.to_string(), "stacking_context": true})),
+            noticeable: Some(serde_json::json!({
+                "display_visible": visible, "accessibility_grade": "AAA"
+            })),
+            hash: None,
+            styles: None,
+            pseudo: None,
+            aria: None,
+            contrast: None,
+            ax: None,
+            attributes: None,
+            children: vec![],
+        }
+    }
+
+    #[test]
+    fn occluded_fail_when_covered_by_overlay() {
+        let button = occ_node("button.save", "BUTTON", (0.0, 0.0, 200.0, 60.0), None, true);
+        let overlay = occ_node(
+            "div.modal-backdrop",
+            "DIV",
+            (0.0, 0.0, 1440.0, 900.0),
+            Some(1000),
+            true,
+        );
+        let lines = check_occlusion(&[button, overlay]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("occluded check");
+        assert_eq!(occ.status, RuleStatus::Fail);
+        assert_eq!(occ.selector, "button.save");
+        assert!(
+            occ.evidence.contains("covered by div.modal-backdrop"),
+            "got: {}",
+            occ.evidence
+        );
+        assert!(occ.evidence.contains("100%"), "got: {}", occ.evidence);
+    }
+
+    #[test]
+    fn occluded_warn_on_partial_cover() {
+        let button = occ_node(
+            "button.save",
+            "BUTTON",
+            (0.0, 0.0, 100.0, 100.0),
+            None,
+            true,
+        );
+        let toast = occ_node("div.toast", "DIV", (0.0, 0.0, 100.0, 60.0), Some(10), true);
+        let lines = check_occlusion(&[button, toast]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("occluded check");
+        assert_eq!(occ.status, RuleStatus::Warn);
+        assert!(occ.evidence.contains("60%"), "got: {}", occ.evidence);
+    }
+
+    #[test]
+    fn lower_z_index_is_occluded_but_not_above() {
+        let below = occ_node("div.footer", "DIV", (0.0, 0.0, 100.0, 100.0), Some(1), true);
+        let above = occ_node("div.popup", "DIV", (0.0, 0.0, 100.0, 100.0), Some(2), true);
+        let lines = check_occlusion(&[below, above]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("occluded check");
+        assert_eq!(occ.selector, "div.footer");
+        // Flipped stacking: the popup (z=1) now sits *under* the footer
+        // (z=2), so the popup is the one reported as covered.
+        let below = occ_node("div.footer", "DIV", (0.0, 0.0, 100.0, 100.0), Some(2), true);
+        let above = occ_node("div.popup", "DIV", (0.0, 0.0, 100.0, 100.0), Some(1), true);
+        let lines = check_occlusion(&[below, above]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("occluded check");
+        assert_eq!(occ.selector, "div.popup");
+    }
+
+    #[test]
+    fn later_tree_order_covers_earlier_when_no_z_index() {
+        let earlier = occ_node(
+            "div.menu-trigger",
+            "DIV",
+            (0.0, 0.0, 120.0, 40.0),
+            None,
+            true,
+        );
+        let later = occ_node("div.dropdown", "DIV", (0.0, 0.0, 120.0, 40.0), None, true);
+        let lines = check_occlusion(&[earlier, later]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("occluded check");
+        assert_eq!(occ.selector, "div.menu-trigger");
+    }
+
+    #[test]
+    fn adjacent_siblings_not_occluded() {
+        let a = occ_node(
+            "div.card:nth-child(1)",
+            "DIV",
+            (0.0, 0.0, 300.0, 120.0),
+            None,
+            true,
+        );
+        let b = occ_node(
+            "div.card:nth-child(2)",
+            "DIV",
+            (300.0, 0.0, 300.0, 120.0),
+            None,
+            true,
+        );
+        assert!(
+            check_occlusion(&[a, b]).is_empty(),
+            "non-overlapping cards must not be flagged"
+        );
+    }
+
+    #[test]
+    fn ancestor_containment_not_reported() {
+        let mut parent = occ_node("div.card", "DIV", (0.0, 0.0, 400.0, 300.0), None, true);
+        let child = occ_node("p.text", "P", (20.0, 20.0, 100.0, 40.0), None, true);
+        parent.children = vec![child];
+        assert!(
+            check_occlusion(&[parent]).is_empty(),
+            "parent/child containment is by design"
+        );
+    }
+
+    #[test]
+    fn occlusion_reported_once_across_subtree() {
+        // A page-level overlay covering a deeply nested button must yield a
+        // single occluded line (no per-subtree duplicates).
+        let button = occ_node("button.x", "BUTTON", (10.0, 10.0, 100.0, 40.0), None, true);
+        let mut container = occ_node(
+            "div.modal-content",
+            "DIV",
+            (0.0, 0.0, 500.0, 400.0),
+            None,
+            true,
+        );
+        container.children = vec![button];
+        let overlay = occ_node(
+            "div.backdrop",
+            "DIV",
+            (10.0, 10.0, 100.0, 40.0),
+            Some(100),
+            true,
+        );
+        let lines = run_rules(&[container, overlay]);
+        let occ: Vec<_> = lines.iter().filter(|l| l.check == "occluded").collect();
+        assert_eq!(occ.len(), 1, "occlusion must be reported exactly once");
+        assert_eq!(occ[0].selector, "button.x");
     }
 }
