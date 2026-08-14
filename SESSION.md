@@ -1,47 +1,63 @@
 # SESSION.md
 
-Sessão interrompida em 2026-08-14. Contexto completo em `conversations/` (se presente).
+## Estado: FECHADO — v0.4.0 encerrada (2026-08-14)
 
-## Objetivo desta sessão
+Todas as frentes desta etapa foram concluídas, validadas e documentadas. A
+v0.4.0 (workspace já em `0.4.0`) é o fechamento do backend Flutter.
 
-1. Adicionar `--viewport` ao tool MCP **`sniffFlutter_page`** (o `sniffCSS_page` web **já tem** — confirmado em `crates/sniff-css-mcp/src/server.rs:209-211,1044`).
-2. Fazer **actions** funcionarem no backend Flutter (hoje são web-only e ignoradas silenciosamente).
+### O que entrou na v0.4.0
 
-## O que JÁ está pronto (validado)
+- Backend **Flutter/Dart nativo** (`sniff-flutter`): captura da árvore de
+  widgets via Dart VM Service (`flutter run/attach --machine` +
+  `ext.flutter.inspector.*`), mesmo modelo JSONL do web (diff/check por path).
+- **`--backend auto`** — `flutter://<device>` infere backend e device.
+- **`--viewport`** no Flutter (CLI + MCP `sniffFlutter_page`): `adb shell wm
+  size WxH` antes do launch, restaurado ao final (incl. erros).
+- **Actions no Flutter** (CLI `--action`/`--click`/`--type` + MCP `actions`):
+  via extensão Flutter Driver (`ext.flutter.driver`); `hover`/`upload` web-only.
+  Requisito: `enableFlutterDriverExtension()` no app.
+- **Screenshot** (`adb exec-out screencap`), **`JsonRpcClient` genérico**
+  (CDP + VM Service).
 
-- **Fixture interativa** (`crates/sniff-flutter/fixtures/app/lib/main.dart`): `FilledButton` contador (key `counter`), `OutlinedButton` que abre `AlertDialog` (key `modal`), `TextField` (key `field`), além do que já existia. `pubspec.yaml` ganhou `flutter_driver` (dev). `widget_test.dart` cobre os novos elementos (2 testes, `flutter test` → 2 passed).
-- **Protocolo Flutter Driver validado empiricamente**: `ext.flutter.driver` responde no RPC direto (`{"isError":false,"response":...}`), com params `command`/`finderType`/`keyValueString`/`keyValueType`. `tap ByValueKey counter` incrementou o contador e `waitFor ByText "Counter: 1"` confirmou (via probe descartável). Sem `--timeout` no comando, funciona.
-- **`sniff_core::config::Action`**: adicionados métodos `kind()`, `selector()`, `timeout_ms()`, `settle_ms()`.
-- **`crates/sniff-flutter/src/driver.rs`** (novo): `FlutterDriver` (connect/tap/enter_text/wait_for/is_available), `DriverFinder` (ByValueKey/ByType/ByText) com `finder_from_spec()` (extrai `<'key'>` → ValueKey; classe → ByType; resto → ByText) + testes unitários. Compila.
-- **`crates/sniff-flutter/src/action.rs`** (novo): `perform()` (Click=tap; Type=tap+enter_text; Hover/Upload → erro claro "web-only"), `unsupported()`, `target_finder()` + testes. Compila.
-- **`lib.rs`**: exporta `action`, `driver`, `perform_action`, `unsupported`, `target_finder`, `DriverFinder`, `FlutterDriver`, `finder_from_spec`.
-- **CLI `run_flutter`** (`crates/sniff-css/src/main.rs`): se `config.actions` não vazio → conecta `FlutterDriver`, checa `is_available()` (senão `bail!` explicando `enableFlutterDriverExtension()`), executa cada action + `sleep(settle_ms)`, e **só então** `freeze_animations()` + extract (congelar antes congelaria a transição da interação). Sem actions → fluxo antigo (freeze antes de extract). Compila.
+### Bugs-chave resolvidos (documentados no CHANGELOG)
 
-## BLOQUEIO atual (investigar primeiro)
+1. Driver `tap` travava (pump `endOfFrame` sem frames) → `keep_frames_alive()`
+   instala loop de frames via `evaluate`; exige emulador **com janela** (vsync).
+2. `ext.flutter.driver` espalha `isError`/`response` no topo do envelope
+   `_extensionType` → `unwrap_extension_result` passava o payload para `null` e
+   timeout virava `Ok`; agora o envelope espalhado passa intacto.
+3. `freeze_animations` (timeDilation 1e6) deixava o app congelado → CLI/MCP
+   restauram `timeDilation=1.0` ao início e ao final da captura.
 
-**O `tap` do driver trava após hot-restart.** Sequência:
-1. Probe standalone direto contra o app `flutter run` fresco: `get_text`/`tap`/`waitFor` funcionam.
-2. Depois que um `flutter attach --machine` faz hot-restart, o `ext.flutter.driver` tap **nunca responde** (probe deu timeout 20s; CLI `--action` travou).
-3. Hipótese mais provável: `LiveWidgetController.pump` faz `binding.scheduleFrame(); await binding.endOfFrame;` (`flutter_test/lib/src/controller.dart:2503-2509`) e `endOfFrame` não completa quando o app não está produzindo frames (estado pós-hot-restart / emulador headless). Verificar:
-   - `is_available()` via `getIsolate.extensionRPCs` retorna true (confirmado no log: `ext.flutter.driver` presente) — então não é falta da extensão.
-   - Reproduzir numa **launch limpa** (kill do app + `flutter run --machine` novo via `setsid nohup … &`, como antes) e testar `tap` imediatamente; se funcionar, o problema é o hot-restart do attach.
-   - Alternativas se o tap continuar travando: (a) verificar se `timeout` no comando ajuda (o driver tem `command.timeout`); (b) investigar se frames param; (c) considerar enviar tap e **não** esperar `endOfFrame` (mas o protocolo é RPC síncrono — o `result` só volta quando o handler termina, então sem resposta = handler preso em `endOfFrame`).
-   - **Nota de ambiente**: emulador `emulator-5554` segue vivo; app atual pid 6118 VM service em `46837` (token `j6V9DbAezRs=`), mas forwards do adb acumulam (muitas linhas em `adb forward --list`); conexões antigas (ex.: porta 45845) são de processos mortos — sempre confirmar o port/token atuais antes de testar.
+### Validação
 
-## O que FALTA fazer
+- CLI end-to-end em emulador windowed: counter 4→5→6, modal (`AlertDialog` no
+  tree), `--type` (texto confirmado no campo).
+- MCP `sniffFlutter_page` com `actions` validado ao vivo (stdio): snapshot com
+  o estado pós-tap.
+- Gates: `cargo fmt`, `clippy -D warnings`, **326 testes**, `flutter test` (2).
 
-1. **[BLOQUEIO]** Resolver o hang do driver `tap` pós-hot-restart (ver acima) — necessário para o CLI `--action` funcionar.
-2. **Validar CLI end-to-end**: `sniffCSS -u flutter://emulator-5554 --project crates/sniff-flutter/fixtures/app --attach --depth 15 '--action=click:FilledButton-[<'counter'>][0]'` deve capturar o tree com `Counter: 1` (usar `--attach` com app já rodando OU `--avd`/device com app novo). Rebuild release: `cargo build -p sniff-css --release`.
-3. **MCP `sniffFlutter_page`** (`crates/sniff-css-mcp/src/server.rs`):
-   - Adicionar ao `SniffFlutterRequest` (linha ~301): `viewport: String` (default `""` = não alterar device; parsear com `Viewport::parse_cli` quando não vazio) e `actions: Vec<ActionInput>` (reusar `action_from_input`, linha ~1124).
-   - No handler `sniff_flutter_page` (linha ~598): aplicar `sniff_flutter::ViewportGuard::apply(&device, w, h)` antes do launch e restaurar no final (manter guard vivo até após screenshot), e rodar actions via `sniff_flutter::FlutterDriver` + `perform_action` antes do `freeze_animations`/`extract` (mesma ordem do CLI). Atualizar o `Default impl` (linha ~327).
-4. **Limpeza**: remover `crates/sniff-cdp/src/bin/probe_driver.rs` (untracked, artefato de teste) e `crates/sniff-cdp/src/bin/` inteiro se vazio.
-5. **Docs**: em `docs/flutter.md` — `--action`/`--click`/`--type` agora suportados (requer `enableFlutterDriverExtension()` no main + `flutter_driver` em dev_dependencies; hover/upload = web-only), novo exemplo; em `docs/usage.md` — remover `--action` da lista "ignoradas no modo Flutter" e documentar o requisito; `CHANGELOG.md` — entrada Unreleased (actions no Flutter; viewport no sniffFlutter_page MCP).
-6. **Gates finais**: `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace` (antes eram 285 passed); `flutter test` no fixture (2 passed).
+### Docs atualizados para o fechamento
 
-## Notas / armadilhas
+- `CHANGELOG.md` — `[Unreleased]` consolidado em `[0.4.0] — 2026-08-14`
+  (Added + Fixed organizados; sem `Unreleased`).
+- `docs/flutter.md` — §4.1 (emulador com janela), §5.1 (ações), novo §6
+  "Testar de fato num app real (checklist)"; seções renumeradas (§7-9).
+- `docs/architecture.md` — bullets de interações (driver) e viewport.
+- `docs/ai-usage.md` — params do `sniffFlutter_page` (viewport + actions).
+- `docs/usage.md` — seção Flutter com actions; exemplo de install `v0.4.0`.
+- `SKILL.md` (+ sincronizado com `~/.config/opencode/skills/sniff-css/SKILL.md`)
+  e `llms.txt` — nota de actions/viewport no backend Flutter.
 
-- **Não commitar** artefatos: `crates/sniff-cdp/src/bin/`, `conversations/` (untracked legado), `sniffCSS/`.
-- A flag `--viewport` do CLI flutter já está implementada e validada (MaterialApp 392.7→196.4 dp com `540x1200`, device restaurado) — essa parte do CLI **não** é o foco pendente; só o MCP.
-- Os rects do extractor de flutter têm offset quebrado para filhos de flex (Column/Row reportam offset 0 — limitação do `getLayoutExplorerNode`, que só serializa `BoxParentData`, não `FlexParentData`). NÃO usar rect para coordenadas de action (por isso o driver finder é a abordagem correta). Bug de rect pré-existente, fora do escopo.
-- Toolchain: PATH em `~/.zshrc` (`~/flutter/bin`, `~/Android/Sdk/platform-tools`); AVD `sniff_test`; emulador 37.1.11 com `-gpu host`; `adb root` + `setenforce 0`.
+### Notas / armadilhas (relevantes para a próxima feature)
+
+- **NÃO commitar**: `conversations/` (untracked legado), `sniffCSS/`.
+- AVD é `sniff`; para actions use emulador **com janela** (`-gpu host`, sem
+  `-no-window`); `adb root` + `setenforce 0`.
+- Pegadinha de shell: selector com `'` (ex. `FilledButton-[<'counter'>][0]`)
+  deve ir entre **aspas duplas** — aspas simples quebram e vira `ByText`.
+- `adb kill-server`/`start-server` pode dessincronizar e "perder" o emulador.
+- Rects de filhos de `Flex` têm offset 0 (limitação do `getLayoutExplorerNode`)
+  — actions usam o finder do driver, nunca `rect`.
+- Release: `git tag v0.4.0 && git push origin v0.4.0` (workflow
+  `.github/workflows/release.yml` + `docs/docker.md`).

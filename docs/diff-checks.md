@@ -70,6 +70,13 @@ sniffCSS-check --input snap.jsonl --rules                     # PASS/WARN/FAIL
   - `focus-indicator` — focusable sem sinal de foco visível.
   - `hidden-focusable` — focusable com `accessibility_grade == NONE` (tab trap).
   - `empty-alt-image` — imagem grande com `alt=""` (não decorativa?).
+  - `occluded` — o elemento está **visualmente atrás** de outro que o cobre:
+    detecta sobreposição de `rect` entre nós não-ancestrais/não-descendentes
+    dentro da árvore capturada, com quem pinta por cima decidido por heurística
+    determinística (`z-index` numérico de `metrics`, senão a ordem no DOM).
+    `fail` = ≥75% da área coberta por um único nó; `warn` = ≥50%. Otimizado por
+    sweep no eixo x (só pares com sobreposição em x são testados em y). Limite:
+    um elemento *fora* da profundidade de captura pode ocultar sem ser visto.
 
 Saída JSONL com evidência + `__check_summary`:
 
@@ -78,6 +85,8 @@ Saída JSONL com evidência + `__check_summary`:
  "evidence":"ratio 2.1:1 on #212529 against #020842 (need 4.5:1 text AA)"}
 {"check":"uniformity","selector":"div.card:nth-child(3)","status":"fail",
  "evidence":"deviates from the 3/3 group norm: box_model.height: 80px (norm 120px ±40.00)"}
+{"check":"occluded","selector":"button.save","tag":"BUTTON","status":"fail",
+ "evidence":"100% of button.save is covered by div.modal-backdrop — the element is visually behind an overlapping element"}
 {"__check_summary":{"uniformity_instances":3,"uniformity_outliers":1,"rules":12}}
 ```
 

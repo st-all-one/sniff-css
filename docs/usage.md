@@ -142,13 +142,21 @@ sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
 | `--target ENTRY` | Entry do app | `lib/main.dart` |
 | `--attach` | Anexar a um app debug já rodando (`flutter attach`) em vez de `flutter run` | `off` |
 | `--viewport WxH` | Tamanho lógico do app no device (`adb shell wm size`); restaurado ao final | device |
+| `--click SEL[:t[:settle]]` | Toca o widget em `SEL` antes de capturar (repetível) — revela modais/dropdowns | — |
+| `--type SEL:text` | Toca `SEL` (foca) e digita `text` antes de capturar (repetível) | — |
+| `--action spec` | Forma **ordenada** p/ fluxos mistos (repetível): `click:<sel>[:t[:settle]]` · `type:<sel>:<text>` · `hover`/`upload` falham (web-only) | — |
 
 Campos do nó: `tag` (classe do widget, ex. `Text`, `ElevatedButton`),
 `selector`/`path` (breadcrumb de widgets, ex. `Center > Text[0]`), `rect`
 (tamanho do render object + offset acumulado do `parentData`), `styles`
 agrupadas (layout/typography/visual/box-model) com cores Flutter normalizadas
 para `#rrggbb`, e o facet `contrast` derivado compartilhado. Antes da captura
-as animações são congeladas (`ext.flutter.timeDilation`) para determinismo.
+as animações são congeladas (`ext.flutter.timeDilation`) para determinismo e
+restauradas ao final (o app não fica travado). Com ações, o toque é feito pela
+extensão **Flutter Driver** — o app precisa chamar `enableFlutterDriverExtension()`
+em `main()` e ter `flutter_driver` em `dev_dependencies` (ver
+[`docs/flutter.md`](flutter.md#51-ações-de-interação-tap--type)); sem isso a
+ação falha com mensagem clara.
 **Limitações:** apenas builds debug; `rect` em coordenadas do device (não
 viewport CSS); widgets sem render box ficam sem `rect`.
 
@@ -188,6 +196,13 @@ que pode só existir após o passo anterior.
 | `type` | `type:#q:shoes` | foca `#q` e insere `shoes` (anexa; não limpa o campo) |
 | `upload` | `upload:#file:/tmp/foto.jpg` | anexa o arquivo a `#file` (aceita input oculto `display:none`); o browser dispara `change` e o handler real roda |
 
+> **Selectors com `:`** — em `click`/`hover` o selector pode conter dois-pontos
+> (pseudo-classes CSS), e só os campos *finais* numéricos são interpretados como
+> timeout/settle: `click:.btn-group:nth-child(2) .dropdown-toggle:3000` →
+> selector `.btn-group:nth-child(2) .dropdown-toggle`, timeout 3000ms. Em
+> `type`/`upload` o selector é o primeiro token após o nome (o texto/arquivos
+> preservam `:`), então prefira um âncora sem dois-pontos (atributo/`aria-label`)
+> quando o selector teria um.
 > O caminho dos arquivos em `upload` é resolvido **pelo processo do browser** —
 > em container, monte o arquivo lá dentro. O `prepare` do upload não exige
 > visibilidade (inputs de arquivo costumam ser ocultos).
@@ -454,7 +469,7 @@ ambiente: veja [`docker.md`](docker.md).
   # versão específica:
   curl --proto '=https' --tlsv1.2 -sSf \
     https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
-    | VERSION=v0.1.0 sh
+    | VERSION=v0.4.0 sh
   ```
 
 - **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em

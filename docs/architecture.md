@@ -50,11 +50,28 @@ CLI/MCP → FlutterMachine (flutter run/attach --machine) → ws://VM Service UR
   (`ext.flutter.*`) têm envelope duplo (`{"result": {"result": <payload>,
   "type": "_extensionType", ...}}`) que o `VmService::call` desenrola.
 - **Estabilização:** `ext.flutter.timeDilation = 1e6` congela animações
-  (análogo do `STABILIZE_JS`); screenshot via `adb exec-out screencap -p`.
+  (análogo do `STABILIZE_JS`); screenshot via `adb exec-out screencap -p`. O
+  `timeDilation` é restaurado para `1.0` ao final de cada captura (e ao início,
+  defensivo), para o app não ficar congelado — um app congelado trava o pump do
+  driver e as ações seguintes.
+- **Interações (actions):** `FlutterDriver` fala com a extensão **Flutter
+  Driver** (`ext.flutter.driver`) do app e localiza o alvo **dentro do app**
+  (`ByValueKey`/`ByType`/`ByText`, a partir do `selector`/`path` da captura), sem
+  depender de `rect` (filhos de `Flex` têm offset impreciso). `tap`/`enter_text`
+  são os únicos suportados; `hover`/`upload` falham (web-only). Para o pump do
+  driver completar num app ocioso, `keep_frames_alive` instala por `evaluate` na
+  library `main.dart` um loop de `scheduleFrame` + `addPostFrameCallback`. O
+  driver espalha `isError`/`response` no topo do envelope `_extensionType` (sem
+  `result`) — `VmService::call` passa esse shape intacto para o erro não ser
+  engolido.
+- **Viewport:** `ViewportGuard` aplica `adb shell wm size WxH` no device antes
+  do launch (o Flutter relê o `MediaQuery` e relayouta) e restaura o tamanho
+  anterior ao final, inclusive em caminhos de erro (Drop backstop).
 
 Limitações documentadas: só builds **debug** (release não expõe VM Service),
 `rect` em coordenadas do device (não viewport CSS), widgets sem render box
-ficam sem `rect`.
+ficam sem `rect`, e ações exigem emulador **com janela** (o vsync headless não
+produz frames para o pump do driver).
 
 ## Decisões-chave
 

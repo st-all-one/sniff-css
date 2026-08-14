@@ -59,8 +59,11 @@ All steps before the AI are deterministic and cost ~0 tokens.
   Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`). Same
   JSONL model (tag = widget class, colors normalized to `#rrggbb`, WCAG
   contrast derived), so `sniffCSS-diff` / `sniffCSS-check` work by path
-  unchanged. Detail:
-  [`docs/flutter.md`](docs/flutter.md) (setup + usage),
+  unchanged. `--click`/`--type`/`--action` and `--viewport` are supported here
+  too (driven via the Flutter Driver extension + `adb shell wm size`; the app
+  must call `enableFlutterDriverExtension()`; `hover`/`upload` stay web-only).
+  Detail:
+  [`docs/flutter.md`](docs/flutter.md) (setup + usage + real-app checklist),
   [`docs/usage.md`](docs/usage.md#backend-flutterdart---backend-flutter) and
   [`docs/architecture.md`](docs/architecture.md#backend-flutter-sniff-flutter).
 
@@ -103,7 +106,8 @@ deterministic binary. There are three stages plus an MCP server that wraps them:
 2. **Diff** (`sniffCSS-diff`) — byte/number-level diff of two snapshots →
    **only what changed** (`CHANGED` per property, plus `ADDED`/`REMOVED`).
 3. **Checks** (`sniffCSS-check`) — offline rules: uniformity (odd card) +
-   derived WCAG rules (contrast, target size, focus, alt, hidden focusables).
+   derived WCAG/UX rules (contrast, target size, focus, alt, hidden focusables,
+   **occlusion**).
 4. **MCP server** (`sniffCSS-mcp`) — the same stages as tools over stdio, with
    a **snapshot store** on disk so full JSONL never round-trips through the
    LLM context.
@@ -136,9 +140,12 @@ Rules of thumb:
 | No `H1` or skipped levels (H2→H4) | 1.3.1/2.4.6 structure failure. |
 | Interactive `rect` < 24px | 2.5.8 target-size failure. |
 | `display_visible:true` + grade `AA` | Present and accessible, below the fold — **not** a failure. |
+| `occluded == "fail"` | ≥75% of the element is covered by another node painted above it (by `z-index`, else DOM order) — the element is visually **behind** an overlapping element. Layout/visibility regression: the user can't see it even though it's in the DOM. |
+| `occluded == "warn"` | 50–75% covered — partial overlap (hit-target / visibility risk). |
 
 Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
-[`docs/accessibility.md`](docs/accessibility.md).
+[`docs/accessibility.md`](docs/accessibility.md). Occlusion rule:
+[`docs/diff-checks.md`](docs/diff-checks.md).
 
 ---
 
@@ -177,12 +184,20 @@ sniffCSS -u "$URL" -s ".result" --action "click:#open:5000" \
   --action "type:#q:shoes" --action "click:.result-item"    # ordered mixed flow
 sniffCSS -u "$URL" -s "#cropper-wrapper" \
   --action "upload:#media-input:/tmp/pixel.png"             # real file upload
+sniffCSS -u "$URL" -s ".dropdown-menu" --click \
+  ".btn-group:nth-child(2) .dropdown-toggle:3000"           # `:` in selector is OK
 ```
 
 Each action waits for its own target, scrolls it into view and dispatches a
 **real trusted input event**; the wait pipeline then runs against the
 post-interaction DOM. `--stabilize` is re-applied for deterministic snapshots.
 Upload works on visually hidden file inputs (the browser fires `change` itself).
+
+`click`/`hover` selectors **may contain `:`** (pseudo-classes like
+`:nth-child(2)`); only trailing all-digit fields are `timeout_ms`/`settle_ms`.
+For `type`/`upload`, the selector is the first token (text/files keep `:`), so
+prefer an attribute/`aria-label` anchor when that selector would contain a
+colon.
 
 ### Authenticated / restricted captures
 
@@ -253,7 +268,7 @@ tracked in [`CHANGELOG.md`](CHANGELOG.md).
 - `type` inserts text (appends to the focused element); it does not clear the field first.
 - `upload` file paths are resolved **by the browser process** — in a container the files must exist inside it (mount them). Hidden inputs are supported; non-file inputs error out.
 - Session-state export captures `localStorage` only from the current page's origin; sub-origins (CDN hosts) are not represented. Restored cookies are host-scoped (a `.domain` prefix is normalized to host-only).
-- CLI action specs split on `:`, so colon-bearing selectors (`.btn:hover`, `[data-x="a:b"]`) must go through the MCP `actions` object instead of `--click`/`--hover`/`--type`/`--upload` strings.
+- In CLI action strings, `click`/`hover` selectors **may** contain `:` (e.g. `:nth-child(2)` — only trailing `:N` fields are timeout/settle), but `type`/`upload` selectors **cannot** (the first `:` splits selector from text/files). For those, use an attribute/`aria-label` anchor or the MCP `actions` object.
 - **DOM attributes are not captured by default** — the tool is computed-style. Use `--attrs a,b` / MCP `attributes` for the specific attributes you need.
 - **Server-side data is out of scope** — payloads, templates, routes and backend state are not sniffCSS's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.
 - **The tool captures whatever the server serves** — a stale page cache produces a stale snapshot. Clear/invalidate the cache before capturing.

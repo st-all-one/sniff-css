@@ -126,17 +126,23 @@ Só agora o LLM entra. Envie **apenas** `delta.jsonl` + o prompt de
 
 ```jsonc
 {
-  "page_url": "https://exemplo.com/checkout",
-  "status": "REGRESSION_DETECTED",   // IMPROVEMENT | NEUTRAL | REGRESSION_DETECTED
-  "score_change": -15,               // -100..+100
+  "page_url": "https://exemplo.com/checkout",  // ou flutter://<device> para apps Flutter
+  "status": "REGRESSION_DETECTED",             // IMPROVEMENT | NEUTRAL | REGRESSION_DETECTED
+  "score_change": -15,                          // -100..+100
   "summary": "O botão de checkout perdeu contraste e ficou inacessível.",
   "changes_evaluated": [
     {"node_selector":"button[data-testid=\"submit\"]","impact":"NEGATIVE",
      "category":"ACCESSIBILITY",
-     "reason":"Contraste caiu de 4.5:1 para 2.1:1 após mudança de fundo."}
+     "reason":"Contraste caiu de 4.5:1 para 2.1:1 após mudança de fundo.",
+     "measured":{"contrast":{"ratio":2.1,"aa":"fail","aaa":"fail"}}}
   ]
 }
 ```
+
+`node_selector` reproduz o selector do delta (web ou Flutter, ex.
+`FilledButton-[<'counter'>][0]`; para deltas de interação, `__actions[N]`).
+`measured` usa apenas os nomes de campo que a ferramenta emite (contrast,
+aria/ax, noticeability, geometry, uniformity, rule, action, flutter).
 
 Validação mecânica antes de confiar na resposta:
 
@@ -161,10 +167,10 @@ envia `notifications/progress` por fase.
 | Tool | Uso |
 |---|---|
 | `sniffCSS_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**). Para elementos que só existem após uma ação, passe `actions` (array **ordenado** de `{type, selector, text?, files?, timeout_ms?, settle_ms?}`); upload via `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` roda handlers reais. Com `actions`, o snapshot carrega a linha `__actions` (default ON; `effects:false` omite). |
-| `sniffFlutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot). Retorna o `__sniff` handle por padrão; os mesmos `sniffCSS_diff`/`sniffCSS_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
+| `sniffFlutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot, **viewport**, **actions**). `viewport` (`WxH`) aplica `adb shell wm size` e restaura; `actions` (mesmos `ActionInput` do web: `{type, selector, text?, timeout_ms?, settle_ms?}`) dirigem o app pela extensão Flutter Driver antes do freeze/extract — `type:"click"|"type"`; `hover`/`upload` falham (web-only) e exigem `enableFlutterDriverExtension()` no app. Retorna o `__sniff` handle por padrão; os mesmos `sniffCSS_diff`/`sniffCSS_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
 | `sniffCSS_snapshots` | Lista os snapshots persistidos (domain/target/path/created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use para escolher o par base/head. |
 | `sniffCSS_diff` | Diff determinístico — **base_path/head_path** (o modo otimizado) ou base_jsonl/head_jsonl, tolerance, ignore_props, ignore_structural → delta + `__diff_summary`. Quando os dois lados carregam `__actions`, eles também são comparados (`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`). |
-| `sniffCSS_check` | Checks determinísticos offline — **path** ou jsonl, uniform, rules, tolerance → PASS/WARN/FAIL + outliers. |
+| `sniffCSS_check` | Checks determinísticos offline — **path** ou jsonl, uniform, rules, tolerance → PASS/WARN/FAIL + outliers. Inclui a regra `occluded` (elemento **atrás** de outro que o cobre, por `rect` + `z-index`/ordem no DOM). |
 | `sniffCSS_categories` | Categorias aceitas. |
 
 **Defaults de equipe (env do servidor):** `SNIFF_DEFAULT_HEADERS` (headers

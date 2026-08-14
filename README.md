@@ -45,7 +45,7 @@ sniffCSS -u https://example.net/cms -s "main" \
 # Diff determinístico entre duas versões
 sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
 
-# Checks offline: contraste AA, alvos ≥24px, foco, uniformidade
+# Checks offline: contraste AA, alvos ≥24px, foco, uniformidade, oclusão
 sniffCSS-check --input snap.jsonl --uniform --rules
 
 # Evidência visual para review humana (PNG persistido ao lado do snapshot)
@@ -70,7 +70,7 @@ A partir daí, um pipeline determinístico substitui o julgamento visual:
 - **`sniffCSS-diff`** compara duas capturas e devolve **só o que mudou** (não o
   snapshot inteiro);
 - **`sniffCSS-check`** avalia regras offline: contraste (WCAG), alvo de toque,
-  foco, alt, uniformidade;
+  foco, alt, uniformidade e oclusão (elemento coberto por outro que pinta por cima);
 - **`sniffCSS-mcp`** expõe tudo como ferramentas MCP para agentes de IA.
 
 O resultado: você (ou o agente) interpreta **evidências medidas** — como `contrast`
@@ -88,7 +88,7 @@ leitores de tela ou se um `BUTTON` não tem nome acessível.
 |---|---|---|
 | **Conferir um design** | `sniffCSS -u URL -s ".card" --depth 4` | Estilo exato renderizado (px, cor, fonte), sem inspecionar no DevTools |
 | **Caçar uma regressão** | `sniffCSS-diff base.jsonl head.jsonl` | Só o que mudou: um `padding` que alterou 2px ou um card que sumiu |
-| **Acessibilidade (WCAG)** | `sniffCSS-check --input snap.jsonl --rules` | Contraste real medido, alvo ≥24px, foco visível, alt — evidenciado |
+| **Acessibilidade (WCAG)** | `sniffCSS-check --input snap.jsonl --rules` | Contraste real medido, alvo ≥24px, foco visível, alt, elemento atrás de outro (oclusão) — evidenciado |
 | **Review humana** | `sniffCSS -u URL -s SEL --screenshot out.png` | PNG do elemento/página ao lado do snapshot — prova visual para PR/release |
 | **UI que só existe após ação** | `sniffCSS -u URL -s ".modal" --click "#open"` | Modal/dropdown/upload capturado mesmo sem existir no DOM inicial |
 | **Área restrita (auth)** | `sniffCSS -u URL/cms -s "main" --header "X-CMS-AI-Token: <token>"` | Snapshot da página autenticada, sem token exposto na URL |
