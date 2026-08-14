@@ -4,10 +4,25 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-14
 
 ### Added
 
+- **Backend Flutter/Dart nativo** — novo crate `sniff-flutter` captura a árvore
+  de widgets de um app Flutter em emulador/device Android (build **debug**)
+  sobre o Dart VM Service: descoberta via `flutter run/attach --machine`
+  (`vmServiceUri`), extração via `ext.flutter.inspector.*`
+  (`getRootWidgetSummaryTree` + `getLayoutExplorerNode` + `getProperties`),
+  estabilização por `timeDilation` e screenshot via `adb exec-out screencap`.
+  O snapshot sai no **mesmo modelo JSONL** do web (cores Flutter normalizadas
+  para `#rrggbb`, chaves mapeadas para o padrão CSS), então os mesmos
+  `sniffCSS-diff`/`sniffCSS-check` funcionam por path. CLI `--backend flutter`
+  (`--device`/`--avd`/`--project`/`--target`/`--attach`) e tool MCP
+  `sniffFlutter_page`.
+- **`JsonRpcClient` genérico** (`sniff-cdp::jsonrpc`) — o roteamento
+  `{id, result/error}` + eventos do CdpClient foi generalizado para servir
+  tanto CDP quanto o Dart VM Service; `CdpClient` virou um wrapper (API e
+  output web intactos).
 - **Backend auto-inferido do URL** — `--backend` agora tem o default `auto`:
   `sniffCSS -u flutter://emulator-5554 --project DIR --depth N` captura um app
   Flutter sem `--backend`/`--device`/`-s` (o serial sai do host do URL e o
@@ -22,6 +37,49 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   tamanho anterior ao final, inclusive em caminhos de erro
   (`sniff_flutter::ViewportGuard`). Antes a flag era aceita mas silenciosamente
   ignorada no modo Flutter.
+- **Actions no backend Flutter** — `--action`/`--click`/`--type` agora
+  funcionam no modo Flutter dirigindo o app pela extensão **Flutter Driver**
+  (`ext.flutter.driver`): o alvo é localizado **dentro do app** por `ValueKey`
+  (de `selector` como `FilledButton-[<'counter'>][0]`), tipo de widget ou texto,
+  e a captura roda depois, sobre o estado pós-interação (ex. o `AlertDialog`
+  que o clique abriu). Requisito: `enableFlutterDriverExtension()` no `main()`
+  + `flutter_driver` em `dev_dependencies`; `hover`/`upload` são web-only e
+  falham com erro claro. Para isto o driver mantém o app produzindo frames
+  (loop de `scheduleFrame` instalado por `evaluate`) e o `timeDilation` é
+  congelado **depois** das ações e restaurado ao final da captura.
+- **`sniffFlutter_page` com `viewport` e `actions` (MCP)** — o tool Flutter do
+  MCP aceita `viewport` (`WxH`; aplica `adb shell wm size` e restaura) e
+  `actions` (mesmos `ActionInput` do web, executados antes do freeze/extract) —
+  paridade com a CLI.
+- **Guia de teste num app real** — nova seção no
+  [`docs/flutter.md`](docs/flutter.md#6-testar-de-fato-num-app-real-checklist):
+  checklist de preparo do app (driver extension, `INTERNET`, fundo para
+  contraste), subida do emulador com janela, smoke test de captura, teste de
+  ações e diff, e tabela de erros comuns (incluindo a pegadinha das aspas no
+  selector e o emulador headless).
+- **Schema de avaliação IA alinhado ao modelo real** —
+  [`docs/sniffCSS-eval.schema.json`](docs/sniffCSS-eval.schema.json) reescrito:
+  o bloco `measured` agora espelha os facets que a ferramenta emite
+  (`contrast` ratio/aa/aaa/large, `aria`/`ax`, `is_user_noticeable`
+  display_visible/accessibility_grade, `geometry` rect, `uniformity`
+  property/group_norm/value, `rule` check/status, `action` effect/onscreen/
+  distance_from_action, `flutter` tag/accessibility_enabled), o `category`
+  ganhou `INTERACTION` (deltas `ACTION_*` das `__actions`), `node_selector`
+  cobre selectors web **e** Flutter (`FilledButton-[<'counter'>][0]`,
+  `__actions[N]`), e `additionalProperties:false` em todo o schema.
+  [`docs/eval-prompt.md`](docs/eval-prompt.md) e o exemplo do
+  [`docs/ai-usage.md`](docs/ai-usage.md) foram alinhados (pilar de
+  interações, nomes de campo da ferramenta, backend Flutter).
+- **Regra `occluded` no `sniffCSS-check`** — detecta elemento **visualmente
+  atrás** de outro que o cobre: sobreposição de `rect` entre nós não-ancestrais/
+  não-descendentes dentro da árvore capturada, com quem pinta por cima decidido
+  por heurística determinística (`z-index` numérico de `metrics`, senão ordem no
+  DOM). `fail` ≥75% de área coberta por um único nó, `warn` ≥50%. Otimizado por
+  sweep no eixo x (só pares com sobreposição em x são testados em y). Resolve a
+  dificuldade da IA em perceber que um elemento existe mas está coberto por um
+  overlay. (docs: [`docs/diff-checks.md`](docs/diff-checks.md),
+  [`docs/eval-prompt.md`](docs/eval-prompt.md), schema de avaliação —
+  `rule.check` ganhou `occluded`, `SKILL.md`/`README.md`/`llms.txt`).
 
 ### Fixed
 
@@ -48,30 +106,33 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
     (sem ela o app debug não cria sockets e o Dart VM Service nunca sobe —
     `EPERM` no bind) e o fundo `#2563eb` movido para um `ColoredBox` (exposto
     nos diagnostics, diferentemente de `Scaffold.backgroundColor`).
+- **`sniff_flutter::driver` tratava timeout como sucesso** — o `ext.flutter.driver`
+  espalha `isError`/`response` no topo do envelope `_extensionType` (sem chave
+  `result`), e o `unwrap_extension_result` do `vm.rs` descartava o payload para
+  `null`; um `waitFor` que estourava o timeout era reportado como `Ok`. Agora o
+  envelope espalhado passa intacto e erros do driver viram erro. `tap`/
+  `enter_text` também enviam um `timeout` ao comando para que um alvo
+  inexistente falhe com erro em vez de pendurar a captura para sempre.
+- **App Flutter deixado congelado bloqueava ações seguintes** — capturas
+  anteriores setavam `timeDilation` para `1e6` e nunca restauravam; num app
+  congelado o pump do Flutter Driver (`endOfFrame`) nunca completa e o tap
+  estourava em *timeout*. CLI e MCP agora restauram o `timeDilation` ao início
+  (defensivo) e ao final de cada captura.
 - **Testes do backend Flutter alinhados à realidade** — o mock do VM Service
   agora modela o envelope `_extensionType`, o formato novo de cor e as props
-  `size`/`weight`; testes de integração device-gated rodam contra device real
-  via `SNIFF_TEST_DEVICE`.
-
-## [0.4.0] — 2026-08-13
-
-### Added
-
-- **Backend Flutter/Dart nativo** — novo crate `sniff-flutter` captura a árvore
-  de widgets de um app Flutter em emulador/device Android (build **debug**)
-  sobre o Dart VM Service: descoberta via `flutter run/attach --machine`
-  (`vmServiceUri`), extração via `ext.flutter.inspector.*`
-  (`getRootWidgetSummaryTree` + `getLayoutExplorerNode` + `getProperties`),
-  estabilização por `timeDilation` e screenshot via `adb exec-out screencap`.
-  O snapshot sai no **mesmo modelo JSONL** do web (cores Flutter normalizadas
-  para `#rrggbb`, chaves mapeadas para o padrão CSS), então os mesmos
-  `sniffCSS-diff`/`sniffCSS-check` funcionam por path. CLI `--backend flutter`
-  (`--device`/`--avd`/`--project`/`--target`/`--attach`) e tool MCP
-  `sniffFlutter_page`.
-- **`JsonRpcClient` genérico** (`sniff-cdp::jsonrpc`) — o roteamento
-  `{id, result/error}` + eventos do CdpClient foi generalizado para servir
-  tanto CDP quanto o Dart VM Service; `CdpClient` virou um wrapper (API e
-  output web intactos).
+  `size`/`weight`; o mock também responde `getIsolate`/`evaluate`/
+  `ext.flutter.driver` (envelope espalhado com `isError` configurável),
+  cobrindo `is_available`, `keep_frames_alive` e o erro do driver; testes de
+  integração device-gated rodam contra device real via `SNIFF_TEST_DEVICE`.
+- **Parser de ações com `:` no selector** — `--click`/`--action click:` agora
+  aceitam pseudo-classes CSS no selector (`:nth-child(2)`, `:hover`, `:not(...)`):
+  só os campos *finais* numéricos são interpretados como `timeout_ms`/`settle_ms`.
+  Antes, `click:.btn-group:nth-child(2) .dropdown-toggle:3000` falhava com
+  `invalid timeout_ms` (o `splitn(':')` cortava o selector no primeiro `:`).
+  `type`/`upload` preservam `:` no texto/arquivos (o selector continua sendo o
+  primeiro token; documentado que selectors com `:` precisam de âncora sem
+  dois-pontos). (docs: [`docs/usage.md`](docs/usage.md),
+  `SKILL.md`/`llms.txt`).
 
 ## [0.3.1] — 2026-08-13
 
