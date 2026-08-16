@@ -29,7 +29,7 @@ fn uniformity_and_rules_over_inline_snapshot() {
     );
 
     // #212529 on #ffffff is ~14.5:1 -> AA passes. No fail lines.
-    let lines = run_rules(&nodes);
+    let lines = run_rules(&nodes, None);
     let aa_fails = lines.iter().filter(|l| l.status == RuleStatus::Fail);
     assert_eq!(aa_fails.count(), 0, "high-contrast snapshot must not fail");
     let (_, _, fail) = summarize(&lines);
@@ -49,7 +49,7 @@ fn low_contrast_snapshot_fails_contrast_aa() {
             "background-image": "none"
         }),
     );
-    let lines = run_rules(&[third]);
+    let lines = run_rules(&[third], None);
     let aa = lines.iter().find(|l| l.check == "contrast-aa").unwrap();
     assert_eq!(aa.status, RuleStatus::Fail);
     assert!(aa.evidence.contains("ratio"));

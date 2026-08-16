@@ -156,7 +156,7 @@
                 "properties": {
                   "check": {
                     "type": "string",
-                    "enum": ["contrast-aa", "target-size", "focus-indicator", "hidden-focusable", "empty-alt-image", "occluded"]
+                    "enum": ["contrast-aa", "contrast-aaa", "target-size", "focus-indicator", "hidden-focusable", "empty-alt-image", "occluded", "sticky-in-overflow-hidden", "fixed-broken-by-transform", "absolute-without-insets", "interactive-pointer-events-none", "aria-hidden-focusable", "ellipsis-without-clip", "width-100-with-padding", "small-text", "line-height-below-font-size", "z-index-on-static", "control-without-name", "text-not-selectable", "infinite-fast-animation", "transition-all", "overflow-x-hidden-on-body", "horizontal-overflow", "backdrop-over-modal"]
                   },
                   "status": {
                     "type": "string",

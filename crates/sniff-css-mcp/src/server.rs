@@ -948,7 +948,7 @@ impl SniffMcpServer {
         let mut uniformity_outliers = 0usize;
 
         if request.rules {
-            let lines = sniff_css_check::rules::run_rules(&nodes.nodes);
+            let lines = sniff_css_check::rules::run_rules(&nodes.nodes, nodes.viewport);
             rule_count = lines.len();
             let (pass, warn, fail) = sniff_css_check::rules::summarize(&lines);
             sniff_css_check::rules::write_checks(&mut buf, &lines)
@@ -1045,12 +1045,15 @@ impl SniffMcpServer {
         description = "List the CSS property categories accepted by sniffCSS_page."
     )]
     pub async fn sniff_css_categories(&self) -> Result<String, ErrorData> {
-        Ok(
-            "box-model,layout,typography,visual,transform,animation,interaction,accessibility,all"
-                .to_string(),
-        )
+        Ok(CATEGORIES_LIST.to_string())
     }
 }
+
+/// Comma-separated catalog of CSS property categories accepted by the capture
+/// tools (must match the engine's `StyleCategory` catalog — see
+/// `docs/usage.md` "Categorias disponíveis").
+const CATEGORIES_LIST: &str =
+    "box-model,layout,typography,visual,transform,animation,interaction,accessibility,all";
 
 #[tool_handler]
 impl ServerHandler for SniffMcpServer {
@@ -1182,6 +1185,7 @@ fn build_sniff_config_with(
             include_aria: true,
             include_contrast: request.contrast && !request.full,
             include_ax: (request.include_ax && !request.full) || request.ax_tree,
+            viewport: Some(viewport),
         },
         viewport: Some(viewport),
         include_custom_properties: request.custom_props && !request.full,
@@ -1308,6 +1312,7 @@ fn flutter_sniff_config(url: &str, selector: &str) -> SniffConfig {
             include_aria: true,
             include_contrast: true,
             include_ax: false,
+            viewport: None,
         },
         viewport: None,
         include_custom_properties: false,
@@ -1767,5 +1772,36 @@ mod tests {
         assert!(EVAL_PROMPT.contains("sniffCSS-diff"));
         assert!(EVAL_SCHEMA.contains("SniffEvalResponse"));
         assert!(GOLDEN_RUN.contains("sniffCSS"));
+    }
+
+    #[test]
+    fn categories_lists_all_style_categories() {
+        // The static tool output must stay aligned with the engine's category
+        // catalog (docs/usage.md "Categorias disponíveis") and never drift.
+        let cats: Vec<&str> = CATEGORIES_LIST.split(',').collect();
+        assert_eq!(
+            cats,
+            vec![
+                "box-model",
+                "layout",
+                "typography",
+                "visual",
+                "transform",
+                "animation",
+                "interaction",
+                "accessibility",
+                "all",
+            ],
+            "categories must match the engine catalog"
+        );
+
+        // And every listed category must be a real engine category.
+        for cat in cats {
+            let parsed = sniff_core::properties::parse_category(cat);
+            assert!(
+                parsed.is_some(),
+                "category `{cat}` must parse in sniff-core"
+            );
+        }
     }
 }

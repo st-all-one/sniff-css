@@ -284,6 +284,20 @@ pub fn apply_contrast_all(snaps: &mut [ElementSnapshot]) {
 }
 
 fn apply_contrast_node(snap: &mut ElementSnapshot, inherited: &EffectiveBackground) {
+    // Skip contrast for elements that don't render text directly — the
+    // visible text lives in a descendant (e.g. `<li>` wrapping `<a>`).
+    // Computing contrast on the container gives a misleading result because
+    // the container's `color` may differ from the actual text element's color.
+    let has_text = snap.aria.as_ref().is_none_or(|a| a.has_text);
+    if !has_text {
+        // Still resolve background for children (they may render text).
+        let eff = resolve_background(snap, inherited);
+        let children = &mut snap.children;
+        for child in children.iter_mut() {
+            apply_contrast_node(child, &eff);
+        }
+        return;
+    }
     // Prefer the effective background composited in-page (JS climbs the real
     // DOM, so even a transparent capture root resolves to the page color).
     // Fall back to the tree-walk for snapshots without the field.

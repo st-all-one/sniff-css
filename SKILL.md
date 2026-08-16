@@ -142,6 +142,8 @@ Rules of thumb:
 | `display_visible:true` + grade `AA` | Present and accessible, below the fold — **not** a failure. |
 | `occluded == "fail"` | ≥75% of the element is covered by another node painted above it (by `z-index`, else DOM order) — the element is visually **behind** an overlapping element. Layout/visibility regression: the user can't see it even though it's in the DOM. |
 | `occluded == "warn"` | 50–75% covered — partial overlap (hit-target / visibility risk). |
+| `backdrop-over-modal == "fail"` | A dark translucent scrim (fixed, ~viewport) paints **over** the modal content — the ancestor/descendant case `occluded` skips by design; check the stacking order. |
+| `sticky-in-overflow-hidden` / `fixed-broken-by-transform` / `horizontal-overflow` | Deterministic CSS-positioning bugs: sticky under an `overflow` ancestor, fixed under a transformed ancestor, content past the `__meta.viewport` width. |
 
 Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
 [`docs/accessibility.md`](docs/accessibility.md). Occlusion rule:
@@ -231,7 +233,7 @@ curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
 curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.0 sh
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.1 sh
 ```
 
 Binaries: Linux glibc + musl (x86_64/aarch64), macOS, Windows — per GitHub

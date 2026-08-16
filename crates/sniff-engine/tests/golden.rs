@@ -89,6 +89,10 @@ fn golden_config(url: &str, selector: &str, depth: usize) -> SniffConfig {
             include_aria: true,
             include_contrast: true,
             include_ax: false,
+            viewport: Some(Viewport {
+                width: 1366,
+                height: 768,
+            }),
         },
         viewport: Some(Viewport {
             width: 1366,

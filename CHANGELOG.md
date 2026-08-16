@@ -4,6 +4,105 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [0.4.1] — 2026-08-15
+
+### Fixed
+
+- **`--screenshot` no backend web** — o refactor do backend Flutter
+  (`emit`) reconstruía um `SniffOutcome` com `screenshot: None`, descartando
+  os bytes de PNG que o engine já havia capturado via CDP; o arquivo era
+  criado vazio (ou não era criado) na web. Agora o `SniffOutcome` completo
+  (incluindo o screenshot) é repassado ao `emit`.
+- **`contrast-aaa` no `sniffCSS-check`** — bug descoberto na auditoria de
+  regressão: a regra era documentada (`docs/diff-checks.md`, cabeçalho de
+  `rules.rs`) mas **nunca era emitida**; só `contrast-aa` saía. A regra
+  `contrast-aaa` (WCAG 1.4.6: 7:1 texto normal / 4.5:1 texto grande) agora é
+  emitida junto, usando o facet `aaa` que o engine já calculava.
+- **`line-height: normal` falso-positivo** — a regra
+  `line-height-below-font-size` tratava `normal` como `1.2px` (falso alarme em
+  praticamente todo nó); agora resolve `normal` contra o `font-size` (~1.2×).
+- **`backdrop-over-modal` sem falso-positivo** — a primeira implementação
+  sinalizava qualquer conteúdo coberto por um scrim escuro (inclusive a página
+  atrás de um modal real). Como um filho pinta **acima** do fundo do pai por
+  padrão no CSS, a regra final só dispara quando o diálogo pinta **abaixo** do
+  scrim (z-index negativo) — o caso exato que o `occluded` ignora por ser
+  ancestral/descendente.
+- **`occluded` falso-positivo em SVG** — elementos SVG irmãos dentro do mesmo
+  `<svg>` (ex.: `<circle>` coberto por `<path>`) eram flagrados como
+  ocluídos; SVGs renderizam em ordem do documento por design. A regra agora
+  detecta container SVG comum (`same_svg_container`) e pula o par.
+- **`small-text` falso-positivo em `font-size:0`** — a regra flagava
+  elementos com `font-size:0px` (técnica comum para esconder texto); agora
+  pula quando `px <= 0`.
+- **`contrast` falso-positivo em nós sem texto direto** — a regra de contraste
+  computava cor herdada de `<li>` sem texto visível (texto estava no `<a>`
+  filho), gerando ratio errado. Agora `apply_contrast_node` verifica
+  `aria.has_text` e pula contraste em nós sem texto direto, reportando
+  `unknown` em vez de um valor potencialmente incorreto.
+- **`contrast` serialização sempre presente** — o campo `contrast` agora é
+  sempre serializado no JSONL (como `null` quando ausente), garantindo forma
+  consistente entre web e Flutter.
+
+### Added
+
+- **Novas regras de UI/UX no `sniffCSS-check`** — 18 heurísticas
+  determinísticas de erros comuns de CSS, rodam junto do `--rules` (ver
+  [`docs/diff-checks.md`](docs/diff-checks.md)):
+  - posicionamento: `sticky-in-overflow-hidden`, `fixed-broken-by-transform`,
+    `absolute-without-insets`, `z-index-on-static`;
+  - interação: `interactive-pointer-events-none` (fail),
+    `control-without-name`;
+  - acessibilidade: `aria-hidden-focusable` (fail);
+  - texto: `ellipsis-without-clip`, `small-text`,
+    `line-height-below-font-size`, `text-not-selectable`;
+  - imagem: `small-thumbnail` — thumbnail de galeria com `background-image`
+    clicável menor que 150×150px (recomendado para visualização confortável);
+  - layout/perf: `width-100-with-padding`, `overflow-x-hidden-on-body`,
+    `transition-all`, `infinite-fast-animation`;
+  - viewport/modal: `horizontal-overflow` e `backdrop-over-modal` (fail).
+- **`__meta.viewport` no snapshot** — a engine grava o viewport emulado no
+  `__meta` (`{"viewport":{"width":1366,"height":768}}`) em todos os formatos
+  que emitem `__meta`, e o `DiffDocument` (usado pelo `sniffCSS-check`/MCP) o
+  expõe aos checks offline — necessário para `horizontal-overflow` e
+  `backdrop-over-modal`. Goldens regenerados.
+- **Testes de regressão do screenshot** — guardas automatizados contra o bug
+  acima voltar:
+  - unitários no CLI (`emit`) cobrindo bytes de screenshot presentes/ausentes
+    e a flag `--fullpage-screenshot`, para os backends web **e** Flutter;
+  - e2e do binário na web (`--screenshot` e `--fullpage-screenshot` produzem
+    PNG válido, com full-page mais alto que o viewport; auto-skip sem Chrome);
+  - wiring das flags `--screenshot`/`--fullpage-screenshot` → `SniffConfig`
+    nos dois backends;
+  - dispositivo-gated no Flutter (`adb exec-out screencap` devolve PNG,
+    via `SNIFF_TEST_DEVICE`).
+- **Testes de regressão das novas regras** — cobertura unitária (sem Chrome)
+  para cada uma das 18 regras, incluindo os casos de negação
+  (ex.: sticky sem ancestral overflow, descendant acima do scrim, scrim claro,
+  viewport ausente, clipping de ancestral, thumbnail grande, thumbnail
+  não-clicável, SVG irmãos) e o parse das unidades de
+  `line-height`/`duration`/`px`.
+- **Auditoria flag-a-flag** — cobertura de regressão para pontos antes sem
+  teste:
+  - `sniff-core`: parse bem-sucedido de todas as estratégias de `--wait`
+    (`delay`, `network-idle`, `fonts-loaded`, `selector`, `app-flag`), e o
+    round-trip em disco de `--storage-state`/`--save-storage-state`
+    (`write_file`/`from_file`, incluindo erros de leitura/JSON inválido);
+  - `sniffCSS` CLI: wiring de `--attrs`, `--viewport`, `--pretty`,
+    `--no-rect`/`--no-path`/`--no-metrics`/`--no-normalize-colors`/`--no-group`,
+    filtros `--no-visible`/`--min-width`/`--min-height`/`--exclude`, waits via
+    CLI, `--depth`/`--categories`/`--props`/`--pseudo`, merge de headers
+    (`SNIFF_DEFAULT_HEADERS` + `--header` com precedência explícita) e
+    `--chrome`/`--connect`;
+  - `sniffCSS` CLI: `--persist` (layout `sniffCSS/[domain]/...`, `.gitignore`,
+    extensão por formato, `SNIFF_SNAPSHOT_DIR`);
+  - `sniffCSS-diff`: branch `ACTION_REMOVED` de `__actions`, diff de
+    pseudo-elementos e `delta_to_string` (unit), e flags `--tolerance`,
+    `--ignore-props`, `--no-structural`, `--no-actions` no binário;
+  - `sniffCSS-check`: o binário end-to-end (`--input`/`--rules`/`--uniform`/
+    `--tolerance` e o gating `--rules`-só);
+  - `sniffCSS-mcp`: o catálogo `sniffCSS_categories` alinhado às categorias do
+    engine.
+
 ## [0.4.0] — 2026-08-14
 
 ### Added

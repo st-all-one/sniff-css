@@ -366,6 +366,11 @@ pub struct OutputConfig {
     /// Capture the browser-computed accessibility-tree node (`ax`) per
     /// element via the CDP `Accessibility` domain.
     pub include_ax: bool,
+    /// Emulated viewport (width/height) used for the capture, emitted in the
+    /// `__meta` line so offline diff/check tools can reason about
+    /// viewport-relative geometry (e.g. horizontal overflow). `None` omits it
+    /// from the output.
+    pub viewport: Option<Viewport>,
 }
 
 impl Default for OutputConfig {
@@ -389,6 +394,7 @@ impl Default for OutputConfig {
             // the box. Use `--no-contrast`/`--no-ax`/`--full` to disable.
             include_contrast: true,
             include_ax: true,
+            viewport: None,
         }
     }
 }
@@ -783,6 +789,62 @@ mod tests {
         assert!(err.contains("wait format: delay:<ms>"), "got: {err}");
         let err = parse_wait_strategy("bogus:1").unwrap_err().to_string();
         assert!(err.contains("wait format:"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_wait_strategy_success_paths() {
+        assert_eq!(
+            parse_wait_strategy("delay:2000").unwrap(),
+            WaitStrategy::Delay { ms: 2000 }
+        );
+
+        match parse_wait_strategy("network-idle:800:15000").unwrap() {
+            WaitStrategy::NetworkIdle {
+                idle_ms,
+                timeout_ms,
+            } => {
+                assert_eq!(idle_ms, 800);
+                assert_eq!(timeout_ms, 15_000);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        assert!(matches!(
+            parse_wait_strategy("fonts-loaded:10000").unwrap(),
+            WaitStrategy::FontsLoaded { timeout_ms: 10_000 }
+        ));
+
+        match parse_wait_strategy("selector:.card:5000").unwrap() {
+            WaitStrategy::Selector {
+                selector,
+                timeout_ms,
+            } => {
+                assert_eq!(selector, ".card");
+                assert_eq!(timeout_ms, 5000);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        assert!(matches!(
+            parse_wait_strategy("app-flag:__APP_READY__:20000").unwrap(),
+            WaitStrategy::AppFlag {
+                flag,
+                timeout_ms: 20_000
+            } if flag == "__APP_READY__"
+        ));
+
+        // Defaults when trailing timeout is omitted.
+        assert!(matches!(
+            parse_wait_strategy("fonts-loaded").unwrap(),
+            WaitStrategy::FontsLoaded { timeout_ms: 15_000 }
+        ));
+        assert!(matches!(
+            parse_wait_strategy("app-flag:READY").unwrap(),
+            WaitStrategy::AppFlag {
+                timeout_ms: 15_000,
+                ..
+            }
+        ));
     }
 
     #[test]

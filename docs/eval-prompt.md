@@ -35,8 +35,10 @@ B) Estabilidade de layout (CLS/UX): dimensões fixas, position/z-index,
 C) Hierarquia visual / design system: alinhamento a escala (múltiplos de
    4px/8px), unificação de tipografia, fontes não mapeadas.
 D) Evidências de sniffCSS-check: outliers de `uniformity` (instância que desvia
-   da norma do grupo) e `fail`/`warn` de regras (contrast-aa, target-size,
-   focus-indicator, hidden-focusable, empty-alt-image, occluded).
+   da norma do grupo) e `fail`/`warn` de regras (contrast-aa/contrast-aaa,
+   target-size, focus-indicator, hidden-focusable, empty-alt-image, occluded,
+   e erros comuns de UI/UX como sticky-in-overflow-hidden, fixed-broken-by-transform,
+   backdrop-over-modal, horizontal-overflow, etc.).
 E) Interações (deltas `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` das
    `__actions`): o que cada ação revelou/ocultou/moveu e onde — effect,
    onscreen vs out-of-view, `distance_from_action`. Uma interação que mudou de

@@ -134,6 +134,9 @@ fn build_forest(flat: &[(u64, Option<u64>, DiffNode)]) -> Vec<DiffNode> {
 pub struct DiffDocument {
     pub nodes: Vec<DiffNode>,
     pub actions: Vec<Value>,
+    /// Emulated viewport `(width, height)` from the `__meta` line, when the
+    /// capture recorded it (used by viewport-relative offline checks).
+    pub viewport: Option<(f64, f64)>,
 }
 
 /// Load a snapshot JSONL file into a [`DiffDocument`].
@@ -146,7 +149,33 @@ pub fn load_file_doc(path: &Path) -> DiffResult<DiffDocument> {
 pub fn load_str_doc(content: &str) -> DiffResult<DiffDocument> {
     let nodes = load_str(content)?;
     let actions = extract_actions(content);
-    Ok(DiffDocument { nodes, actions })
+    let viewport = extract_viewport(content);
+    Ok(DiffDocument {
+        nodes,
+        actions,
+        viewport,
+    })
+}
+
+/// Collect the `viewport` `(width, height)` from a `__meta` line, when present.
+fn extract_viewport(content: &str) -> Option<(f64, f64)> {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(meta) = v.get("__meta") else {
+            continue;
+        };
+        let vp = meta.get("viewport")?;
+        let width = vp.get("width")?.as_f64()?;
+        let height = vp.get("height")?.as_f64()?;
+        return Some((width, height));
+    }
+    None
 }
 
 /// Collect the `__actions` UI-effect reports embedded in the JSONL.
@@ -435,5 +464,29 @@ mod tests {
         assert_eq!(doc.actions[0]["effect"], "revealed");
         // Plain load_str also skips the __actions line.
         assert_eq!(load_str(&content).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn doc_loading_reads_viewport_from_meta() {
+        let node: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.card", "children": []
+        });
+        let meta = serde_json::json!({
+            "__meta": {"viewport": {"width": 1280, "height": 720}}
+        });
+        let content = format!("{}\n{}\n", line(&meta), line(&node));
+        let doc = load_str_doc(&content).unwrap();
+        assert_eq!(doc.viewport, Some((1280.0, 720.0)));
+        assert_eq!(doc.nodes.len(), 1);
+    }
+
+    #[test]
+    fn doc_loading_viewport_absent_when_no_meta() {
+        let node: Value = serde_json::json!({
+            "id": 1, "tag": "DIV", "selector": "div.card", "children": []
+        });
+        let content = line(&node);
+        let doc = load_str_doc(&content).unwrap();
+        assert_eq!(doc.viewport, None);
     }
 }

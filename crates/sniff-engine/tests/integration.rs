@@ -83,6 +83,10 @@ fn base_config(url: &str, selector: &str) -> SniffConfig {
             include_aria: true,
             include_contrast: false,
             include_ax: false,
+            viewport: Some(sniff_core::Viewport {
+                width: 1366,
+                height: 768,
+            }),
         },
         viewport: Some(sniff_core::Viewport {
             width: 1366,
@@ -1018,7 +1022,13 @@ async fn summary_and_screenshot_are_produced_on_demand() -> SniffResult<()> {
     let text = String::from_utf8(buf).expect("utf8");
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines.len() >= 2, "root + children, got {lines:?}");
-    let root: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    // A leading `__meta` line may carry style_defaults + viewport; the first
+    // node line is the root element.
+    let root_line = lines
+        .iter()
+        .find(|l| !l.contains("\"__meta\""))
+        .expect("a node line after the optional __meta");
+    let root: serde_json::Value = serde_json::from_str(root_line).unwrap();
     assert_eq!(root["tag"], "DIV");
     assert!(root.get("styles").is_none(), "summary omits styles");
     assert_eq!(root["rect"]["width"].as_f64(), Some(332.0));

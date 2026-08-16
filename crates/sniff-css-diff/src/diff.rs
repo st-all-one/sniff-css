@@ -777,6 +777,67 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_element_diff_reports_added_removed_and_changed() {
+        // Nodes carrying `pseudo` maps (::before/::after) must diff per
+        // pseudo-element, including removal and addition.
+        fn node_with_pseudo(selector: &str, pseudo: Option<Map<String, Value>>) -> DiffNode {
+            let mut n = node(selector, None);
+            n.pseudo = pseudo;
+            n
+        }
+        let base = node_with_pseudo(
+            "button.btn",
+            Some(
+                serde_json::json!({
+                    "::before": {"visual": {"content": "\"→\""}}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        );
+        let head = node_with_pseudo(
+            "button.btn",
+            Some(
+                serde_json::json!({
+                    "::before": {"visual": {"content": "\"←\""}},
+                    "::after": {"visual": {"content": "\"x\""}}
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            ),
+        );
+        let (deltas, _) = diff_trees(&[base], &[head], &DiffOptions::default());
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, "CHANGED");
+        let changes = deltas[0].changes.as_ref().unwrap();
+        let pseudo = changes.get("pseudo").expect("pseudo diff present");
+        assert_eq!(pseudo["::before"]["visual"]["content"]["before"], "\"→\"");
+        assert_eq!(pseudo["::after"]["visual"]["content"]["after"], "\"x\"");
+
+        // Removing the whole pseudo map must also diff.
+        let (deltas, _) = diff_trees(
+            &[node_with_pseudo(
+                "button.btn",
+                Some(
+                    serde_json::json!({"::before": {"visual": {"content": "\"→\""}}})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )],
+            &[node_with_pseudo("button.btn", None)],
+            &DiffOptions::default(),
+        );
+        assert_eq!(deltas.len(), 1);
+        assert!(
+            deltas[0].changes.as_ref().unwrap().get("pseudo").is_some(),
+            "removed pseudo must still diff"
+        );
+    }
+
+    #[test]
     fn beyond_tolerance_is_changed() {
         let a = node("div.card", box_width("44px"));
         let b = node("div.card", box_width("46px"));
@@ -1129,6 +1190,35 @@ mod tests {
         );
         assert_eq!(deltas.len(), 1);
         assert_eq!(deltas[0].status, "ACTION_ADDED");
+        assert_eq!(stats.actions_changed, 1);
+    }
+
+    #[test]
+    fn removed_action_step_is_reported_as_removed() {
+        // The reverse regression: a step that existed in the base snapshot but
+        // disappeared in the head must surface as ACTION_REMOVED (the
+        // `(Some(b), None)` branch was previously untested).
+        let mut deltas = Vec::new();
+        let mut stats = DiffStats::default();
+        diff_actions(
+            &[action(0, "revealed", 8.0)],
+            &[],
+            &DiffOptions::default(),
+            &mut deltas,
+            &mut stats,
+        );
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].status, "ACTION_REMOVED");
+        assert_eq!(deltas[0].selector, "action[0]");
+        let snapshot = deltas[0].snapshot.as_ref().unwrap();
+        assert_eq!(
+            snapshot["before"]["effect"], "revealed",
+            "removed action must carry the base entry: {snapshot}"
+        );
+        assert!(
+            snapshot["after"].is_null(),
+            "removed action has no head side: {snapshot}"
+        );
         assert_eq!(stats.actions_changed, 1);
     }
 

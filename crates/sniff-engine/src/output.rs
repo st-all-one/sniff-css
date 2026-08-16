@@ -134,6 +134,8 @@ fn node_to_json(
             "contrast".into(),
             serde_json::to_value(contrast).unwrap_or(Value::Null),
         );
+    } else {
+        obj.insert("contrast".into(), Value::Null);
     }
     if let Some(ax) = &snap.ax {
         obj.insert("ax".into(), serde_json::to_value(ax).unwrap_or(Value::Null));
@@ -533,7 +535,7 @@ pub fn write_output<W: Write>(
 
     match config.format {
         OutputFormat::JsonLines => {
-            emit_meta_line(writer, &global, &defaults)?;
+            emit_meta_line(writer, &global, &defaults, config.viewport.as_ref())?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             for snap in &outcome.snapshots {
@@ -547,7 +549,7 @@ pub fn write_output<W: Write>(
             }
         }
         OutputFormat::JsonLinesFlat => {
-            emit_meta_line(writer, &global, &defaults)?;
+            emit_meta_line(writer, &global, &defaults, config.viewport.as_ref())?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             let mut nodes = Vec::new();
@@ -575,6 +577,7 @@ pub fn write_output<W: Write>(
                 || !defaults.is_empty()
                 || outcome.ax_tree.is_some()
                 || outcome.actions.is_some()
+                || config.viewport.is_some()
             {
                 let mut root = Map::new();
                 let mut meta = Map::new();
@@ -585,6 +588,12 @@ pub fn write_output<W: Write>(
                 }
                 if !defaults.is_empty() {
                     meta.insert("style_defaults".into(), Value::Object(defaults.clone()));
+                }
+                if let Some(vp) = config.viewport {
+                    meta.insert(
+                        "viewport".into(),
+                        serde_json::json!({"width": vp.width, "height": vp.height}),
+                    );
                 }
                 if !meta.is_empty() {
                     root.insert("__meta".into(), Value::Object(meta));
@@ -630,11 +639,19 @@ pub fn write_output<W: Write>(
             } else {
                 Map::new()
             };
-            if !css_defaults.is_empty() {
+            if !css_defaults.is_empty() || config.viewport.is_some() {
                 let meta_line = serde_json::to_string(&Value::Object({
                     let mut m = Map::new();
                     let mut meta = Map::new();
-                    meta.insert("style_defaults".into(), Value::Object(css_defaults.clone()));
+                    if !css_defaults.is_empty() {
+                        meta.insert("style_defaults".into(), Value::Object(css_defaults.clone()));
+                    }
+                    if let Some(vp) = config.viewport {
+                        meta.insert(
+                            "viewport".into(),
+                            serde_json::json!({"width": vp.width, "height": vp.height}),
+                        );
+                    }
                     m.insert("__meta".into(), Value::Object(meta));
                     m
                 }))
@@ -880,6 +897,7 @@ fn emit_meta_line<W: Write>(
     writer: &mut W,
     global: &Option<HashMap<String, String>>,
     defaults: &Map<String, Value>,
+    viewport: Option<&sniff_core::config::Viewport>,
 ) -> SniffResult<()> {
     let mut meta = Map::new();
     if let Some(vars) = global
@@ -889,6 +907,12 @@ fn emit_meta_line<W: Write>(
     }
     if !defaults.is_empty() {
         meta.insert("style_defaults".into(), Value::Object(defaults.clone()));
+    }
+    if let Some(vp) = viewport {
+        meta.insert(
+            "viewport".into(),
+            serde_json::json!({"width": vp.width, "height": vp.height}),
+        );
     }
     if meta.is_empty() {
         return Ok(());
@@ -1092,6 +1116,50 @@ mod tests {
         );
         let node: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(node["tag"], "SPAN");
+    }
+
+    #[test]
+    fn meta_line_emits_viewport_when_configured() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let cfg = OutputConfig {
+            viewport: Some(sniff_core::config::Viewport {
+                width: 1280,
+                height: 720,
+            }),
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let meta: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(meta["__meta"]["viewport"]["width"], 1280);
+        assert_eq!(meta["__meta"]["viewport"]["height"], 720);
+    }
+
+    #[test]
+    fn meta_line_omits_viewport_when_not_configured() {
+        let outcome = crate::extractor::SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: None,
+            actions: None,
+            screenshot: None,
+        };
+        let cfg = OutputConfig {
+            compact: true,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let meta: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert!(meta["__meta"].get("viewport").is_none());
     }
 
     #[test]

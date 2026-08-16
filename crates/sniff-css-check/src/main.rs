@@ -15,7 +15,7 @@ use anyhow::Context;
 use clap::Parser;
 use sniff_css_check::rules::{self, summarize, write_checks};
 use sniff_css_check::uniformity::check_uniformity;
-use sniff_css_diff::load_file;
+use sniff_css_diff::load_file_doc;
 use std::io::Write;
 
 #[derive(Debug, Parser)]
@@ -47,7 +47,8 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let nodes = load_file(&cli.input).context("loading snapshot")?;
+    let doc = load_file_doc(&cli.input).context("loading snapshot")?;
+    let nodes = doc.nodes;
 
     let run_uniform = cli.uniform || !cli.rules;
     let run_rules = cli.rules || !cli.uniform;
@@ -59,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     let mut uniformity_outliers = 0usize;
 
     if run_rules {
-        let lines = rules::run_rules(&nodes);
+        let lines = rules::run_rules(&nodes, doc.viewport);
         rule_count = lines.len();
         let (pass, warn, fail) = summarize(&lines);
         write_checks(&mut out, &lines)?;

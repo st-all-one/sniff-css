@@ -420,35 +420,21 @@ impl Cli {
 
         // Headers: `SNIFF_DEFAULT_HEADERS` (JSON object) first, explicit
         // `--header` flags win on name collision.
-        let mut headers: Vec<(String, String)> = Vec::new();
-        if let Ok(raw) = std::env::var("SNIFF_DEFAULT_HEADERS")
-            && !raw.trim().is_empty()
-        {
-            let map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
-                .map_err(|e| {
-                    SniffError::Other(format!(
-                        "invalid SNIFF_DEFAULT_HEADERS (expected a JSON object): {e}"
-                    ))
-                })?;
-            for (k, v) in map {
-                if let Some(v) = v.as_str() {
-                    headers.push((k, v.to_string()));
-                }
-            }
-        }
-        for spec in &self.header {
-            let (k, v) = parse_header(spec)?;
-            match headers.iter_mut().find(|(existing, _)| existing == &k) {
-                Some(existing) => existing.1 = v,
-                None => headers.push((k, v)),
-            }
-        }
+        let headers = merge_headers(std::env::var("SNIFF_DEFAULT_HEADERS").ok(), &self.header)?;
 
         let compact = self.compact && !self.no_compact && !self.full;
         let include_contrast = self.contrast && !self.no_contrast && !self.full;
         let include_ax = (self.ax && !self.no_ax && !self.full) || self.ax_tree;
         let include_custom_properties = self.custom_props && !self.no_custom_props && !self.full;
         let stabilize = self.stabilize && !self.no_stabilize && !self.full;
+
+        let viewport = match self.viewport {
+            Some(v) => Some(Viewport::parse_cli(&v)?),
+            None => Some(Viewport {
+                width: 1366,
+                height: 768,
+            }),
+        };
 
         let output = OutputConfig {
             format: if self.no_summary {
@@ -470,6 +456,7 @@ impl Cli {
             include_aria: !self.no_aria,
             include_contrast,
             include_ax,
+            viewport,
         };
 
         let filter = ElementFilter {
@@ -477,14 +464,6 @@ impl Cli {
             min_width: self.min_width,
             min_height: self.min_height,
             exclude_selectors: self.exclude,
-        };
-
-        let viewport = match self.viewport {
-            Some(v) => Some(Viewport::parse_cli(&v)?),
-            None => Some(Viewport {
-                width: 1366,
-                height: 768,
-            }),
         };
 
         Ok(SniffConfig {
@@ -532,11 +511,44 @@ fn parse_header(spec: &str) -> SniffResult<(String, String)> {
     Ok((name.to_string(), value.to_string()))
 }
 
+/// Merge the `SNIFF_DEFAULT_HEADERS` env JSON object with explicit `--header`
+/// flags: env values come first, explicit flags win on name collision.
+fn merge_headers(
+    env_raw: Option<String>,
+    explicit: &[String],
+) -> SniffResult<Vec<(String, String)>> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if let Some(raw) = env_raw
+        && !raw.trim().is_empty()
+    {
+        let map = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw)
+            .map_err(|e| {
+                SniffError::Other(format!(
+                    "invalid SNIFF_DEFAULT_HEADERS (expected a JSON object): {e}"
+                ))
+            })?;
+        for (k, v) in map {
+            if let Some(v) = v.as_str() {
+                headers.push((k, v.to_string()));
+            }
+        }
+    }
+    for spec in explicit {
+        let (k, v) = parse_header(spec)?;
+        match headers.iter_mut().find(|(existing, _)| existing == &k) {
+            Some(existing) => existing.1 = v,
+            None => headers.push((k, v)),
+        }
+    }
+    Ok(headers)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use sniff_core::Action;
     use sniff_core::ReadyCondition;
+    use sniff_core::WaitStrategy;
     use sniff_core::properties::StyleCategory;
 
     #[test]
@@ -1345,5 +1357,265 @@ mod tests {
         assert!(cfg.storage_state_path.is_none());
         assert!(cfg.save_storage_state.is_none());
         assert!(cfg.headers.is_empty());
+    }
+
+    #[test]
+    fn screenshot_flags_reach_config_on_web() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--screenshot",
+            "out.png",
+            "--fullpage-screenshot",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.screenshot, "--screenshot must enable capture");
+        assert!(
+            cfg.screenshot_full_page,
+            "--fullpage-screenshot must flow to config"
+        );
+    }
+
+    #[test]
+    fn screenshot_flags_reach_config_on_flutter() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "flutter://emulator-5554",
+            "--project",
+            "/tmp/app",
+            "--screenshot",
+            "out.png",
+            "--fullpage-screenshot",
+        ])
+        .unwrap();
+        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        let cfg = cli.into_config().unwrap();
+        assert!(
+            cfg.screenshot,
+            "--screenshot must enable capture on flutter"
+        );
+        assert!(
+            cfg.screenshot_full_page,
+            "--fullpage-screenshot must flow to config on flutter"
+        );
+    }
+
+    #[test]
+    fn attrs_flag_maps_to_config_attributes() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "form",
+            "--attrs",
+            "name,value",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(
+            cfg.attributes,
+            vec!["name".to_string(), "value".to_string()]
+        );
+    }
+
+    #[test]
+    fn attrs_flag_absent_by_default() {
+        let cli =
+            Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", "form"]).unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.attributes.is_empty());
+    }
+
+    #[test]
+    fn viewport_flag_maps_to_config_viewport() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--viewport",
+            "1280x720",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(
+            cfg.viewport,
+            Some(Viewport {
+                width: 1280,
+                height: 720
+            })
+        );
+    }
+
+    #[test]
+    fn output_field_no_flags_override_defaults() {
+        // --pretty/--no-rect/--no-path/--no-metrics/--no-normalize-colors/
+        // --no-group must each flip the matching OutputConfig field while the
+        // rest stay at their defaults.
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--pretty",
+            "--no-rect",
+            "--no-path",
+            "--no-metrics",
+            "--no-normalize-colors",
+            "--no-group",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.output.pretty);
+        assert!(!cfg.output.include_rect);
+        assert!(!cfg.output.include_path);
+        assert!(!cfg.output.include_metrics);
+        assert!(!cfg.output.normalize_colors);
+        assert!(!cfg.output.group_by_category);
+        // Untouched fields keep their defaults.
+        assert!(cfg.output.include_visibility);
+        assert!(cfg.output.include_style_hash);
+        assert!(cfg.output.include_aria);
+    }
+
+    #[test]
+    fn filter_flags_map_to_element_filter() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--no-visible",
+            "--min-width",
+            "100",
+            "--min-height",
+            "50",
+            "--exclude",
+            ".ads",
+            "--exclude",
+            ".banner",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(!cfg.filter.visible);
+        assert_eq!(cfg.filter.min_width, Some(100.0));
+        assert_eq!(cfg.filter.min_height, Some(50.0));
+        assert_eq!(cfg.filter.exclude_selectors, vec![".ads", ".banner"]);
+    }
+
+    #[test]
+    fn wait_flags_parse_through_cli() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--wait",
+            "delay:500",
+            "--wait",
+            "network-idle:300:10000",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.wait.len(), 2);
+        assert!(matches!(&cfg.wait[0], WaitStrategy::Delay { ms: 500 }));
+        assert!(matches!(
+            &cfg.wait[1],
+            WaitStrategy::NetworkIdle {
+                idle_ms: 300,
+                timeout_ms: 10_000
+            }
+        ));
+    }
+
+    #[test]
+    fn depth_categories_props_and_pseudo_reach_config() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--depth",
+            "3",
+            "--categories",
+            "box-model,typography",
+            "--props",
+            "accent-color,caret-color",
+            "--pseudo",
+            "::before,::after",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.depth, 3);
+        assert_eq!(
+            cfg.categories,
+            vec![StyleCategory::BoxModel, StyleCategory::Typography]
+        );
+        assert_eq!(cfg.custom_properties, vec!["accent-color", "caret-color"]);
+        assert_eq!(cfg.pseudo_elements, vec!["::before", "::after"]);
+    }
+
+    #[test]
+    fn header_env_defaults_merge_and_explicit_wins() {
+        // SNIFF_DEFAULT_HEADERS (JSON) provides base headers; an explicit
+        // `--header` on the same name overrides it; distinct headers both
+        // survive.
+        let env = r#"{"X-CMS-AI-Token":"env-token","Accept-Language":"pt-BR"}"#;
+        let explicit = vec!["X-CMS-AI-Token: cli-token".to_string()];
+        let merged = merge_headers(Some(env.to_string()), &explicit).unwrap();
+        assert_eq!(
+            merged,
+            vec![
+                ("X-CMS-AI-Token".to_string(), "cli-token".to_string()),
+                ("Accept-Language".to_string(), "pt-BR".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn header_env_empty_and_unset_are_noops() {
+        assert_eq!(
+            merge_headers(None, &[]).unwrap(),
+            Vec::<(String, String)>::new()
+        );
+        assert_eq!(
+            merge_headers(Some("  ".to_string()), &["X-Foo: bar".to_string()]).unwrap(),
+            vec![("X-Foo".to_string(), "bar".to_string())]
+        );
+    }
+
+    #[test]
+    fn header_env_invalid_json_errors() {
+        let err = merge_headers(Some("not-json".to_string()), &[]).unwrap_err();
+        assert!(err.to_string().contains("invalid SNIFF_DEFAULT_HEADERS"));
+    }
+
+    #[test]
+    fn chrome_and_connect_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--chrome",
+            "/usr/bin/chromium",
+            "--connect",
+            "http://127.0.0.1:9222",
+        ])
+        .unwrap();
+        assert_eq!(cli.chrome.as_deref(), Some("/usr/bin/chromium"));
+        assert_eq!(cli.connect.as_deref(), Some("http://127.0.0.1:9222"));
     }
 }

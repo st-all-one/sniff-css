@@ -318,4 +318,32 @@ mod tests {
         assert_eq!(state.origins.len(), 1);
         assert_eq!(state.origins[0].local_storage[0].value, "v");
     }
+
+    #[test]
+    fn file_round_trip_preserves_state() {
+        // The full --save-storage-state / --storage-state loop: write to a
+        // temp file (atomic tmp+rename), read it back, and get the same
+        // cookies + localStorage.
+        let state = sample();
+        let path = std::env::temp_dir().join(format!("sniffcss-state-{}.json", std::process::id()));
+        let path = path.to_str().unwrap();
+        state.write_file(path).unwrap();
+        assert!(!path.contains(".tmp"));
+        let back = StorageState::from_file(path).unwrap();
+        assert_eq!(state, back);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn from_file_reports_clear_error_on_missing_or_invalid() {
+        let err = StorageState::from_file("/nonexistent/sniffcss-state.json").unwrap_err();
+        assert!(err.to_string().contains("cannot read storage state"));
+
+        let path = std::env::temp_dir().join(format!("sniffcss-bad-{}.json", std::process::id()));
+        let path = path.to_str().unwrap();
+        std::fs::write(path, b"not json").unwrap();
+        let err = StorageState::from_file(path).unwrap_err();
+        assert!(err.to_string().contains("invalid storage state"));
+        let _ = std::fs::remove_file(path);
+    }
 }

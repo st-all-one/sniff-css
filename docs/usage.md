@@ -408,6 +408,14 @@ estilos efetivos completos.
 > `__meta.style_defaults` vale o valor global. Use `--no-compact`/`--full` para
 > nós totalmente autocontidos.
 
+### `__meta.viewport`
+
+O `__meta` também carrega o **viewport emulado** da captura
+(`{"viewport":{"width":1366,"height":768}}`) em todos os formatos que emitem
+`__meta`. Os checks offline usam isso para regras relativas à tela, como
+`horizontal-overflow` (conteúdo que ultrapassa a viewport) e
+`backdrop-over-modal` (backdrop escuro cobrindo o modal).
+
 ## Screenshot (`--screenshot`)
 
 Complementa o snapshot calculado com o "como a página realmente está" no estado
@@ -469,7 +477,7 @@ ambiente: veja [`docker.md`](docker.md).
   # versão específica:
   curl --proto '=https' --tlsv1.2 -sSf \
     https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
-    | VERSION=v0.4.0 sh
+    | VERSION=v0.4.1 sh
   ```
 
 - **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em

@@ -34,6 +34,7 @@ fn jsonl_of(roots: Vec<sniff_flutter::ElementSnapshot>) -> String {
         include_aria: true,
         include_contrast: true,
         include_ax: false,
+        viewport: None,
     };
     let mut buf = Vec::new();
     sniff_engine::write_output(&mut buf, &outcome, &config).expect("serialize");

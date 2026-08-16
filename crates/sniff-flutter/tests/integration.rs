@@ -5,7 +5,7 @@
 //! `require_chrome` pattern of sniff-engine. Set `SNIFF_TEST_DEVICE` to an
 //! `adb` serial (e.g. `emulator-5554`) to run the device-gated tests.
 
-use sniff_flutter::{FlutterMachine, list_devices};
+use sniff_flutter::{EmulatorProcess, FlutterMachine, list_devices};
 
 #[tokio::test]
 async fn flutter_and_adb_probes_do_not_panic() {
@@ -54,4 +54,35 @@ async fn machine_discovery_against_real_device() {
             eprintln!("skipping: no debug Flutter app to attach on {device}: {e}");
         }
     }
+}
+
+/// The Flutter backend's screenshot (`adb exec-out screencap -p`) must return
+/// a valid PNG — the analogue of the web `Page.captureScreenshot` path that
+/// regressed in the CLI. Device-gated like the other flutter integration
+/// tests; runs with the same device used for `machine_discovery_against_real_device`.
+#[tokio::test]
+async fn screenshot_via_adb_returns_png() {
+    if !sniff_flutter::is_adb_available() {
+        eprintln!("skipping: adb not on PATH");
+        return;
+    }
+    let Some(device) = std::env::var("SNIFF_TEST_DEVICE").ok() else {
+        eprintln!("skipping: set SNIFF_TEST_DEVICE=<adb serial> to run device tests");
+        return;
+    };
+    let emulator = EmulatorProcess::attach(&device).expect("wrap serial");
+    let bytes = match emulator.screenshot().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("skipping: adb screencap failed on {device}: {e}");
+            return;
+        }
+    };
+    assert!(!bytes.is_empty(), "screencap returned no bytes");
+    assert_eq!(
+        &bytes[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "flutter screenshot must be a PNG (got {} bytes)",
+        bytes.len()
+    );
 }

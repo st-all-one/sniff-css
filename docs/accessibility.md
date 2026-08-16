@@ -59,12 +59,13 @@ sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
 ### 2. Regras determinísticas
 
 ```bash
-sniffCSS-check --input main.jsonl  --rules     # contrast-aa, target-size, focus-indicator, hidden-focusable, empty-alt-image
+sniffCSS-check --input main.jsonl  --rules     # contrast-aa/contrast-aaa, target-size, focus-indicator, hidden-focusable, empty-alt-image, aria-hidden-focusable, + erros comuns de UI/UX
 sniffCSS-check --input body.jsonl  --uniform   # o "card estranho" entre irmãos
 ```
 
 `--rules` usa o facet `contrast` **medido pela engine** (fundo efetivo
-resolvido): `fail` é falha real de AA, `warn` é fundo-imagem (revisão manual).
+resolvido): `fail` é falha real de AA/AAA, `warn` é fundo-imagem (revisão
+manual).
 
 ### 3. Leitura rápida dos resultados (jq)
 
