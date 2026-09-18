@@ -1,12 +1,15 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # sniffCSS installer — estilo `curl | sh` (como o rustup).
 #
 # Baixa os binários pré-compilados do GitHub Release (latest por padrão, ou
 # VERSION=vX.Y.Z), verifica o checksum SHA-256 e instala em ~/.local/bin.
 #
+# Compatível com POSIX sh (dash, ash, bash, zsh) — não depende de arrays nem
+# de `pipefail`, pois o comando documentado é `curl ... | sh`.
+#
 # Uso:
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.0 sh
+#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.1 sh
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #
 # Variáveis de ambiente:
@@ -15,11 +18,11 @@
 #   SNIFF_TARGET  sobrescreve o target triple detectado (ex.: x86_64-unknown-linux-gnu)
 #   SNIFF_REPO    owner/repo do GitHub (default: st-all-one/sniff-css; útil para testar)
 #   SNIFF_BASE_URL  base URL para download (default: https://github.com; útil para testar)
-set -euo pipefail
+set -eu
 
 REPO="${SNIFF_REPO:-st-all-one/sniff-css}"
 BASE_URL_ROOT="${SNIFF_BASE_URL:-https://github.com}"
-BINARIES=(sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp)
+BINARIES="sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${VERSION:-latest}"
 
@@ -68,7 +71,7 @@ detect_target() {
 # ── resolução da versão ──────────────────────────────────────────────────────
 
 resolve_version() {
-    if [[ "$VERSION" != "latest" ]]; then
+    if [ "$VERSION" != "latest" ]; then
         echo "$VERSION"
         return
     fi
@@ -76,7 +79,8 @@ resolve_version() {
     local effective
     effective="$(curl -fsSL -I -o /dev/null -w '%{url_effective}' "${BASE_URL_ROOT}/${REPO}/releases/latest")"
     effective="${effective##*/tag/}"
-    [[ -n "$effective" && "$effective" != "https://github.com/" ]] || err "Falha ao resolver a versão latest"
+    [ -n "$effective" ] && [ "$effective" != "https://github.com/" ] \
+        || err "Falha ao resolver a versão latest"
     echo "$effective"
 }
 
@@ -87,19 +91,27 @@ resolve_version() {
 # (`install` substitui o binário antigo), então basta re-rodar o instalador.
 current_version() {
     local bin="$INSTALL_DIR/sniffCSS"
-    [[ -x "$bin" ]] || return 0
+    [ -x "$bin" ] || return 0
     "$bin" --version 2>/dev/null | awk '{print $NF}'
 }
 
 # Comparação semver simples (X.Y.Z); retorna 0 quando $1 > $2.
 version_gt() {
-    [[ "$1" == "$2" ]] && return 1
-    local IFS=. i
-    local a=($1) b=($2)
-    for i in 0 1 2; do
-        [[ "${a[$i]:-0}" -gt "${b[$i]:-0}" ]] && return 0
-        [[ "${a[$i]:-0}" -lt "${b[$i]:-0}" ]] && return 1
-    done
+    local va="$1" vb="$2"
+    [ "$va" = "$vb" ] && return 1
+    local IFS=.
+    local a1 a2 a3 b1 b2 b3
+    # shellcheck disable=SC2086  # divisão intencional por IFS="."
+    set -- $va
+    a1="${1:-0}"; a2="${2:-0}"; a3="${3:-0}"
+    # shellcheck disable=SC2086
+    set -- $vb
+    b1="${1:-0}"; b2="${2:-0}"; b3="${3:-0}"
+    [ "$a1" -gt "$b1" ] && return 0
+    [ "$a1" -lt "$b1" ] && return 1
+    [ "$a2" -gt "$b2" ] && return 0
+    [ "$a2" -lt "$b2" ] && return 1
+    [ "$a3" -gt "$b3" ] && return 0
     return 1
 }
 
@@ -107,9 +119,9 @@ version_gt() {
 check_upgrade() {
     local installed
     installed="$(current_version)"
-    [[ -n "$installed" ]] || return 0
+    [ -n "$installed" ] || return 0
 
-    if [[ "$installed" == "${VERSION#v}" ]]; then
+    if [ "$installed" = "${VERSION#v}" ]; then
         ok "sniffCSS ${VERSION} já instalado em ${INSTALL_DIR} — nada a fazer."
         exit 0
     fi
@@ -122,23 +134,38 @@ check_upgrade() {
 
 # ── PATH ─────────────────────────────────────────────────────────────────────
 
+# Linha de PATH a persistir, apontando para o INSTALL_DIR efetivo. Para o
+# destino default grava `${HOME}/.local/bin` (expande em qualquer shell);
+# para destinos customizados grava o caminho literal.
+path_line() {
+    case "$INSTALL_DIR" in
+        "${HOME}/.local/bin") echo 'export PATH="${HOME}/.local/bin:${PATH}"' ;;
+        *) echo "export PATH=\"${INSTALL_DIR}:\${PATH}\"" ;;
+    esac
+}
+
 add_path_line() {
     local file="$1"
-    local line='export PATH="${HOME}/.local/bin:${PATH}"'
-    local marker="# --- sniffCSS path ---"
+    local line marker display
+    line="$(path_line)"
+    marker="# --- sniffCSS path ---"
 
-    [[ -f "$file" ]] || return 0
+    [ -f "$file" ] || return 0
     grep -qxF "$line" "$file" 2>/dev/null && return 0
     grep -qxF "$marker" "$file" 2>/dev/null && return 0
 
-    if [[ -s "$file" && "$(tail -c1 "$file" | wc -l)" -eq 0 ]]; then
+    if [ -s "$file" ] && [ "$(tail -c1 "$file" | wc -l)" -eq 0 ]; then
         echo "" >> "$file"
     fi
     {
         echo "$marker"
         echo "$line"
     } >> "$file"
-    ok "PATH adicionado a ${file/$HOME/\~}"
+    display="$file"
+    case "$display" in
+        "$HOME"/*) display="~${display#"$HOME"}" ;;
+    esac
+    ok "PATH adicionado a ${display}"
 }
 
 setup_path() {
@@ -153,7 +180,7 @@ setup_path() {
     add_path_line "${ZDOTDIR:-${HOME}}/.zshenv"
     add_path_line "${ZDOTDIR:-${HOME}}/.zshrc"
     warn "${INSTALL_DIR} foi adicionado aos rc files."
-    warn "Reinicie o shell ou execute: export PATH=\"\${HOME}/.local/bin:\${PATH}\""
+    warn "Reinicie o shell ou execute: export PATH=\"${INSTALL_DIR}:\${PATH}\""
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -171,10 +198,12 @@ info "Instalando sniffCSS ${VERSION} (${TARGET}) em ${INSTALL_DIR}/..."
 check_upgrade
 
 EXT="tar.gz"
-if [[ "$TARGET" == *-pc-windows-* ]]; then
-    EXT="zip"
-    require unzip
-fi
+case "$TARGET" in
+    *-pc-windows-*)
+        EXT="zip"
+        require unzip
+        ;;
+esac
 
 ASSET="sniff-css-${VERSION_NO_V}-${TARGET}.${EXT}"
 BASE_URL="${BASE_URL_ROOT}/${REPO}/releases/download/${VERSION}"
@@ -199,7 +228,7 @@ curl -fsSL -o "${TMP}/sha256sums.txt" "$CHECKSUM_URL" || err "Falha no download 
 ok "Checksum OK"
 
 info "Extraindo binários..."
-if [[ "$EXT" == "zip" ]]; then
+if [ "$EXT" = "zip" ]; then
     unzip -o -q "${TMP}/${ASSET}" -d "$TMP/out"
 else
     mkdir -p "$TMP/out"
@@ -207,10 +236,10 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR"
-for bin in "${BINARIES[@]}"; do
+for bin in $BINARIES; do
     src="$TMP/out/${bin}"
-    [[ "$EXT" == "zip" ]] && src="$TMP/out/${bin}.exe"
-    [[ -f "$src" ]] || err "Binário não encontrado no pacote: ${bin}"
+    [ "$EXT" = "zip" ] && src="$TMP/out/${bin}.exe"
+    [ -f "$src" ] || err "Binário não encontrado no pacote: ${bin}"
     install -m 0755 "$src" "$INSTALL_DIR/$bin"
     ok "Instalado: ${INSTALL_DIR}/${bin}"
 done

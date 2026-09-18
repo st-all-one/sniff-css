@@ -4,6 +4,20 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [Unreleased]
+
+### Fixed
+
+- **`install.sh` em `sh` POSIX** — o comando documentado
+  (`curl ... | sh`) quebrava em distros onde `/bin/sh` é `dash`/`ash`
+  (Debian/Ubuntu/Alpine) com `Syntax error: "(" unexpected`: o script usava
+  arrays bash (`BINARIES=(...)`) e `set -o pipefail`. Reescrito para POSIX sh
+  (sem arrays/`pipefail`), mantendo a ordem de instalação dos binários.
+- **PATH com `INSTALL_DIR` customizado** — o instalador gravava sempre
+  `~/.local/bin` nos rc files, ignorando `INSTALL_DIR`; agora grava o
+  diretório efetivo (e mantém `${HOME}/.local/bin` como forma portátil no
+  caso default).
+
 ## [0.4.1] — 2026-08-15
 
 ### Fixed
