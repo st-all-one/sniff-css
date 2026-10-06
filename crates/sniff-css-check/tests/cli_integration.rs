@@ -2,6 +2,7 @@
 //! `--rules`/`--tolerance` flags exercised end-to-end on a real snapshot file.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const SNAPSHOT: &str = r##"{"id":1,"tag":"DIV","selector":"div.card:nth-child(1)","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"rect":{"x":0,"y":0,"width":300,"height":120},"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
 {"id":2,"tag":"DIV","selector":"div.card:nth-child(2)","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"rect":{"x":0,"y":120,"width":300,"height":120},"aria":{"focusable":false,"has_text":true},"styles":{"box_model":{"width":"300px","height":"120px"},"visual":{"color":"#212529","background-color":"#ffffff","background-image":"none"},"typography":{"font-size":"16px","font-weight":"400"}},"children":[]}
@@ -9,7 +10,12 @@ const SNAPSHOT: &str = r##"{"id":1,"tag":"DIV","selector":"div.card:nth-child(1)
 "##;
 
 fn write_snapshot(name: &str, content: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sniffcss-check-cli-{}", std::process::id()));
+    // Unique dir per call: both tests write `snap.jsonl` and remove their
+    // dir afterwards, so sharing a pid-based path races under the parallel
+    // test runner.
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("sniffcss-check-cli-{}-{}", std::process::id(), n));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, content).unwrap();

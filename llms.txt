@@ -12,6 +12,7 @@
 Things to remember when using sniffCSS:
 
 - Talks to the browser over raw CDP; needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`), or attaches to a running browser via `--connect`.
+- `--ignore-certificate-errors` (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`) captures pages behind a self-signed TLS certificate instead of the browser's "connection is not private" interstitial; works when launching (Chromium flag) and with `--connect` (CDP `Security.setIgnoreCertificateErrors`).
 - Default output is the **summary digest** (token-lean, ~5-10x smaller than full); `--no-summary` emits the full JSONL used by diff/check/jq.
 - **AI-optimized by default**: `-u URL -s SEL` already enables `--compact`, `--custom-props`, `--stabilize`, `--contrast` and `--ax`. `--full` disables all five; `--no-*` give fine control.
 - **Determinism is a contract**: both diff sides must share mode (default+default or `--full`+`--full`, never mixed), viewport, wait strategy and actions.
@@ -62,4 +63,5 @@ sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 ```
 
 - Reveal action-only elements: `sniffCSS -u "$URL" -s ".modal" --click "#open-modal"`.
+- Self-signed HTTPS dev server: `sniffCSS -u https://app.local:3443/home -s "body" --ignore-certificate-errors`.
 - Serve as MCP for AI agents: `sniffCSS-mcp` (stdio, shares one headless Chrome).

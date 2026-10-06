@@ -6,6 +6,17 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
 
 ## [Unreleased]
 
+### Added
+
+- **`--ignore-certificate-errors` (e `SNIFF_IGNORE_CERTIFICATE_ERRORS`)** —
+  captura páginas atrás de certificado TLS self-signed (dev servers tipo
+  `https://app.local:3443`) em vez de fotografar o interstitial "conexão não é
+  particular". No caminho de launch injeta `--ignore-certificate-errors` no
+  Chromium; com `--connect` aplica `Security.setIgnoreCertificateErrors` via
+  CDP antes da navegação, então funciona também em browser já aberto. O
+  servidor MCP lê a mesma env (`SNIFF_IGNORE_CERTIFICATE_ERRORS`) nos dois
+  modos (launch e `SNIFF_CONNECT`).
+
 ### Fixed
 
 - **`install.sh` em `sh` POSIX** — o comando documentado

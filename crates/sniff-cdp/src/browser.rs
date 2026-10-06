@@ -57,31 +57,7 @@ impl BrowserProcess {
         };
 
         let mut cmd = Command::new(&executable);
-        cmd.args([
-            "--remote-debugging-port=0",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-networking",
-            "--disable-default-apps",
-            "--disable-extensions",
-            "--disable-sync",
-            "--disable-translate",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--remote-debugging-address=127.0.0.1",
-            // Allow any origin to speak DevTools over the debugging
-            // websocket. Without this, Chrome >= 111 refuses non-devtools
-            // clients (curl, websocket-client, Playwright/Puppeteer
-            // attaching over CDP), which is exactly what `--connect` and
-            // the docker GUI companion rely on.
-            "--remote-allow-origins=*",
-            &format!("--user-data-dir={user_data_dir}"),
-            "about:blank",
-        ]);
-        if opts.headless {
-            cmd.args(["--headless=new"]);
-        }
-        cmd.args(&opts.extra_args);
+        cmd.args(launch_flags(opts, &user_data_dir));
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
 
@@ -163,6 +139,42 @@ impl Drop for BrowserProcess {
     }
 }
 
+/// Build the Chromium command-line flags for a launch. Kept separate from
+/// spawning so the TLS/extra-arg wiring stays unit-testable.
+fn launch_flags(opts: &LaunchOptions, user_data_dir: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--remote-debugging-port=0",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-translate",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--remote-debugging-address=127.0.0.1",
+        // Allow any origin to speak DevTools over the debugging websocket.
+        // Without this, Chrome >= 111 refuses non-devtools clients (curl,
+        // websocket-client, Playwright/Puppeteer attaching over CDP), which
+        // is exactly what `--connect` and the docker GUI companion rely on.
+        "--remote-allow-origins=*",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    args.push(format!("--user-data-dir={user_data_dir}"));
+    args.push("about:blank".to_string());
+    if opts.headless {
+        args.push("--headless=new".to_string());
+    }
+    if opts.ignore_certificate_errors {
+        args.push("--ignore-certificate-errors".to_string());
+    }
+    args.extend(opts.extra_args.iter().cloned());
+    args
+}
+
 /// Read Chromium's stderr until the DevTools WebSocket endpoint appears
 /// or the child exits.
 async fn wait_for_endpoint(
@@ -241,6 +253,24 @@ mod tests {
     fn chrome_detection_returns_something_or_none() {
         // Should not panic and should find at least a real binary on CI.
         let _ = BrowserProcess::available();
+    }
+
+    #[test]
+    fn launch_flags_include_ignore_certificate_errors_only_when_set() {
+        let opts = LaunchOptions {
+            user_data_dir: Some("/tmp/x".into()),
+            ..Default::default()
+        };
+        let flags = launch_flags(&opts, "/tmp/x");
+        assert!(flags.iter().any(|f| f == "--headless=new"));
+        assert!(!flags.iter().any(|f| f == "--ignore-certificate-errors"));
+
+        let insecure = LaunchOptions {
+            ignore_certificate_errors: true,
+            ..Default::default()
+        };
+        let flags = launch_flags(&insecure, "/tmp/x");
+        assert!(flags.iter().any(|f| f == "--ignore-certificate-errors"));
     }
 
     #[test]

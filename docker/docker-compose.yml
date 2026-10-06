@@ -29,6 +29,9 @@ services:
       - SNIFF_CONNECT=http://127.0.0.1:9222
       # Snapshots persist under the /config volume.
       - SNIFF_SNAPSHOT_DIR=/config/sniffCSS
+      # Optional: ignore TLS/HTTPS cert errors (self-signed dev server) for
+      # both the CLI and the MCP server (accepts 1/true/yes/on).
+      # - SNIFF_IGNORE_CERTIFICATE_ERRORS=1
       # linuxserver user/group ids (match your host uid/gid).
       - PUID=1000
       - PGID=1000

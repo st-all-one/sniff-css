@@ -43,6 +43,9 @@ sniffCSS -u https://example.net -s ".result" \
 sniffCSS -u https://example.net/cms -s "main" \
   --header "X-CMS-AI-Token: <token>"
 
+# Dev server com certificado self-signed (ignora o aviso de TLS)
+sniffCSS -u https://app.local:3443/home -s "body" --ignore-certificate-errors
+
 # Diff determinístico entre duas versões
 sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
 

@@ -71,6 +71,7 @@ no contexto do LLM.
 | `SNIFF_DEFAULT_HEADERS`    | —                                              | JSON de headers HTTP aplicados a todo request do MCP (ex. `{"X-CMS-AI-Token":"<token>"}`) — auth de área restrita sem repetir por chamada |
 | `SNIFF_STORAGE_STATE`      | —                                              | Path de estado de sessão (cookies + `localStorage`) restaurado antes de toda navegação |
 | `SNIFF_BASE_URL`           | —                                              | Base URL prefixada a `url` relativas (ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`) |
+| `SNIFF_IGNORE_CERTIFICATE_ERRORS` | —                                       | Ignora erros de certificado TLS/HTTPS em toda captura (equivale a `--ignore-certificate-errors`); aceita `1`/`true`/`yes`/`on`. Útil para dev server HTTPS com certificado self-signed |
 | `SELKIES_H264_FULLCOLOR`   | `true`                                         | FullColor 4:4:4 (fidelidade de cor) |
 | `CHROME_CLI`               | `--remote-debugging-port=9222 --remote-allow-origins=*` | Flags do Chromium |
 | `PUID` / `PGID`            | `1000` / `1000`                                | UID/GID do usuário linuxserver |

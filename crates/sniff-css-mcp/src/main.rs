@@ -13,11 +13,15 @@ async fn main() -> anyhow::Result<()> {
     let pool = match std::env::var("SNIFF_CONNECT") {
         Ok(endpoint) if !endpoint.is_empty() => {
             tracing::info!(endpoint = %endpoint, "connecting to existing browser");
-            ChromePool::connect(&endpoint).await?
+            let pool = ChromePool::connect(&endpoint).await?;
+            pool.set_ignore_certificate_errors(env_flag("SNIFF_IGNORE_CERTIFICATE_ERRORS"))
+                .await;
+            pool
         }
         _ => {
             let opts = LaunchOptions {
                 headless: true,
+                ignore_certificate_errors: env_flag("SNIFF_IGNORE_CERTIFICATE_ERRORS"),
                 ..Default::default()
             };
             ChromePool::launch(&opts).await?
@@ -31,6 +35,20 @@ async fn main() -> anyhow::Result<()> {
     let running = rmcp::serve_server(service, rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
+}
+
+/// Read a boolean-ish environment variable (`1`, `true`, `yes`, `on`);
+/// absent/empty/other values are `false`.
+fn env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name)
+            .ok()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn init_tracing() {

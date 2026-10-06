@@ -34,6 +34,11 @@ sniffCSS --url http://localhost:3000 --selector "header" \
 SNIFF_CONNECT=http://127.0.0.1:9222 sniffCSS --url http://localhost:3000 \
   --selector "header"
 
+# Dev server com certificado self-signed (ex.: https://app.local:3443): ignora
+# o erro de TLS em vez de capturar o interstitial "conexão não é particular".
+sniffCSS --url https://app.local:3443/home --selector "body" \
+  --ignore-certificate-errors
+
 # Revelar elementos que só existem após uma interação (modal, dropdown, menu):
 # a ação roda antes da captura; o pipeline de waits roda depois do clique.
 sniffCSS --url http://localhost:3000 --selector ".modal" \
@@ -95,6 +100,7 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--no-group` | Estilos achatados (sem categorias) | — |
 | `--chrome PATH` | Binário do Chrome | autodetect |
 | `--connect ENDPOINT` | Conectar em browser existente — `ws://...` direto, ou `http://host:port` / `host:port` que resolve via `/json/version` | env `SNIFF_CONNECT` |
+| `--ignore-certificate-errors` | Ignora erros de certificado TLS/HTTPS (dev server com self-signed). No launch passa `--ignore-certificate-errors` ao Chromium; com `--connect` aplica via CDP (`Security.setIgnoreCertificateErrors`) antes da navegação | env `SNIFF_IGNORE_CERTIFICATE_ERRORS` |
 | `--viewport WxH` | Viewport emulado: web usa `Emulation.setDeviceMetricsOverride` (afeta `%`, `vh`, media queries); Flutter aplica `adb shell wm size WxH` no device (afeta o `MediaQuery`/layout) e restaura ao final | `1366x768` (web) / device (flutter) |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
 
@@ -239,6 +245,31 @@ defaults de servidor em `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE` e
 > (clicks → hovers → types). Para fluxos mistos **intercalados** (ex.: clicar,
 > digitar, clicar num resultado), use `--action` que preserva a ordem exata.
 
+### Dev server com TLS self-signed (`--ignore-certificate-errors`)
+
+Um dev server em `https://` com certificado self-signed (ex.:
+`https://app.local:3443`) faz o Chromium abrir o interstitial "Sua conexão não
+é particular"; sem tratamento, é essa tela que o sniff captura. Use
+`--ignore-certificate-errors` (ou a env `SNIFF_IGNORE_CERTIFICATE_ERRORS`):
+
+```bash
+sniffCSS -u https://app.local:3443/ouvidoria -s "body" \
+  --ignore-certificate-errors
+
+# equivalente via variável de ambiente
+SNIFF_IGNORE_CERTIFICATE_ERRORS=1 sniffCSS -u https://app.local:3443/ -s body
+
+# conectando num browser já aberto (sem reabrir o Chromium com flag)
+sniffCSS -u https://app.local:3443/ouvidoria -s body \
+  --ignore-certificate-errors --connect http://127.0.0.1:9222
+```
+
+Como funciona: no **launch** a flag `--ignore-certificate-errors` é repassada ao
+Chromium; com **`--connect`** o ajuste é aplicado via CDP
+(`Security.setIgnoreCertificateErrors`) antes da navegação. A env
+`SNIFF_IGNORE_CERTIFICATE_ERRORS` aceita `1`, `true`, `yes`, `on` (case-insensitive)
+e é lida tanto pela CLI quanto pelo servidor MCP (`sniffCSS-mcp`).
+
 ### Mapa de efeito de UI (`__actions`)
 
 Com ações configuradas, cada interação gera uma entrada na linha reservada
@@ -290,6 +321,9 @@ visible + has-size). Erros são claros:
   timeout porque o alvo existe mas nunca fica visível.
 - Spec de wait malformado → mensagem com o formato esperado
   (`element-ready:<selector>:<cond1,cond2>[:<timeout_ms>]`).
+- Snapshot do interstitial "Sua conexão não é particular" (TLS self-signed) em
+  vez da página → use `--ignore-certificate-errors`
+  (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`); funciona no launch e com `--connect`.
 
 > Em páginas dinâmicas (carrosséis, lazy-load), capture a subárvore estável
 > (ex.: `selector=footer --depth 2`) ou use `--wait delay:N` em vez de depender

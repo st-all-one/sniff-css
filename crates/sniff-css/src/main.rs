@@ -29,12 +29,14 @@ async fn run_web(cli: &Cli) -> anyhow::Result<()> {
     let connect = cli.connect.clone();
     let screenshot_path = cli.screenshot.clone();
     let persist = cli.persist;
+    let ignore_certificate_errors = cli.ignore_certificate_errors;
     let config = cli.clone().into_config().context("invalid configuration")?;
 
     let outcome = if let Some(endpoint) = &connect {
         let sniffer = Sniffer::connect(endpoint)
             .await
             .context("connecting to browser")?;
+        sniffer.set_ignore_certificate_errors(ignore_certificate_errors);
         sniffer
             .sniff(&config)
             .await
@@ -43,6 +45,7 @@ async fn run_web(cli: &Cli) -> anyhow::Result<()> {
         let opts = LaunchOptions {
             executable: chrome_path,
             headless: true,
+            ignore_certificate_errors,
             ..Default::default()
         };
         let sniffer = Sniffer::launch(&opts).await.context("launching browser")?;
@@ -312,6 +315,11 @@ fn init_tracing() {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the process-global `SNIFF_SNAPSHOT_DIR`
+    /// env var and share a temp root; without it they race under the default
+    /// parallel test runner.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A minimal but structurally valid PNG (signature + IHDR for 1x1).
     fn png_bytes() -> Vec<u8> {
         let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -409,10 +417,12 @@ mod tests {
 
     #[test]
     fn persist_writes_to_sniff_dir_with_gitignore() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `--persist` must mirror the MCP store layout: `sniffCSS/[domain]/`
         // under `SNIFF_SNAPSHOT_DIR` (or CWD), with a `*.gitignore` inside the
         // root and the right extension for the output format.
-        let root = std::env::temp_dir().join(format!("sniffcss-persist-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("sniffcss-persist-gitignore-{}", std::process::id()));
         let root_str = root.to_str().unwrap().to_string();
         // Restore afterwards so other tests keep the env pristine.
         let prev = std::env::var("SNIFF_SNAPSHOT_DIR").ok();
@@ -457,7 +467,9 @@ mod tests {
 
     #[test]
     fn persist_uses_json_extension_for_json_output() {
-        let root = std::env::temp_dir().join(format!("sniffcss-persist-{}", std::process::id()));
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root =
+            std::env::temp_dir().join(format!("sniffcss-persist-json-{}", std::process::id()));
         let root_str = root.to_str().unwrap().to_string();
         let prev = std::env::var("SNIFF_SNAPSHOT_DIR").ok();
         unsafe {

@@ -12,6 +12,7 @@ use sniff_cdp::session::CdpSession;
 use sniff_core::contrast;
 use sniff_core::storage::StorageState;
 use sniff_core::{Action, SniffConfig, SniffError, SniffResult};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// A coarse phase of the sniffing pipeline, used to report progress to
@@ -70,6 +71,12 @@ const STABILIZE_JS: &str = r#"
 pub struct Sniffer {
     client: CdpClient,
     _process: BrowserProcess,
+    /// When set, every freshly created page session ignores TLS/HTTPS
+    /// certificate errors (`Security.setIgnoreCertificateErrors`), so
+    /// local dev servers behind a self-signed certificate load instead of
+    /// the browser interstitial. Also applied at launch time via
+    /// [`LaunchOptions::ignore_certificate_errors`].
+    ignore_certificate_errors: AtomicBool,
 }
 
 impl std::fmt::Debug for Sniffer {
@@ -93,6 +100,7 @@ impl Sniffer {
         Ok(Self {
             client,
             _process: process,
+            ignore_certificate_errors: AtomicBool::new(opts.ignore_certificate_errors),
         })
     }
 
@@ -107,15 +115,36 @@ impl Sniffer {
         Ok(Self {
             client,
             _process: process,
+            ignore_certificate_errors: AtomicBool::new(false),
         })
+    }
+
+    /// Make every subsequent page session ignore TLS/HTTPS certificate
+    /// errors. Useful with [`Sniffer::connect`], where no launch flags can
+    /// be injected into the external browser; the setting is applied over
+    /// CDP (the browser-level `Security.setIgnoreCertificateErrors` before
+    /// each navigation).
+    pub fn set_ignore_certificate_errors(&self, ignore: bool) {
+        self.ignore_certificate_errors
+            .store(ignore, Ordering::Relaxed);
     }
 
     /// Open a fresh page target on the shared browser connection. The
     /// caller is responsible for closing the returned session.
     pub async fn new_session(&self) -> SniffResult<CdpSession> {
-        CdpSession::new_page(&self.client, "about:blank")
+        let session = CdpSession::new_page(&self.client, "about:blank")
             .await
-            .map_err(|e| SniffError::Cdp(e.to_string()))
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+        if self.ignore_certificate_errors.load(Ordering::Relaxed) {
+            session
+                .call(
+                    "Security.setIgnoreCertificateErrors",
+                    serde_json::json!({ "ignore": true }),
+                )
+                .await
+                .map_err(|e| SniffError::Cdp(e.to_string()))?;
+        }
+        Ok(session)
     }
 
     /// Run a full sniffing pipeline and return the outcome.

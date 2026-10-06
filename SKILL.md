@@ -49,6 +49,12 @@ All steps before the AI are deterministic and cost ~0 tokens.
   localStorage, Playwright `storageState` JSON) across browser restarts. On
   the MCP server, team defaults are set once via `SNIFF_DEFAULT_HEADERS`,
   `SNIFF_STORAGE_STATE` and `SNIFF_BASE_URL` — per-call values win on collision.
+- **TLS / self-signed dev servers** — `--ignore-certificate-errors` (env
+  `SNIFF_IGNORE_CERTIFICATE_ERRORS`) loads `https://` pages behind a
+  self-signed certificate instead of capturing Chromium's "connection is not
+  private" interstitial. Works when launching (adds
+  `--ignore-certificate-errors` to Chromium) and when attaching via
+  `--connect` (CDP `Security.setIgnoreCertificateErrors` before navigation).
 - **Deterministic pipeline** — capture → diff → checks are ~0-token binaries;
   the AI interprets only the delta/evidence.
 - **Flutter/Dart backend** — the default backend is `auto`: a
@@ -79,6 +85,7 @@ All steps before the AI are deterministic and cost ~0 tokens.
 | Ordered mixed-flow interactions | `sniffCSS -u URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
 | Real file upload (hidden inputs ok) | `sniffCSS -u URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
 | Authenticated capture (header on every request) | `sniffCSS -u URL -s "main" --header "X-CMS-AI-Token: <token>"` |
+| TLS / self-signed dev server | `sniffCSS -u https://app.local:3443 -s "body" --ignore-certificate-errors` |
 | Diff two snapshots | `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` |
 | Diff summary (CI) | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
 | Offline checks | `sniffCSS-check --input snap.jsonl --uniform --rules` |
@@ -205,6 +212,8 @@ colon.
 
 ```bash
 sniffCSS -u "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
+sniffCSS -u "https://app.local:3443/home" -s "body" \
+  --ignore-certificate-errors                                     # self-signed TLS
 sniffCSS -u "$URL/login" -s ".dashboard" \
   --type "#email:admin@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/cms-state.json

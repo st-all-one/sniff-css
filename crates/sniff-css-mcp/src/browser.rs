@@ -16,7 +16,7 @@ use tokio::sync::{RwLock, Semaphore};
 struct Inner {
     sniffer: RwLock<Arc<Sniffer>>,
     semaphore: Arc<Semaphore>,
-    launch_opts: LaunchOptions,
+    launch_opts: RwLock<LaunchOptions>,
 }
 
 /// Cloneable handle to a shared browser pool.
@@ -33,7 +33,7 @@ impl ChromePool {
             inner: Arc::new(Inner {
                 sniffer: RwLock::new(Arc::new(sniffer)),
                 semaphore: Arc::new(Semaphore::new(DEFAULT_CONCURRENCY)),
-                launch_opts: opts.clone(),
+                launch_opts: RwLock::new(opts.clone()),
             }),
         })
     }
@@ -49,9 +49,25 @@ impl ChromePool {
             inner: Arc::new(Inner {
                 sniffer: RwLock::new(Arc::new(sniffer)),
                 semaphore: Arc::new(Semaphore::new(DEFAULT_CONCURRENCY)),
-                launch_opts: LaunchOptions::default(),
+                launch_opts: RwLock::new(LaunchOptions::default()),
             }),
         })
+    }
+
+    /// Make the browser ignore TLS/HTTPS certificate errors: applies the
+    /// setting to the live sniffer (CDP) and remembers it for future
+    /// relaunches. Driven by `SNIFF_IGNORE_CERTIFICATE_ERRORS`.
+    pub async fn set_ignore_certificate_errors(&self, ignore: bool) {
+        self.inner
+            .sniffer
+            .read()
+            .await
+            .set_ignore_certificate_errors(ignore);
+        self.inner
+            .launch_opts
+            .write()
+            .await
+            .ignore_certificate_errors = ignore;
     }
 
     /// Run a sniffing pipeline, reporting each [`Phase`] via `on_progress`.
@@ -106,7 +122,8 @@ impl ChromePool {
 
     /// Swap the current browser for a fresh one (best effort).
     async fn relaunch(&self) {
-        match Sniffer::launch(&self.inner.launch_opts).await {
+        let opts = self.inner.launch_opts.read().await.clone();
+        match Sniffer::launch(&opts).await {
             Ok(sniffer) => {
                 *self.inner.sniffer.write().await = Arc::new(sniffer);
                 tracing::info!("browser relaunched");

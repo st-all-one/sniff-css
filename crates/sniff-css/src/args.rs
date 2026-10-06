@@ -309,6 +309,19 @@ pub struct Cli {
     #[arg(long, env = "SNIFF_CONNECT")]
     pub connect: Option<String>,
 
+    /// Ignore TLS/HTTPS certificate errors, e.g. a local dev server behind
+    /// a self-signed certificate (`https://something.local:3443`). When
+    /// launching, Chromium gets `--ignore-certificate-errors`; with
+    /// `--connect`, the setting is applied over CDP
+    /// (`Security.setIgnoreCertificateErrors`) before navigation. Also
+    /// read from the `SNIFF_IGNORE_CERTIFICATE_ERRORS` environment variable.
+    #[arg(
+        long,
+        env = "SNIFF_IGNORE_CERTIFICATE_ERRORS",
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub ignore_certificate_errors: bool,
+
     /// Emulated viewport as WxH (default: 1366x768 laptop).
     #[arg(long)]
     pub viewport: Option<String>,
@@ -658,6 +671,7 @@ mod tests {
             effects_limit: 10,
             chrome: None,
             connect: None,
+            ignore_certificate_errors: false,
             viewport: None,
             custom_props: true,
             no_custom_props: false,
@@ -744,6 +758,7 @@ mod tests {
             effects_limit: 10,
             chrome: None,
             connect: None,
+            ignore_certificate_errors: false,
             viewport: None,
             custom_props: true,
             no_custom_props: false,
@@ -901,6 +916,7 @@ mod tests {
             effects_limit: 10,
             chrome: None,
             connect: None,
+            ignore_certificate_errors: false,
             viewport: None,
             custom_props: true,
             no_custom_props: false,
@@ -978,6 +994,7 @@ mod tests {
             effects_limit: 10,
             chrome: None,
             connect: None,
+            ignore_certificate_errors: false,
             viewport: None,
             custom_props: true,
             no_custom_props: false,
@@ -1055,6 +1072,7 @@ mod tests {
             effects_limit: 10,
             chrome: None,
             connect: None,
+            ignore_certificate_errors: false,
             viewport: None,
             custom_props: true,
             no_custom_props: false,
@@ -1077,6 +1095,20 @@ mod tests {
         let cfg = cli.into_config().unwrap();
         assert!(cfg.output.include_ax, "ax_tree must imply include_ax");
         assert!(cfg.ax_tree);
+    }
+
+    #[test]
+    fn ignore_certificate_errors_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "sniffCSS",
+            "-u",
+            "https://x.local:3443",
+            "-s",
+            "body",
+            "--ignore-certificate-errors",
+        ])
+        .unwrap();
+        assert!(cli.ignore_certificate_errors);
     }
 
     #[test]

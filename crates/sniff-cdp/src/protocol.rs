@@ -49,6 +49,12 @@ pub struct LaunchOptions {
     pub user_data_dir: Option<String>,
     /// Run headless (default true for a sniffing tool).
     pub headless: bool,
+    /// Ignore TLS/HTTPS certificate errors. Adds
+    /// `--ignore-certificate-errors` to the Chromium command line so
+    /// local dev servers behind a self-signed certificate (e.g.
+    /// `https://something.local:3443`) load instead of the browser's
+    /// "connection is not private" interstitial.
+    pub ignore_certificate_errors: bool,
     /// Extra command-line flags.
     pub extra_args: Vec<String>,
     /// How long to wait for the DevTools endpoint to appear.
@@ -61,6 +67,7 @@ impl Default for LaunchOptions {
             executable: None,
             user_data_dir: None,
             headless: true,
+            ignore_certificate_errors: false,
             extra_args: Vec::new(),
             launch_timeout_ms: 15_000,
         }

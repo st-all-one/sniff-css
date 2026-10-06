@@ -252,7 +252,11 @@ sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
    load e **sumir depois**. Se o wait padrão falhar, capture a **subárvore
    estável** (`--selector footer --depth 2`) ou use `--wait delay:N`.
 7. **Conecte no seu dev server** — `--connect http://127.0.0.1:9222` evita
-   subir outro Chrome e captura exatamente o que você vê.
+   subir outro Chrome e captura exatamente o que você vê. Se o dev server
+   estiver atrás de certificado self-signed (`https://…local:3443`), use
+   `--ignore-certificate-errors` (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`): com
+   `--connect` o ajuste vai por CDP (`Security.setIgnoreCertificateErrors`)
+   antes da navegação, sem precisar reabrir o browser com flag.
 8. **Elementos que só existem após interação** — um alvo com `display:none`
    falha com timeout de `element-ready`. Use `--click`/`--hover`/`--type`/`--upload`
    (ou `--action`; no MCP, `actions`).
@@ -269,6 +273,7 @@ sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 | Revelar elementos por interação | `--click #open` · `--hover #menu` · `--type #q:shoes` · `--action click:#open` · `--upload #file:foto.png` |
 | Mapa de efeito de UI (`__actions`) | automático com ações; `--no-effects` omite · `--effects-limit N` |
 | Header auth / sessão | `--header "X: v"` · `--storage-state f` · `--save-storage-state f` |
+| TLS self-signed / `--connect` | `--ignore-certificate-errors` (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`) |
 | Auditoria a11y completa | [`accessibility.md`](accessibility.md) |
 | Resumo de mudanças | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
 | Ignorar props voláteis | `sniffCSS-diff ... --ignore-props transform,opacity` |
