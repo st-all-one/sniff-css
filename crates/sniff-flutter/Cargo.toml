@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Flutter/Dart native backend for sniffCSS: device lifecycle + VM Service discovery"
+publish.workspace = true
+description = "Flutter/Dart native backend for sniff: device lifecycle + VM Service discovery"
 
 [dependencies]
 sniff-cdp = { path = "../sniff-cdp" }
 sniff-core = { path = "../sniff-core" }
 tokio = { workspace = true, features = ["process", "io-util", "time", "sync", "macros", "rt-multi-thread"] }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -20,3 +20,11 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 sniff-engine = { path = "../sniff-engine" }
 sniff-css-diff = { path = "../sniff-css-diff" }
+criterion = { workspace = true }
+
+[[bench]]
+name = "color"
+harness = false
+
+[lints]
+workspace = true

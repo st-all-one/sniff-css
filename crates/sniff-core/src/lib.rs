@@ -2,11 +2,17 @@
 //!
 //! This crate is intentionally dependency-light: it holds the data
 //! structures and configuration used by [`sniff-engine`](sniff_engine)
-//! and the `sniffCSS` CLI, with no I/O or protocol logic.
+//! and the `sniff` CLI, with no I/O or protocol logic.
 
+#![forbid(unsafe_code)]
+
+pub mod agents;
 pub mod config;
 pub mod contrast;
+pub mod diagnostic;
+pub mod env;
 pub mod error;
+pub mod numeric;
 pub mod properties;
 pub mod snapshot;
 pub mod storage;

@@ -5,12 +5,17 @@
 //! `require_chrome` pattern of sniff-engine. Set `SNIFF_TEST_DEVICE` to an
 //! `adb` serial (e.g. `emulator-5554`) to run the device-gated tests.
 
+#![allow(
+    clippy::print_stderr,
+    reason = "arquivo de teste: o skip (`eprintln!`) é o resultado esperado quando o device não está disponível"
+)]
+
 use sniff_flutter::{EmulatorProcess, FlutterMachine, list_devices};
 
 #[tokio::test]
 async fn flutter_and_adb_probes_do_not_panic() {
-    let _ = sniff_flutter::is_flutter_available();
-    let _ = sniff_flutter::is_adb_available();
+    let _: bool = sniff_flutter::is_flutter_available();
+    let _: bool = sniff_flutter::is_adb_available();
 }
 
 #[tokio::test]
@@ -19,7 +24,7 @@ async fn machine_discovery_against_real_device() {
         eprintln!("skipping: flutter/adb not on PATH");
         return;
     }
-    let Some(device) = std::env::var("SNIFF_TEST_DEVICE").ok() else {
+    let Some(device) = sniff_core::env::var("SNIFF_TEST_DEVICE") else {
         eprintln!("skipping: set SNIFF_TEST_DEVICE=<adb serial> to run device tests");
         return;
     };
@@ -32,7 +37,7 @@ async fn machine_discovery_against_real_device() {
     // Attach to a debug app on the device; without one the VM service never
     // appears and the attach call times out — acceptable as an explicit skip.
     let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/app");
-    let mut machine = match FlutterMachine::attach(&project, &device).await {
+    let mut machine = match FlutterMachine::attach(&project, &device) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("skipping: cannot attach on {device}: {e}");
@@ -66,7 +71,7 @@ async fn screenshot_via_adb_returns_png() {
         eprintln!("skipping: adb not on PATH");
         return;
     }
-    let Some(device) = std::env::var("SNIFF_TEST_DEVICE").ok() else {
+    let Some(device) = sniff_core::env::var("SNIFF_TEST_DEVICE") else {
         eprintln!("skipping: set SNIFF_TEST_DEVICE=<adb serial> to run device tests");
         return;
     };

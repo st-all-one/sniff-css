@@ -12,22 +12,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 /// A single HTTP cookie.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flags independentes do cookie (RFC 6265), não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Cookie {
+    /// Cookie name.
     pub name: String,
+    /// Cookie value.
     pub value: String,
     /// `domain`/`path` scope the cookie; at least one of them must be set to
     /// restore it via CDP (the cookie's `url` is derived from the domain).
     #[serde(default)]
     pub domain: Option<String>,
+    /// Cookie path scope.
     #[serde(default)]
     pub path: Option<String>,
-    /// Expiry as Unix seconds (TimeSinceEpoch). `None`/negative = session
+    /// Expiry as Unix seconds (`TimeSinceEpoch`). `None`/negative = session
     /// cookie (kept in memory, never written to disk).
     #[serde(default)]
     pub expires: Option<f64>,
+    /// HTTP-only flag (not readable from JavaScript).
     #[serde(default)]
     pub http_only: bool,
+    /// Secure flag (HTTPS-only).
     #[serde(default)]
     pub secure: bool,
     /// One of `Strict` | `Lax` | `None` (CDP casing).
@@ -36,14 +45,16 @@ pub struct Cookie {
 }
 
 /// A single `localStorage` key/value pair for one origin.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyValue {
+    /// Storage key.
     pub name: String,
+    /// Storage value.
     pub value: String,
 }
 
 /// The `localStorage` contents of one origin.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OriginState {
     /// e.g. `http://localhost:10011`.
     pub origin: String,
@@ -55,8 +66,10 @@ pub struct OriginState {
 /// A persisted session: cookies + per-origin `localStorage`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct StorageState {
+    /// Cookies to restore.
     #[serde(default)]
     pub cookies: Vec<Cookie>,
+    /// Per-origin `localStorage` to restore.
     #[serde(default)]
     pub origins: Vec<OriginState>,
 }
@@ -74,11 +87,11 @@ impl StorageState {
     pub fn write_file(&self, path: &str) -> Result<(), SniffError> {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| SniffError::Serialization(e.to_string()))?;
-        let tmp = format!("{path}.tmp{}", std::process::id());
-        std::fs::write(&tmp, &json)
+        let temp_path = format!("{path}.tmp{}", std::process::id());
+        std::fs::write(&temp_path, &json)
             .map_err(|e| SniffError::Other(format!("cannot write storage state `{path}`: {e}")))?;
-        std::fs::rename(&tmp, path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
+        std::fs::rename(&temp_path, path).map_err(|e| {
+            drop(std::fs::remove_file(&temp_path));
             SniffError::Other(format!("cannot finalize storage state `{path}`: {e}"))
         })
     }
@@ -147,7 +160,7 @@ impl StorageState {
             .collect::<Vec<_>>();
         let payload = serde_json::to_string(&entries).unwrap_or_default();
         Some(format!(
-            r#"(() => {{
+            r"(() => {{
   try {{
     const entries = {payload};
     for (const {{ origin, items }} of entries) {{
@@ -155,7 +168,7 @@ impl StorageState {
       for (const [name, value] of items) localStorage.setItem(name, value);
     }}
   }} catch (e) {{}}
-}})()"#
+}})()"
         ))
     }
 
@@ -331,7 +344,7 @@ mod tests {
         assert!(!path.contains(".tmp"));
         let back = StorageState::from_file(path).unwrap();
         assert_eq!(state, back);
-        let _ = std::fs::remove_file(path);
+        drop(std::fs::remove_file(path));
     }
 
     #[test]
@@ -344,6 +357,6 @@ mod tests {
         std::fs::write(path, b"not json").unwrap();
         let err = StorageState::from_file(path).unwrap_err();
         assert!(err.to_string().contains("invalid storage state"));
-        let _ = std::fs::remove_file(path);
+        drop(std::fs::remove_file(path));
     }
 }

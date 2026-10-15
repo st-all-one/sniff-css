@@ -13,16 +13,27 @@ use thiserror::Error;
 /// Error type for the CDP client layer.
 #[derive(Debug, Error)]
 pub enum CdpError {
+    /// Failed to open the WebSocket connection to Chrome.
     #[error("websocket connect failed: {0}")]
     Connect(String),
+    /// Transport failure after the connection was established.
     #[error("websocket transport: {0}")]
     Transport(String),
+    /// Chrome returned a protocol-level error for the method.
     #[error("CDP returned error for `{method}`: {message}")]
-    Protocol { method: String, message: String },
+    Protocol {
+        /// CDP method that failed.
+        method: String,
+        /// Error message returned by Chrome.
+        message: String,
+    },
+    /// Timed out waiting for a response.
     #[error("timed out waiting for `{0}`")]
     Timeout(String),
+    /// The connection was closed by the peer.
     #[error("connection closed")]
     Closed,
+    /// Underlying I/O error (spawn/read/write).
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -30,12 +41,12 @@ pub enum CdpError {
 impl From<JsonRpcError> for CdpError {
     fn from(e: JsonRpcError) -> Self {
         match e {
-            JsonRpcError::Connect(m) => CdpError::Connect(m),
-            JsonRpcError::Transport(m) => CdpError::Transport(m),
-            JsonRpcError::Protocol { method, message } => CdpError::Protocol { method, message },
-            JsonRpcError::Timeout(m) => CdpError::Timeout(m),
-            JsonRpcError::Closed => CdpError::Closed,
-            JsonRpcError::Io(e) => CdpError::Io(e),
+            JsonRpcError::Connect(m) => Self::Connect(m),
+            JsonRpcError::Transport(m) => Self::Transport(m),
+            JsonRpcError::Protocol { method, message } => Self::Protocol { method, message },
+            JsonRpcError::Timeout(m) => Self::Timeout(m),
+            JsonRpcError::Closed => Self::Closed,
+            JsonRpcError::Io(e) => Self::Io(e),
         }
     }
 }
@@ -104,7 +115,7 @@ mod tests {
     use super::*;
 
     /// The CDP layer must keep resolving HTTP origins (regression guard for
-    /// the JsonRpcClient generalization).
+    /// the `JsonRpcClient` generalization).
     #[tokio::test]
     async fn connect_resolves_http_origin() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -131,11 +142,10 @@ mod tests {
                 addr.port()
             );
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
             );
-            let _ = sock.write_all(resp.as_bytes()).await;
+            drop(sock.write_all(resp.as_bytes()).await);
         });
 
         // Resolution succeeds; the ws handshake on the returned URL will fail

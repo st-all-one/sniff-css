@@ -1,14 +1,15 @@
 ---
 name: sniff-css
-description: Use when working with computed-style capture, accessibility inspection, or visual regression via the sniffCSS toolset. Covers capture, deterministic diff, a11y checks, and MCP/CLI usage. Trigger on keywords: sniff, computed-style, cdp, css, contrast, accessibility, ax, a11y, diff, snapshot, regression, styling, layout, is_user_noticeable.
+description: Use when working with computed-style capture, accessibility inspection, or visual regression via the sniff toolset. Covers capture, deterministic diff, a11y checks, and MCP/CLI usage. Trigger on keywords: sniff, computed-style, cdp, css, contrast, accessibility, ax, a11y, diff, snapshot, regression, styling, layout, is_user_noticeable.
 ---
 
-# sniffCSS — Active Usage Guide
+# sniff — Active Usage Guide
 
 **Role:** Capture real computed CSS + accessibility state from a live page over
 raw CDP (WebSocket), diff two versions deterministically, and emit offline
 PASS/WARN/FAIL checks. The JSONL snapshot IS the source of truth; the AI
-interprets only the delta.
+interprets only the delta. Onboard a project with `sniff init` (writes the
+token-optimized protocol into `AGENTS.md`); `sniff prime` is the same protocol.
 
 **When to load:** Any time you need to inspect real rendered styles, audit
 accessibility, detect UI regressions, or answer "what actually changed?" on a
@@ -28,10 +29,12 @@ live page.
 
 ```
 capture → diff → checks → AI interpretation (only the delta)
-sniffCSS   sniffCSS-diff   sniffCSS-check / sniffCSS_check   eval-prompt
+sniff capture   sniff diff   sniff check / sniff_check   eval-prompt
 ```
 
-All steps before the AI are deterministic and cost ~0 tokens.
+`sniff init` writes this protocol into the project's `AGENTS.md` (managed block);
+`sniff prime` is the byte-identical protocol. All steps before the AI are
+deterministic and cost ~0 tokens.
 
 ### Key capabilities
 
@@ -59,12 +62,12 @@ All steps before the AI are deterministic and cost ~0 tokens.
   the AI interprets only the delta/evidence.
 - **Flutter/Dart backend** — the default backend is `auto`: a
   `flutter://<device>` URL selects Flutter and that device
-  (`sniffCSS -u flutter://emulator-5554 --project DIR --depth N`); MCP
-  `sniffFlutter_page` is the tool form. Captures the widget tree of a
+  (`sniff capture -u flutter://emulator-5554 --project DIR --depth N`); MCP
+  `sniff_flutter_page` is the tool form. Captures the widget tree of a
   **debug-mode** Flutter app on an Android emulator/device over the Dart VM
   Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`). Same
   JSONL model (tag = widget class, colors normalized to `#rrggbb`, WCAG
-  contrast derived), so `sniffCSS-diff` / `sniffCSS-check` work by path
+  contrast derived), so `sniff diff` / `sniff check` work by path
   unchanged. `--click`/`--type`/`--action` and `--viewport` are supported here
   too (driven via the Flutter Driver extension + `adb shell wm size`; the app
   must call `enableFlutterDriverExtension()`; `hover`/`upload` stay web-only).
@@ -77,26 +80,30 @@ All steps before the AI are deterministic and cost ~0 tokens.
 
 | Action | Command |
 |--------|---------|
-| Capture (summary digest is the default) | `sniffCSS -u URL -s SEL --depth N` |
-| Full non-summarized snapshot (diff/check input) | `sniffCSS -u URL -s SEL --depth N --no-summary` |
-| Full-fidelity capture | `sniffCSS -u URL -s SEL --depth N --no-summary --full` |
-| Accessibility capture | `sniffCSS -u URL -s SEL --depth N --no-summary --ax-tree` |
-| Reveal action-only elements | `sniffCSS -u URL -s ".modal" --click "#open"` |
-| Ordered mixed-flow interactions | `sniffCSS -u URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
-| Real file upload (hidden inputs ok) | `sniffCSS -u URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
-| Authenticated capture (header on every request) | `sniffCSS -u URL -s "main" --header "X-CMS-AI-Token: <token>"` |
-| TLS / self-signed dev server | `sniffCSS -u https://app.local:3443 -s "body" --ignore-certificate-errors` |
-| Diff two snapshots | `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` |
-| Diff summary (CI) | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
-| Offline checks | `sniffCSS-check --input snap.jsonl --uniform --rules` |
-| Visual evidence | `sniffCSS -u URL -s SEL --screenshot out.png` |
-| Verbatim DOM attrs | `sniffCSS -u URL -s SEL --attrs name,value` |
-| Flutter app (attach) | `sniffCSS -u flutter://emulator-5554 --attach --project DIR --depth N` |
-| Flutter app (run AVD) | `sniffCSS -u flutter://pixel --avd pixel --project DIR --depth N` |
+| Capture (summary digest is the default) | `sniff capture -u URL -s SEL --depth N` |
+| Full non-summarized snapshot (diff/check input) | `sniff capture -u URL -s SEL --depth N --no-summary` |
+| Full-fidelity capture | `sniff capture -u URL -s SEL --depth N --no-summary --full` |
+| Accessibility capture | `sniff capture -u URL -s SEL --depth N --no-summary --ax-tree` |
+| Reveal action-only elements | `sniff capture -u URL -s ".modal" --click "#open"` |
+| Ordered mixed-flow interactions | `sniff capture -u URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
+| Real file upload (hidden inputs ok) | `sniff capture -u URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
+| Authenticated capture (header on every request) | `sniff capture -u URL -s "main" --header "X-CMS-AI-Token: <token>"` |
+| TLS / self-signed dev server | `sniff capture -u https://app.local:3443 -s "body" --ignore-certificate-errors` |
+| Diff two snapshots | `sniff diff base.jsonl head.jsonl --tolerance 0.5` |
+| Diff summary (CI) | `sniff diff base.jsonl head.jsonl --stats-only` |
+| Offline checks | `sniff check --input snap.jsonl --uniform --rules` |
+| Visual evidence | `sniff capture -u URL -s SEL --screenshot out.png` |
+| Verbatim DOM attrs | `sniff capture -u URL -s SEL --attrs name,value` |
+| Flutter app (attach) | `sniff capture -u flutter://emulator-5554 --attach --project DIR --depth N` |
+| Flutter app (run AVD) | `sniff capture -u flutter://pixel --avd pixel --project DIR --depth N` |
+| AI protocol (static, byte-identical) | `sniff prime` (`--long` for full detail) |
+| Write/update AGENTS.md block | `sniff init` (`--force` overwrites the file) |
+| List persisted snapshots | `sniff snapshots` |
+| Binary utilities | `sniff self completions bash` · `sniff self setup pi` · `sniff self upgrade --dry-run` |
 
-> **Prefer the CLI.** `sniffCSS`, `sniffCSS-diff` and `sniffCSS-check` stream to
+> **Prefer the CLI.** `sniff`, `sniff diff` and `sniff check` stream to
 > stdout/redirectable files, accept `--persist` to mirror the MCP store layout,
-> and add no client/server indirection. The MCP server (`sniffCSS_page` & co.)
+> and add no client/server indirection. The MCP server (`sniff_page` & co.)
 > is a convenience wrapper for MCP-native clients — use it only when the harness
 > demands tools (see [AI usage](docs/ai-usage.md)).
 
@@ -107,15 +114,15 @@ All steps before the AI are deterministic and cost ~0 tokens.
 The toolset is **measure, don't guess**: everything before the LLM is a
 deterministic binary. There are three stages plus an MCP server that wraps them:
 
-1. **Capture** (`sniffCSS`) — reads real computed CSS + accessibility state via
+1. **Capture** (`sniff capture`) — reads real computed CSS + accessibility state via
    raw CDP and emits a **snapshot**. Default output is the **summary digest**
    (token-lean per node); `--no-summary` emits the full JSONL.
-2. **Diff** (`sniffCSS-diff`) — byte/number-level diff of two snapshots →
+2. **Diff** (`sniff diff`) — byte/number-level diff of two snapshots →
    **only what changed** (`CHANGED` per property, plus `ADDED`/`REMOVED`).
-3. **Checks** (`sniffCSS-check`) — offline rules: uniformity (odd card) +
+3. **Checks** (`sniff check`) — offline rules: uniformity (odd card) +
    derived WCAG/UX rules (contrast, target size, focus, alt, hidden focusables,
    **occlusion**).
-4. **MCP server** (`sniffCSS-mcp`) — the same stages as tools over stdio, with
+4. **MCP server** (`sniff-mcp`) — the same stages as tools over stdio, with
    a **snapshot store** on disk so full JSONL never round-trips through the
    LLM context.
 
@@ -163,11 +170,11 @@ Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
 ### Accessibility audit
 
 ```bash
-sniffCSS -u "$URL" -s "body" --depth 5 --no-summary --ax-tree > body.jsonl
-sniffCSS -u "$URL" -s "nav"    --depth 4 --no-summary > nav.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 --no-summary > main.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 --no-summary > footer.jsonl
-sniffCSS-check --input main.jsonl --rules
+sniff capture -u "$URL" -s "body" --depth 5 --no-summary --ax-tree > body.jsonl
+sniff capture -u "$URL" -s "nav"    --depth 4 --no-summary > nav.jsonl
+sniff capture -u "$URL" -s "main"   --depth 5 --no-summary > main.jsonl
+sniff capture -u "$URL" -s "footer" --depth 6 --no-summary > footer.jsonl
+sniff check --input main.jsonl --rules
 ```
 
 Complete recipe (facets, jq queries, judgment checklist):
@@ -176,24 +183,24 @@ Complete recipe (facets, jq queries, judgment checklist):
 ### Regression monitoring (CI)
 
 ```bash
-sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > base.jsonl
+sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > base.jsonl
 # ... deploy ...
-sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > head.jsonl
-sniffCSS-diff base.jsonl head.jsonl --stats-only   # fail job if changed/added/removed > threshold
-sniffCSS-diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structural > delta.jsonl
+sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > head.jsonl
+sniff diff base.jsonl head.jsonl --stats-only   # fail job if changed/added/removed > threshold
+sniff diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structural > delta.jsonl
 ```
 
 ### Reveal elements that only exist after an interaction
 
 ```bash
-sniffCSS -u "$URL" -s ".modal" --click "#open-modal"        # click to reveal
-sniffCSS -u "$URL" -s ".menu-panel" --hover "#user-menu"    # hover to reveal
-sniffCSS -u "$URL" -s ".search-results" --type "#q:shoes"   # type to reveal
-sniffCSS -u "$URL" -s ".result" --action "click:#open:5000" \
+sniff capture -u "$URL" -s ".modal" --click "#open-modal"        # click to reveal
+sniff capture -u "$URL" -s ".menu-panel" --hover "#user-menu"    # hover to reveal
+sniff capture -u "$URL" -s ".search-results" --type "#q:shoes"   # type to reveal
+sniff capture -u "$URL" -s ".result" --action "click:#open:5000" \
   --action "type:#q:shoes" --action "click:.result-item"    # ordered mixed flow
-sniffCSS -u "$URL" -s "#cropper-wrapper" \
+sniff capture -u "$URL" -s "#cropper-wrapper" \
   --action "upload:#media-input:/tmp/pixel.png"             # real file upload
-sniffCSS -u "$URL" -s ".dropdown-menu" --click \
+sniff capture -u "$URL" -s ".dropdown-menu" --click \
   ".btn-group:nth-child(2) .dropdown-toggle:3000"           # `:` in selector is OK
 ```
 
@@ -211,13 +218,13 @@ colon.
 ### Authenticated / restricted captures
 
 ```bash
-sniffCSS -u "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
-sniffCSS -u "https://app.local:3443/home" -s "body" \
+sniff capture -u "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
+sniff capture -u "https://app.local:3443/home" -s "body" \
   --ignore-certificate-errors                                     # self-signed TLS
-sniffCSS -u "$URL/login" -s ".dashboard" \
+sniff capture -u "$URL/login" -s ".dashboard" \
   --type "#email:admin@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/cms-state.json
-sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
+sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
 ```
 
 Server-side team defaults (`SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
@@ -230,7 +237,7 @@ With actions set (default ON; `--no-effects` to omit), each action emits an
 entry in a reserved `__actions` line: `effect` (`revealed`/`hidden`/`changed`/
 `moved`/`no_effect`), appeared/removed/changed elements with `rect`, `onscreen`,
 `out_of_view.{above,below,left,right}`, `distance_from_action`, `direction`,
-and a deterministic `summary`. `sniffCSS-diff` compares `__actions` blocks when
+and a deterministic `summary`. `sniff diff` compares `__actions` blocks when
 both sides carry them → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED`.
 
 ---
@@ -242,15 +249,23 @@ curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
 curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.1 sh
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.0 sh
 ```
 
 Binaries: Linux glibc + musl (x86_64/aarch64), macOS, Windows — per GitHub
-Release (semver tags), checksum-verified, installed to `~/.local/bin`. Env
-overrides: `INSTALL_DIR`, `SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.
+Release (semver tags), checksum-verified, installed to `~/.local/bin` (and the
+legacy `sniffCSS*` binaries are removed). Env overrides: `INSTALL_DIR`,
+`SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.
+Onboard a project (writes the managed block into `AGENTS.md`, preserving the
+rest; `--force` overwrites the file):
+
+```bash
+sniff init
+```
+
 Docker image `stallonels/sniffcss` (multi-arch, self-contained Chromium):
 [`docs/docker.md`](docs/docker.md). New release: `git tag vX.Y.Z && git push
-origin vX.Y.Z` triggers `.github/workflows/release.yml`; MSRV 1.88. Changes
+origin vX.Y.Z` triggers `.github/workflows/release.yml`; MSRV 1.99. Changes
 tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
@@ -261,7 +276,9 @@ tracked in [`CHANGELOG.md`](CHANGELOG.md).
 - Feeding full snapshots to the model — always diff/check first.
 - Passing inline `base_jsonl`/`head_jsonl`/`jsonl` to MCP tools when a persisted
   `path`/`base_path`/`head_path` exists — the inline string re-enters the LLM context.
-- Calling `sniffCSS_page` with `return:"jsonl"` when only the reference/path is needed.
+- Calling `sniff_page` with `return:"jsonl"` when only the reference/path is needed.
+- Running `sniff init --force` on a project you don't own — it wipes `AGENTS.md`.
+  Plain `sniff init` upserts only the managed `<!-- sniff:start/end -->` block.
 - Treating `unknown` contrast as pass/fail — it means "review manually".
 - Reporting every empty `aria.name` without checking a descendant `img alt`.
 - Flagging below-the-fold content as "invisible" — read `is_user_noticeable`.
@@ -281,7 +298,7 @@ tracked in [`CHANGELOG.md`](CHANGELOG.md).
 - Session-state export captures `localStorage` only from the current page's origin; sub-origins (CDN hosts) are not represented. Restored cookies are host-scoped (a `.domain` prefix is normalized to host-only).
 - In CLI action strings, `click`/`hover` selectors **may** contain `:` (e.g. `:nth-child(2)` — only trailing `:N` fields are timeout/settle), but `type`/`upload` selectors **cannot** (the first `:` splits selector from text/files). For those, use an attribute/`aria-label` anchor or the MCP `actions` object.
 - **DOM attributes are not captured by default** — the tool is computed-style. Use `--attrs a,b` / MCP `attributes` for the specific attributes you need.
-- **Server-side data is out of scope** — payloads, templates, routes and backend state are not sniffCSS's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.
+- **Server-side data is out of scope** — payloads, templates, routes and backend state are not sniff's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.
 - **The tool captures whatever the server serves** — a stale page cache produces a stale snapshot. Clear/invalidate the cache before capturing.
 - **Flutter backend needs a debug build** — release APKs strip the Dart VM Service; `rect` is in device coordinates (not CSS viewport); widgets without a render box report no `rect`.
 
@@ -291,13 +308,14 @@ tracked in [`CHANGELOG.md`](CHANGELOG.md).
 
 Before completing any sniff operation:
 
+- [ ] **`sniff init` run** so the project's `AGENTS.md` carries the protocol (and `sniff prime` consulted for the full contract)?
 - [ ] **Prefer the CLI** over MCP when a shell is available?
 - [ ] **Summary digest is the default** — use `--no-summary` explicitly when the full snapshot (diff/check/jq input) is required?
 - [ ] **Same mode/viewport on both diff sides** (default+default, or `--full`+`--full`)?
 - [ ] **Page stable** (`--stabilize` default ON, proper `--wait`)?
 - [ ] **Stable keys** (`--stable-key data-testid`) when comparing across deploys?
 - [ ] **`--ax-tree`** when the full accessibility subtree is required?
-- [ ] **`sniffCSS-check` run** before the AI judges (measured evidence)?
+- [ ] **`sniff check` run** before the AI judges (measured evidence)?
 - [ ] **Delta only** sent to the model, not full snapshots?
 - [ ] **Diff/check via persisted paths** (CLI files or MCP `base_path`/`head_path`/`path`), not inline JSONL?
 - [ ] **`--screenshot`/`screenshot:true`** when a human eye on the rendered page is needed?

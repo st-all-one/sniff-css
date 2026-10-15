@@ -1,6 +1,11 @@
-//! CLI-level tests for the `sniffCSS-check` binary: the `--input`/`--uniform`/
-//! `--rules`/`--tolerance` flags exercised end-to-end on a real snapshot file.
+//! CLI-level tests for `sniff check`: the `--input`/`--uniform`/`--rules`/
+//! `--tolerance` flags exercised end-to-end on a real snapshot file.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "arquivo de teste: `.unwrap()`/`.expect()` é o mecanismo de falha, o panic aponta a linha"
+)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,7 +20,7 @@ fn write_snapshot(name: &str, content: &str) -> PathBuf {
     // test runner.
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("sniffcss-check-cli-{}-{}", std::process::id(), n));
+    let dir = std::env::temp_dir().join(format!("sniff-check-cli-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, content).unwrap();
@@ -23,14 +28,15 @@ fn write_snapshot(name: &str, content: &str) -> PathBuf {
 }
 
 fn run_cli(args: &[&str]) -> (String, String) {
-    let bin = env!("CARGO_BIN_EXE_sniffCSS-check");
+    let bin = env!("CARGO_BIN_EXE_sniff");
     let out = std::process::Command::new(bin)
+        .arg("check")
         .args(args)
         .output()
-        .expect("run sniffCSS-check");
+        .expect("run sniff check");
     assert!(
         out.status.success(),
-        "sniffCSS-check {args:?} failed: {}",
+        "sniff check {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     (
@@ -64,7 +70,7 @@ fn cli_rules_and_uniform_default_on_without_flags() {
             .any(|l| l.contains("\"uniformity_outliers\":1")),
         "outlier counted in summary: {stdout}"
     );
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    drop(std::fs::remove_dir_all(path.parent().unwrap()));
 }
 
 #[test]
@@ -94,5 +100,5 @@ fn cli_rules_only_flag_skips_uniformity() {
         2,
         "pass | warn | fail: {stderr}"
     );
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    drop(std::fs::remove_dir_all(path.parent().unwrap()));
 }

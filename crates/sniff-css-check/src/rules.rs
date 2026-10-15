@@ -25,7 +25,7 @@ use serde_json::Value;
 use sniff_core::TriState;
 use sniff_core::contrast::derive_contrast_values;
 use sniff_css_diff::DiffNode;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Contrast data used by the rule, from either the engine's `contrast`
 /// facet (preferred) or a fallback derivation from raw styles.
@@ -52,8 +52,11 @@ fn tri_from_json(v: Option<&Value>) -> TriState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleStatus {
+    /// The rule passed.
     Pass,
+    /// The rule raised a non-fatal warning.
     Warn,
+    /// The rule failed.
     Fail,
 }
 
@@ -67,6 +70,7 @@ pub struct CheckLine {
     /// Tag name, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// Verdict of the rule for this node.
     pub status: RuleStatus,
     /// Measured evidence backing the verdict.
     pub evidence: String,
@@ -119,7 +123,7 @@ pub fn run_rules(nodes: &[DiffNode], viewport: Option<(f64, f64)>) -> Vec<CheckL
     let mut out = Vec::new();
     for node in nodes {
         let ctx = AncestorCtx::default();
-        check_node(node, &ctx, viewport, &mut out);
+        check_node(node, ctx, viewport, &mut out);
         run_children(node, ctx, viewport, &mut out);
     }
     out.extend(check_occlusion(nodes));
@@ -135,9 +139,9 @@ fn run_children(
     viewport: Option<(f64, f64)>,
     out: &mut Vec<CheckLine>,
 ) {
-    let ctx = AncestorCtx::from_node(node, &parent_ctx);
+    let ctx = AncestorCtx::from_node(node, parent_ctx);
     for child in &node.children {
-        check_node(child, &ctx, viewport, out);
+        check_node(child, ctx, viewport, out);
         run_children(child, ctx, viewport, out);
     }
 }
@@ -146,6 +150,10 @@ fn run_children(
 /// ancestors (used by positioning/overflow rules that browsers compute
 /// across the tree, e.g. `position:sticky` breaks under an
 /// `overflow:hidden` ancestor).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "predicados derivados independentes de ancestralidade, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, Copy, Default)]
 struct AncestorCtx {
     /// Any ancestor has `overflow-x`/`overflow-y`/`overflow` not `visible`
@@ -160,7 +168,7 @@ struct AncestorCtx {
 }
 
 impl AncestorCtx {
-    fn from_node(node: &DiffNode, parent: &AncestorCtx) -> AncestorCtx {
+    fn from_node(node: &DiffNode, parent: Self) -> Self {
         let overflow = [
             style_val(node, "box_model", "overflow-x"),
             style_val(node, "box_model", "overflow-y"),
@@ -181,7 +189,7 @@ impl AncestorCtx {
         let display = style_val(node, "layout", "display").unwrap_or("");
         let parent_is_flex_or_grid =
             matches!(display, "flex" | "inline-flex" | "grid" | "inline-grid");
-        AncestorCtx {
+        Self {
             has_overflow_hidden_ancestor: parent.has_overflow_hidden_ancestor || overflow,
             has_transform_ancestor: parent.has_transform_ancestor || transform,
             parent_is_flex_or_grid,
@@ -216,25 +224,36 @@ pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
     let mut flat = Vec::new();
     flatten(nodes, &mut flat, &mut 0);
 
-    let mut cands: Vec<usize> = (0..flat.len())
-        .filter(|&i| {
-            flat[i].rect.is_some()
-                && flat[i].node.display_visible() != Some(false)
+    let mut cands: Vec<&Flat<'_>> = flat
+        .iter()
+        .filter(|f| {
+            f.rect.is_some()
+                && f.node.display_visible() != Some(false)
                 // Skip elements with opacity:0 (carousel slides, hidden panels)
-                && !is_opaque_zero(flat[i].node)
+                && !is_opaque_zero(f.node)
         })
         .collect();
-    cands.sort_by_key(|&i| flat[i].rect.unwrap().0 as i64);
+    // Ascending by x with full `f64` precision (`total_cmp` is a
+    // deterministic total order; no truncation).
+    cands.sort_by(|a, b| {
+        let ax = a.rect.map_or(0.0, |r| r.0);
+        let bx = b.rect.map_or(0.0, |r| r.0);
+        ax.total_cmp(&bx)
+    });
 
     // covered node index -> (covering node index, coverage fraction), keeping
     // the worst (highest-coverage) coverer per covered node.
-    let mut covered: HashMap<usize, (usize, f64)> = HashMap::new();
+    let mut covered: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
 
-    for (ci, &i) in cands.iter().enumerate() {
-        let (xi, yi, wi, hi) = flat[i].rect.unwrap();
+    for (ci, &fi) in cands.iter().enumerate() {
+        let Some((xi, yi, wi, hi)) = fi.rect else {
+            continue;
+        };
         let area_i = wi * hi;
-        for &j in &cands[ci + 1..] {
-            let (xj, yj, wj, hj) = flat[j].rect.unwrap();
+        for &fj in cands.iter().skip(ci.saturating_add(1)) {
+            let Some((xj, yj, wj, hj)) = fj.rect else {
+                continue;
+            };
             if xj >= xi + wi {
                 // Sorted by x; no later node can overlap i in x.
                 break;
@@ -249,39 +268,41 @@ pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
             if iy1 <= iy0 {
                 continue;
             }
-            if related(&flat, i, j) {
+            if related(fi, fj) {
                 continue;
             }
             // Skip SVG elements within the same SVG — they render in document
             // order by design (path over circle is intentional, not occlusion).
-            if same_svg_container(&flat, i, j) {
+            if same_svg_container(&flat, fi, fj) {
                 continue;
             }
             let inter = (ix1 - ix0) * (iy1 - iy0);
             let cov_i_by_j = inter / area_i;
             let cov_j_by_i = inter / (wj * hj);
             // Only the one painted *below* can be reported as covered.
-            if cov_i_by_j >= 0.5 && paints_above(&flat, j, i) {
-                record_cover(&mut covered, i, j, cov_i_by_j);
+            if cov_i_by_j >= 0.5 && paints_above(&flat, fj, fi) {
+                record_cover(&mut covered, fi.idx, fj.idx, cov_i_by_j);
             }
-            if cov_j_by_i >= 0.5 && paints_above(&flat, i, j) {
-                record_cover(&mut covered, j, i, cov_j_by_i);
+            if cov_j_by_i >= 0.5 && paints_above(&flat, fi, fj) {
+                record_cover(&mut covered, fj.idx, fi.idx, cov_j_by_i);
             }
         }
     }
 
     let mut out = Vec::new();
-    let mut keys: Vec<usize> = covered.keys().copied().collect();
-    keys.sort_unstable();
-    for k in keys {
-        let (coverer, cover) = covered[&k];
-        let covered_sel = &flat[k].node.selector;
-        let coverer_sel = &flat[coverer].node.selector;
-        let pct = (cover * 100.0).round() as u32;
+    // `BTreeMap` iterates in ascending key order, so the output is already
+    // deterministic without collecting keys and sorting them.
+    for (&k, &(coverer, cover)) in &covered {
+        let (Some(fk), Some(fc)) = (flat.get(k), flat.get(coverer)) else {
+            continue;
+        };
+        let covered_sel = &fk.node.selector;
+        let coverer_sel = &fc.node.selector;
+        let pct = sniff_core::numeric::f64_to_u32(cover * 100.0);
         out.push(CheckLine {
             check: "occluded".into(),
             selector: covered_sel.clone(),
-            tag: flat[k].node.tag.clone(),
+            tag: fk.node.tag.clone(),
             status: if cover >= 0.75 {
                 RuleStatus::Fail
             } else {
@@ -324,7 +345,7 @@ pub fn check_backdrop_over_modal(
     let mut flat = Vec::new();
     flatten(nodes, &mut flat, &mut 0);
 
-    let is_backdrop = |f: &Flat| -> bool {
+    let is_backdrop = |f: &Flat<'_>| -> bool {
         let node = f.node;
         let pos = style_val(node, "layout", "position").unwrap_or("");
         let Some((_x, _y, w, h)) = f.rect else {
@@ -341,7 +362,7 @@ pub fn check_backdrop_over_modal(
     };
 
     // The dialog content it could cover: interactive or text-bearing nodes.
-    let is_modal_content = |f: &Flat| -> bool {
+    let is_modal_content = |f: &Flat<'_>| -> bool {
         let tag = f.node.tag.as_deref().unwrap_or("");
         let interactive = INTERACTIVE_TAGS.contains(&tag);
         let text = f
@@ -355,20 +376,22 @@ pub fn check_backdrop_over_modal(
     };
 
     let mut out = Vec::new();
-    for bi in 0..flat.len() {
-        if !is_backdrop(&flat[bi]) {
+    for (bi, bf) in flat.iter().enumerate() {
+        if !is_backdrop(bf) {
             continue;
         }
-        let (bx, by, bw, bh) = flat[bi].rect.unwrap();
-        for mi in 0..flat.len() {
-            if bi == mi || !is_modal_content(&flat[mi]) {
+        let Some((bx, by, bw, bh)) = bf.rect else {
+            continue;
+        };
+        for (mi, mf) in flat.iter().enumerate() {
+            if bi == mi || !is_modal_content(mf) {
                 continue;
             }
             // Only the ancestor/descendant pair (which `occluded` skips).
-            if !related(&flat, bi, mi) {
+            if !related(bf, mf) {
                 continue;
             }
-            let Some((mx, my, mw, mh)) = flat[mi].rect else {
+            let Some((mx, my, mw, mh)) = mf.rect else {
                 continue;
             };
             // Coverage of the modal rect by the backdrop.
@@ -386,20 +409,20 @@ pub fn check_backdrop_over_modal(
             }
             // A descendant normally paints ABOVE its parent's background;
             // only a negative z-index drops it behind the scrim.
-            if node_z_index(flat[mi].node).unwrap_or(0) >= 0 {
+            if node_z_index(mf.node).unwrap_or(0) >= 0 {
                 continue;
             }
-            let pct = (cov * 100.0).round() as u32;
+            let pct = sniff_core::numeric::f64_to_u32(cov * 100.0);
             out.push(CheckLine {
                 check: "backdrop-over-modal".into(),
-                selector: flat[mi].node.selector.clone(),
-                tag: flat[mi].node.tag.clone(),
+                selector: mf.node.selector.clone(),
+                tag: mf.node.tag.clone(),
                 status: RuleStatus::Fail,
                 evidence: format!(
                     "{pct}% of {} is covered by the modal backdrop {} — \
                      the dialog paints below its own dark scrim (negative z-index); \
                      check the stacking order",
-                    flat[mi].node.selector, flat[bi].node.selector
+                    mf.node.selector, bf.node.selector
                 ),
             });
         }
@@ -419,27 +442,28 @@ fn is_translucent_dark_bg(bg: &str) -> bool {
             .map(str::trim)
             .collect();
         if parts.len() == 4 {
-            let dark = parts[..3]
+            let dark = parts
                 .iter()
+                .take(3)
                 .filter_map(|c| c.parse::<f64>().ok())
                 .all(|c| c < 90.0);
-            let alpha = parts[3].parse::<f64>().ok();
+            let alpha = parts.get(3).and_then(|s| s.parse::<f64>().ok());
             return dark && alpha.is_some_and(|a| (0.05..1.0).contains(&a));
         }
         return false;
     }
     // Normalized 8-digit hex `#rrggbbaa` (alpha byte → 0..1).
     if bg.len() == 9 && bg.starts_with('#') {
-        let (Ok(r), Ok(g), Ok(b), Ok(a)) = (
-            u8::from_str_radix(&bg[1..3], 16),
-            u8::from_str_radix(&bg[3..5], 16),
-            u8::from_str_radix(&bg[5..7], 16),
-            u8::from_str_radix(&bg[7..9], 16),
-        ) else {
+        let parse = |range: std::ops::Range<usize>| {
+            bg.get(range).and_then(|s| u8::from_str_radix(s, 16).ok())
+        };
+        let (Some(r), Some(g), Some(b), Some(a)) =
+            (parse(1..3), parse(3..5), parse(5..7), parse(7..9))
+        else {
             return false;
         };
-        let (r, g, b) = (r as f64, g as f64, b as f64);
-        let alpha = a as f64 / 255.0;
+        let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+        let alpha = f64::from(a) / 255.0;
         let dark = r < 90.0 && g < 90.0 && b < 90.0;
         return dark && (0.05..1.0).contains(&alpha);
     }
@@ -449,7 +473,7 @@ fn is_translucent_dark_bg(bg: &str) -> bool {
 fn flatten<'a>(nodes: &'a [DiffNode], out: &mut Vec<Flat<'a>>, next: &mut usize) {
     for node in nodes {
         let idx = *next;
-        *next += 1;
+        *next = next.saturating_add(1);
         out.push(Flat {
             node,
             idx,
@@ -458,21 +482,23 @@ fn flatten<'a>(nodes: &'a [DiffNode], out: &mut Vec<Flat<'a>>, next: &mut usize)
         });
         flatten(&node.children, out, next);
         // Subtree range is closed by the last descendant pushed.
-        out[idx].end = *next - 1;
+        if let Some(flat) = out.get_mut(idx) {
+            flat.end = next.saturating_sub(1);
+        }
     }
 }
 
 /// `a` is an ancestor of `b` or vice versa (subtree interval containment).
-fn related(flat: &[Flat], a: usize, b: usize) -> bool {
-    let (ai, ae) = (flat[a].idx, flat[a].end);
-    let (bi, be) = (flat[b].idx, flat[b].end);
+fn related(a: &Flat<'_>, b: &Flat<'_>) -> bool {
+    let (ai, ae) = (a.idx, a.end);
+    let (bi, be) = (b.idx, b.end);
     (ai <= bi && bi <= ae) || (bi <= ai && ai <= be)
 }
 
 /// Both nodes are SVG elements inside the same `<svg>` container.
 /// SVG renders in document order within a single SVG, so overlapping
 /// siblings are intentional (path over circle, etc.), not occlusion.
-fn same_svg_container(flat: &[Flat], a: usize, b: usize) -> bool {
+fn same_svg_container(flat: &[Flat<'_>], a: &Flat<'_>, b: &Flat<'_>) -> bool {
     let is_svg_el = |tag: &str| {
         matches!(
             tag,
@@ -488,21 +514,21 @@ fn same_svg_container(flat: &[Flat], a: usize, b: usize) -> bool {
                 | "g"
         )
     };
-    let tag_a = flat[a].node.tag.as_deref().unwrap_or("");
-    let tag_b = flat[b].node.tag.as_deref().unwrap_or("");
+    let tag_a = a.node.tag.as_deref().unwrap_or("");
+    let tag_b = b.node.tag.as_deref().unwrap_or("");
     if !is_svg_el(tag_a) || !is_svg_el(tag_b) {
         return false;
     }
     // Walk ancestors of a looking for an <svg> that also contains b.
     // Walk the flat array backwards from position a-1.
-    let mut pos = a;
-    while pos > 0 {
-        pos -= 1;
-        let anc = &flat[pos];
+    for pos in (0..a.idx).rev() {
+        let Some(anc) = flat.get(pos) else {
+            continue;
+        };
         let anc_tag = anc.node.tag.as_deref().unwrap_or("");
         if anc_tag == "svg" {
             // Check if b is inside this svg's subtree
-            return anc.idx <= flat[b].idx && flat[b].idx <= anc.end;
+            return anc.idx <= b.idx && b.end <= anc.end;
         }
     }
     false
@@ -546,21 +572,24 @@ fn creates_stacking_context(node: &DiffNode) -> bool {
 
 /// Find the effective z-index of a node by climbing ancestors until reaching a
 /// stacking context boundary. Returns `None` for `auto`/unset.
-fn effective_z_index(flat: &[Flat], i: usize) -> Option<i64> {
+fn effective_z_index(flat: &[Flat<'_>], node: &Flat<'_>) -> Option<i64> {
     // Check the node itself first.
-    if creates_stacking_context(flat[i].node) {
-        return node_z_index(flat[i].node);
+    if creates_stacking_context(node.node) {
+        return node_z_index(node.node);
     }
     // Climb ancestors: find the nearest ancestor whose subtree contains this node.
     // We scan backwards (ancestors come before descendants in pre-order).
-    let idx = flat[i].idx;
-    for j in (0..i).rev() {
-        if flat[j].idx <= idx && idx <= flat[j].end {
+    let idx = node.idx;
+    for j in (0..idx).rev() {
+        let Some(fj) = flat.get(j) else {
+            continue;
+        };
+        if fj.idx <= idx && idx <= fj.end {
             // j is an ancestor of i.
-            if creates_stacking_context(flat[j].node) {
-                return node_z_index(flat[j].node);
+            if creates_stacking_context(fj.node) {
+                return node_z_index(fj.node);
             }
-        } else if flat[j].idx > idx {
+        } else if fj.idx > idx {
             // Past the ancestor range — stop.
             break;
         }
@@ -572,14 +601,14 @@ fn effective_z_index(flat: &[Flat], i: usize) -> Option<i64> {
 ///
 /// Uses effective z-index (climbing ancestors to the nearest stacking context)
 /// instead of comparing the node's own z-index directly.
-fn paints_above(flat: &[Flat], a: usize, b: usize) -> bool {
+fn paints_above(flat: &[Flat<'_>], a: &Flat<'_>, b: &Flat<'_>) -> bool {
     let za = effective_z_index(flat, a);
     let zb = effective_z_index(flat, b);
     match (za, zb) {
         (Some(va), Some(vb)) if va != vb => va > vb,
         (Some(_), None) => true,
         (None, Some(_)) => false,
-        _ => flat[a].idx > flat[b].idx,
+        _ => a.idx > b.idx,
     }
 }
 
@@ -612,7 +641,7 @@ fn node_z_index(node: &DiffNode) -> Option<i64> {
 }
 
 /// Keep the highest-coverage coverer for a covered node.
-fn record_cover(covered: &mut HashMap<usize, (usize, f64)>, who: usize, by: usize, cov: f64) {
+fn record_cover(covered: &mut BTreeMap<usize, (usize, f64)>, who: usize, by: usize, cov: f64) {
     match covered.get(&who) {
         Some((_, best)) if *best >= cov => {}
         _ => {
@@ -623,7 +652,7 @@ fn record_cover(covered: &mut HashMap<usize, (usize, f64)>, who: usize, by: usiz
 
 fn check_node(
     node: &DiffNode,
-    ctx: &AncestorCtx,
+    ctx: AncestorCtx,
     viewport: Option<(f64, f64)>,
     out: &mut Vec<CheckLine>,
 ) {
@@ -832,7 +861,7 @@ fn check_node(
             .as_ref()
             .and_then(|a| a.get("alt"))
             .and_then(Value::as_str);
-        if let Some("") = alt
+        if alt == Some("")
             && let Some((w, h)) = rect_size(node)
             && w > 32.0
             && h > 32.0
@@ -1042,8 +1071,8 @@ fn check_node(
                 status: RuleStatus::Warn,
                 evidence: format!(
                     "image thumbnail is {}×{}px (recommended minimum 150×150 for comfortable viewing)",
-                    w.round() as u32,
-                    h.round() as u32
+                    sniff_core::numeric::f64_to_u32(w),
+                    sniff_core::numeric::f64_to_u32(h)
                 ),
             });
         }
@@ -1294,16 +1323,18 @@ pub fn write_checks<W: std::io::Write>(writer: &mut W, lines: &[CheckLine]) -> s
 
 /// Aggregate counters over check lines.
 pub fn summarize(lines: &[CheckLine]) -> (usize, usize, usize) {
-    let mut pass = 0;
-    let mut warn = 0;
-    let mut fail = 0;
-    for line in lines {
-        match line.status {
-            RuleStatus::Pass => pass += 1,
-            RuleStatus::Warn => warn += 1,
-            RuleStatus::Fail => fail += 1,
-        }
-    }
+    let pass = lines
+        .iter()
+        .filter(|l| l.status == RuleStatus::Pass)
+        .count();
+    let warn = lines
+        .iter()
+        .filter(|l| l.status == RuleStatus::Warn)
+        .count();
+    let fail = lines
+        .iter()
+        .filter(|l| l.status == RuleStatus::Fail)
+        .count();
     (pass, warn, fail)
 }
 
@@ -1311,12 +1342,11 @@ pub fn summarize(lines: &[CheckLine]) -> (usize, usize, usize) {
 mod tests {
     use super::*;
 
-    fn style_node(
-        selector: &str,
-        tag: &str,
-        visual: serde_json::Value,
-        typography: serde_json::Value,
-    ) -> DiffNode {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "helper de teste: `json!(…)` mantém as chamadas concisas"
+    )]
+    fn style_node(selector: &str, tag: &str, visual: Value, typography: Value) -> DiffNode {
         DiffNode {
             id: 0,
             parent_id: None,
@@ -1854,12 +1884,11 @@ mod tests {
     }
 
     /// Build a node with full control over styles/rect/aria for the new rules.
-    fn raw_node(
-        selector: &str,
-        tag: &str,
-        styles: serde_json::Value,
-        aria: serde_json::Value,
-    ) -> DiffNode {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "helper de teste: `json!(…)` mantém as chamadas concisas"
+    )]
+    fn raw_node(selector: &str, tag: &str, styles: Value, aria: Value) -> DiffNode {
         DiffNode {
             id: 0,
             parent_id: None,
@@ -1883,7 +1912,7 @@ mod tests {
         }
     }
 
-    fn node_with(selector: &str, styles: serde_json::Value) -> DiffNode {
+    fn node_with(selector: &str, styles: Value) -> DiffNode {
         raw_node(
             selector,
             "DIV",
@@ -2173,12 +2202,8 @@ mod tests {
             children: vec![],
         };
         let lines = run_rules(&[node], None);
-        let hits: Vec<_> = lines
-            .iter()
-            .filter(|l| l.check == "small-thumbnail")
-            .collect();
         assert!(
-            hits.is_empty(),
+            !lines.iter().any(|l| l.check == "small-thumbnail"),
             "large thumbnail should not trigger small-thumbnail"
         );
     }
@@ -2216,12 +2241,8 @@ mod tests {
             children: vec![],
         };
         let lines = run_rules(&[node], None);
-        let hits: Vec<_> = lines
-            .iter()
-            .filter(|l| l.check == "small-thumbnail")
-            .collect();
         assert!(
-            hits.is_empty(),
+            !lines.iter().any(|l| l.check == "small-thumbnail"),
             "non-clickable element should not trigger small-thumbnail"
         );
     }

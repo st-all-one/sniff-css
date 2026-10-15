@@ -9,8 +9,15 @@
 //! web output. Skipped (pass with a message) when no Chrome binary is present.
 //!
 //! Regenerate deliberately (Chrome bump, intentional output change) with:
-//!   UPDATE_GOLDEN=1 cargo test -p sniff-engine --test golden
+//!   `UPDATE_GOLDEN=1` cargo test -p sniff-engine --test golden
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "arquivo de teste: falha (`.unwrap()`/`.expect()`/`panic!`) e skip (`eprintln!`) são o resultado esperado"
+)]
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::config::{OutputFormat, parse_categories};
 use sniff_core::{ElementFilter, OutputConfig, SniffConfig, SniffResult, Viewport, WaitStrategy};
@@ -136,7 +143,7 @@ async fn check_golden(
     let text = String::from_utf8(buf).expect("output is utf8");
     let path = golden_path(golden);
 
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+    if sniff_core::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::create_dir_all(path.parent().expect("golden parent")).expect("create golden dir");
         std::fs::write(&path, &text).expect("write golden");
         eprintln!("golden written: {}", path.display());

@@ -10,6 +10,6 @@ pub mod session;
 pub use browser::BrowserProcess;
 pub use client::{CdpClient, CdpError};
 pub use endpoint::resolve_endpoint;
-pub use jsonrpc::{JsonRpcClient, JsonRpcError, JsonRpcEvent};
+pub use jsonrpc::{Incoming, JsonRpcClient, JsonRpcError, JsonRpcEvent, decode_incoming};
 pub use protocol::CdpEvent;
 pub use session::{CdpSession, CdpSessionError};

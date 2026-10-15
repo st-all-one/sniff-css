@@ -1,57 +1,68 @@
 # SESSION.md
 
-## Estado: FECHADO — v0.4.0 encerrada (2026-08-14)
+## Estado: FECHADO — v0.5.0 encerrada (2026-10-15)
 
 Todas as frentes desta etapa foram concluídas, validadas e documentadas. A
-v0.4.0 (workspace já em `0.4.0`) é o fechamento do backend Flutter.
+**v0.5.0** (workspace em `0.5.0`) é o fechamento da **fase de qualidade e
+estabilidade**: base **Rust 1.99 / Edition 2024**, toolchain de rigor e
+determinismo como padrão. Nenhuma mudança de comportamento de captura foi
+introduzida de propósito — o foco foi rigor, previsibilidade e supply chain.
 
-### O que entrou na v0.4.0
+### O que entrou na v0.5.0
 
-- Backend **Flutter/Dart nativo** (`sniff-flutter`): captura da árvore de
-  widgets via Dart VM Service (`flutter run/attach --machine` +
-  `ext.flutter.inspector.*`), mesmo modelo JSONL do web (diff/check por path).
-- **`--backend auto`** — `flutter://<device>` infere backend e device.
-- **`--viewport`** no Flutter (CLI + MCP `sniffFlutter_page`): `adb shell wm
-  size WxH` antes do launch, restaurado ao final (incl. erros).
-- **Actions no Flutter** (CLI `--action`/`--click`/`--type` + MCP `actions`):
-  via extensão Flutter Driver (`ext.flutter.driver`); `hover`/`upload` web-only.
-  Requisito: `enableFlutterDriverExtension()` no app.
-- **Screenshot** (`adb exec-out screencap`), **`JsonRpcClient` genérico**
-  (CDP + VM Service).
-
-### Bugs-chave resolvidos (documentados no CHANGELOG)
-
-1. Driver `tap` travava (pump `endOfFrame` sem frames) → `keep_frames_alive()`
-   instala loop de frames via `evaluate`; exige emulador **com janela** (vsync).
-2. `ext.flutter.driver` espalha `isError`/`response` no topo do envelope
-   `_extensionType` → `unwrap_extension_result` passava o payload para `null` e
-   timeout virava `Ok`; agora o envelope espalhado passa intacto.
-3. `freeze_animations` (timeDilation 1e6) deixava o app congelado → CLI/MCP
-   restauram `timeDilation=1.0` ao início e ao final da captura.
+- **Superfície da CLI (modelo knudge)** — binário `sniff` único com verbos
+  (`capture`, `init`, `diff`, `check`, `snapshots`, `prime`, `self`, `help`);
+  `sniff-mcp` separado; `--json`/`--log-level`/`--quiet` globais; envelope de
+  máquina e códigos de saída; `sniff prime` estático; `sniff self`. O
+  instalador remove os binários legados `sniffCSS*`. Contrato:
+  `docs/cli-surface.md`.
+- **Toolchain** — `rust-toolchain.toml` (canal `1.99`), `rust-version` e
+  `clippy.toml::msrv` alinhados; crates em Edition 2024 (resolver v3);
+  `rustfmt.toml` e `clippy.toml` no rigor máximo.
+- **Lints (fase 3, eixos A–D)** — grupos `pedantic`/`nursery`/`cargo` ligados e
+  restriction curada; em `deny`: `unwrap`/`expect`/`panic`/`unreachable`,
+  `print_*`, `indexing_slicing`, `arithmetic_side_effects`,
+  `disallowed_methods`/`disallowed_types`/`disallowed_macros`,
+  `as_conversions` + `cast_*`, `undocumented_unsafe_blocks`,
+  `allow_attributes(_without_reason)`, `let_underscore_*`.
+- **Determinismo** — `HashMap`/`HashSet` → `BTreeMap`/`BTreeSet`; ordenações
+  por `f64::total_cmp`/`to_bits`; fontes não-determinísticas centralizadas
+  (`sniff_core::env`, `utc_now`, timestamps injetáveis).
+- **Segurança** — zero `unsafe` (`#![forbid(unsafe_code)]` no núcleo); auditoria
+  de concorrência; `cargo deny`/`audit`/`machete`.
+- **Desempenho** — iteradores sem índice, casts auditados em
+  `sniff_core::numeric`, saída em `BufWriter`, benchmarks `criterion`.
+- **CI** — `fmt`/`clippy`/`test`/`deny`/`audit`/`machete`/`typos` + Miri (smoke)
+  + fuzz (JSONL/JSON-RPC).
+- **Dependências** — `cargo update` (50 crates), `tokio-tungstenite` 0.26→0.30,
+  deps não usadas removidas.
 
 ### Validação
 
-- CLI end-to-end em emulador windowed: counter 4→5→6, modal (`AlertDialog` no
-  tree), `--type` (texto confirmado no campo).
-- MCP `sniffFlutter_page` com `actions` validado ao vivo (stdio): snapshot com
-  o estado pós-tap.
-- Gates: `cargo fmt`, `clippy -D warnings`, **326 testes**, `flutter test` (2).
+- Gate completo verde: `fmt`, `clippy --all-targets -D warnings` (incl.
+  pedantic/nursery/cargo), toda a suíte de testes, `cargo deny`, `cargo audit`,
+  `cargo machete`.
+- **Miri** (`sniff-core/tests/miri_smoke.rs`): 3 testes, sem UB.
+- **Benchmarks**: baseline em `docs/benchmarks.md`.
+- **Fuzz**: `cargo fuzz build` validado no CI (local exige compilador C++).
 
-### Docs atualizados para o fechamento
+### Docs do fechamento
 
-- `CHANGELOG.md` — `[Unreleased]` consolidado em `[0.4.0] — 2026-08-14`
-  (Added + Fixed organizados; sem `Unreleased`).
-- `docs/flutter.md` — §4.1 (emulador com janela), §5.1 (ações), novo §6
-  "Testar de fato num app real (checklist)"; seções renumeradas (§7-9).
-- `docs/architecture.md` — bullets de interações (driver) e viewport.
-- `docs/ai-usage.md` — params do `sniffFlutter_page` (viewport + actions).
-- `docs/usage.md` — seção Flutter com actions; exemplo de install `v0.4.0`.
-- `SKILL.md` (+ sincronizado com `~/.config/opencode/skills/sniff-css/SKILL.md`)
-  e `llms.txt` — nota de actions/viewport no backend Flutter.
+- `CHANGELOG.md` — `[Unreleased]` consolidado em `[0.5.0] — 2026-10-15`
+  (Changed/Added/Fixed), sem `Unreleased`.
+- `docs/quality.md` — política de lints/toolchain/exceções, performance e
+  verificação dinâmica.
+- `docs/phase-3.md` — plano do rigor por eixo (A/B/C/D), concluído.
+- `docs/benchmarks.md` — baseline `criterion`.
+- `docs/dependencies.md` — revisão de necessidade/atualização (passo prévio a
+  cada release).
+- `docs/cli-surface.md` — contrato da superfície de verbos (`prime`/`self`/help/envelope).
+- `install.sh`, `SKILL.md`, `docs/usage.md`, `docs/docker.md` e
+  `docker/Dockerfile` — exemplos de versão para `v0.5.0`.
 
 ### Notas / armadilhas (relevantes para a próxima feature)
 
-- **NÃO commitar**: `conversations/` (untracked legado), `sniffCSS/`.
+- **NÃO commitar**: `conversations/` (untracked legado), `sniff/`.
 - AVD é `sniff`; para actions use emulador **com janela** (`-gpu host`, sem
   `-no-window`); `adb root` + `setenforce 0`.
 - Pegadinha de shell: selector com `'` (ex. `FilledButton-[<'counter'>][0]`)
@@ -59,5 +70,5 @@ v0.4.0 (workspace já em `0.4.0`) é o fechamento do backend Flutter.
 - `adb kill-server`/`start-server` pode dessincronizar e "perder" o emulador.
 - Rects de filhos de `Flex` têm offset 0 (limitação do `getLayoutExplorerNode`)
   — actions usam o finder do driver, nunca `rect`.
-- Release: `git tag v0.4.0 && git push origin v0.4.0` (workflow
+- Release: `git tag v0.5.0 && git push origin v0.5.0` (workflow
   `.github/workflows/release.yml` + `docs/docker.md`).

@@ -533,7 +533,9 @@ const EXTRACT_JS: &str = r#"
 /// were captured, the global `:root` variable map (once, not per node).
 #[derive(Debug, Clone, Default)]
 pub struct SniffOutcome {
+    /// The extracted snapshot forest.
     pub snapshots: Vec<ElementSnapshot>,
+    /// Global `:root` CSS custom properties, captured once when requested.
     pub global_css_variables: Option<Vec<(String, String)>>,
     /// Full accessibility subtree (CDP `Accessibility` domain) for the
     /// matched elements, when `ax_tree` capture was requested.
@@ -602,18 +604,26 @@ fn build_categories(config: &SniffConfig) -> Map<String, Value> {
         if has_all || *cat == StyleCategory::Custom {
             continue;
         }
-        let props: Vec<String> = cat.properties().iter().map(|s| s.to_string()).collect();
         map.insert(
             cat.key().to_string(),
-            Value::Array(props.into_iter().map(Value::String).collect()),
+            Value::Array(
+                cat.properties()
+                    .iter()
+                    .map(|p| Value::String(p.to_string()))
+                    .collect(),
+            ),
         );
     }
     if has_all {
         for cat in StyleCategory::all() {
-            let props: Vec<String> = cat.properties().iter().map(|s| s.to_string()).collect();
             map.insert(
                 cat.key().to_string(),
-                Value::Array(props.into_iter().map(Value::String).collect()),
+                Value::Array(
+                    cat.properties()
+                        .iter()
+                        .map(|p| Value::String(p.to_string()))
+                        .collect(),
+                ),
             );
         }
     }
@@ -694,7 +704,10 @@ fn parse_node(v: &Value) -> ElementSnapshot {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
-        depth: v.get("depth").and_then(Value::as_u64).unwrap_or(0) as usize,
+        depth: v
+            .get("depth")
+            .and_then(Value::as_u64)
+            .map_or(0, |d| usize::try_from(d).unwrap_or(usize::MAX)),
         rect: v.get("rect").map(parse_rect),
         metrics: v.get("metrics").map(parse_metrics),
         noticeable: v.get("isUserNoticeable").and_then(parse_noticeable),

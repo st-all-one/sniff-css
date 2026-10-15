@@ -275,6 +275,10 @@ pub async fn capture(
 ///
 /// The report is a JSON object ready to be pushed into the `__actions` output
 /// area. Pure and deterministic (no I/O), so it is unit-testable.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shape pública do relatório de efeitos"
+)]
 pub fn diff(
     before: &Value,
     after: &Value,
@@ -311,9 +315,9 @@ pub fn diff(
                 let moved = !root && rect_delta(&before_rec.rect, &rec.rect);
                 if visible_changed {
                     if rec.visible {
-                        n_revealed += 1;
+                        n_revealed = n_revealed.saturating_add(1);
                     } else {
-                        n_hidden += 1;
+                        n_hidden = n_hidden.saturating_add(1);
                     }
                 }
                 if (visible_changed || sig_changed || moved)
@@ -324,7 +328,7 @@ pub fn diff(
                         vw,
                         vh,
                         visible_changed,
-                        changed_props,
+                        &changed_props,
                         moved,
                     )
                 {
@@ -340,17 +344,20 @@ pub fn diff(
     }
 
     let sort_key = |v: &Value| {
-        let area = v.get("rect").and_then(rect_of).map(area).unwrap_or(0.0);
+        let area = v.get("rect").and_then(rect_of).map_or(0.0, area);
+        // Area is always finite and non-negative, so the IEEE-754 bit pattern
+        // is monotonic with the value: `to_bits` gives a full-precision,
+        // total, deterministic key without an `f64 -> i64` cast.
         std::cmp::Reverse((
-            area as i64,
+            area.to_bits(),
             v.get("path")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
         ))
     };
-    appeared.sort_by_key(sort_key);
-    removed.sort_by_key(sort_key);
+    appeared.sort_by_cached_key(sort_key);
+    removed.sort_by_cached_key(sort_key);
     // Semantic changes (css_diff/visibility) first, then largest area — so a
     // busy page opens with the entries that carry the most information.
     let changed_sort_key = |v: &Value| {
@@ -359,17 +366,17 @@ pub fn diff(
             .and_then(Value::as_object)
             .is_some_and(|o| !o.is_empty())
             || v.get("visible_before").is_some();
-        let area = v.get("rect").and_then(rect_of).map(area).unwrap_or(0.0);
+        let area = v.get("rect").and_then(rect_of).map_or(0.0, area);
         std::cmp::Reverse((
-            semantic as u8,
-            area as i64,
+            semantic,
+            area.to_bits(),
             v.get("path")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
         ))
     };
-    changed.sort_by_key(changed_sort_key);
+    changed.sort_by_cached_key(changed_sort_key);
     if limit > 0 {
         appeared.truncate(limit);
         removed.truncate(limit);
@@ -443,11 +450,11 @@ enum Effect {
 impl std::fmt::Display for Effect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Effect::Revealed => "revealed",
-            Effect::Hidden => "hidden",
-            Effect::Changed => "changed",
-            Effect::Moved => "moved",
-            Effect::None => "no_effect",
+            Self::Revealed => "revealed",
+            Self::Hidden => "hidden",
+            Self::Changed => "changed",
+            Self::Moved => "moved",
+            Self::None => "no_effect",
         })
     }
 }
@@ -476,7 +483,10 @@ fn classify_effect(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "relatório agregado; struct só burocratiza a chamada"
+)]
 fn build_summary(
     effect: Effect,
     n_appeared: usize,
@@ -490,19 +500,19 @@ fn build_summary(
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if n_appeared > 0 {
-        parts.push(format!("{} element(s) appeared", n_appeared));
+        parts.push(format!("{n_appeared} element(s) appeared"));
     }
     if n_revealed > 0 {
-        parts.push(format!("{} became visible", n_revealed));
+        parts.push(format!("{n_revealed} became visible"));
     }
     if n_removed > 0 {
-        parts.push(format!("{} removed", n_removed));
+        parts.push(format!("{n_removed} removed"));
     }
     if n_hidden > 0 {
-        parts.push(format!("{} became hidden", n_hidden));
+        parts.push(format!("{n_hidden} became hidden"));
     }
     if n_changed > 0 {
-        parts.push(format!("{} changed style/position", n_changed));
+        parts.push(format!("{n_changed} changed style/position"));
     }
     if effect == Effect::None {
         return "no DOM change within the settle window (the action may have had no handler, or the effect is async — raise settle_ms/--wait to observe it)".to_string();
@@ -520,19 +530,21 @@ fn build_summary(
         } else {
             let oov = out_of_view((x, y, w, h), vw, vh);
             let dirs = oov_dirs(&oov);
-            if dirs.is_empty() {
-                "off-screen".to_string()
-            } else {
-                format!("{}px {}", dirs[0].1 as u64, dirs[0].0)
-            }
+            dirs.first().map_or_else(
+                || "off-screen".to_string(),
+                |(dir, px)| format!("{}px {dir}", sniff_core::numeric::f64_to_u64(*px)),
+            )
         };
-        let dist = distance_from_point((x, y, w, h), target.center.0, target.center.1) as u64;
-        summary.push_str(&format!(
-            " · biggest: {} {} — {}px from click",
-            rec_tag(rec),
-            where_note,
-            dist,
+        let dist = sniff_core::numeric::f64_to_u64(distance_from_point(
+            (x, y, w, h),
+            target.center.0,
+            target.center.1,
         ));
+        let biggest = format!(
+            " · biggest: {} {where_note} — {dist}px from click",
+            rec_tag(rec),
+        );
+        summary.push_str(&biggest);
     }
     summary
 }
@@ -559,7 +571,7 @@ fn oov_dirs(oov: &Value) -> Vec<(&str, f64)> {
     ]
     .to_vec();
     dirs.retain(|(_, v)| *v > 0.5);
-    dirs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    dirs.sort_by(|a, b| b.1.total_cmp(&a.1));
     dirs
 }
 
@@ -639,7 +651,7 @@ fn signature_diff_keys(
     props
         .iter()
         .filter(|p| !css_value_equal(before.get(**p), after.get(**p)))
-        .map(|p| p.to_string())
+        .map(ToString::to_string)
         .collect()
 }
 
@@ -656,7 +668,7 @@ fn css_value_equal(a: Option<&Value>, b: Option<&Value>) -> bool {
             x == y || numeric_close(x, y, SIGNATURE_TOLERANCE)
         }
         (Some(Value::Number(x)), Some(Value::Number(y))) => match (x.as_f64(), y.as_f64()) {
-            (Some(x), Some(y)) => x == y || (x - y).abs() <= SIGNATURE_TOLERANCE,
+            (Some(x), Some(y)) => (x - y).abs() <= SIGNATURE_TOLERANCE,
             _ => x == y,
         },
         (Some(x), Some(y)) => x == y,
@@ -664,7 +676,11 @@ fn css_value_equal(a: Option<&Value>, b: Option<&Value>) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "relatório agregado; struct só burocratiza a chamada"
+)]
 fn changed_entry(
     before: &ElementRec,
     after: &ElementRec,
@@ -672,7 +688,7 @@ fn changed_entry(
     vw: f64,
     vh: f64,
     visible_changed: bool,
-    changed_props: Vec<String>,
+    changed_props: &[String],
     moved: bool,
 ) -> Option<Value> {
     // Skip nodes that only moved (roots never get here with `moved`, geometry
@@ -691,7 +707,7 @@ fn changed_entry(
     }
     if !changed_props.is_empty() {
         let mut diff = Map::new();
-        for k in &changed_props {
+        for k in changed_props {
             let mut pair = Map::new();
             pair.insert(
                 "before".into(),
@@ -713,18 +729,21 @@ fn changed_entry(
 // ---------------------------------------------------------------------------
 
 fn parse_viewport(v: &Value) -> (f64, f64) {
-    let arr = v.get("viewport").and_then(Value::as_array);
-    match arr {
-        Some(a) if a.len() >= 2 => (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)),
-        _ => (0.0, 0.0),
-    }
+    let axis = |i: usize| {
+        v.get("viewport")
+            .and_then(Value::as_array)
+            .and_then(|a| a.get(i))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+    };
+    (axis(0), axis(1))
 }
 
 fn parse_elements(v: &Value) -> Vec<ElementRec> {
-    let mut out = Vec::new();
     let Some(arr) = v.get("elements").and_then(Value::as_array) else {
-        return out;
+        return Vec::new();
     };
+    let mut out = Vec::with_capacity(arr.len());
     for el in arr {
         let key = el
             .get("k")
@@ -769,8 +788,8 @@ fn parse_rect(v: Option<&Value>) -> (f64, f64, f64, f64) {
     (get(0), get(1), get(2), get(3))
 }
 
-fn keyed(recs: Vec<ElementRec>) -> std::collections::HashMap<String, ElementRec> {
-    let mut m = std::collections::HashMap::new();
+fn keyed(recs: Vec<ElementRec>) -> std::collections::BTreeMap<String, ElementRec> {
+    let mut m = std::collections::BTreeMap::new();
     for rec in recs {
         if rec.key.is_empty() {
             continue;
@@ -871,7 +890,7 @@ fn distance_from_point(rect: (f64, f64, f64, f64), x: f64, y: f64) -> f64 {
     let (rx, ry, rw, rh) = rect;
     let dx = (rx - x).max(0.0).max(x - (rx + rw));
     let dy = (ry - y).max(0.0).max(y - (ry + rh));
-    (dx * dx + dy * dy).sqrt()
+    dx.hypot(dy)
 }
 
 /// Compass direction from a point to a rect center.
@@ -975,6 +994,10 @@ mod tests {
         })
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "helper de teste: `vec![…]` mantém as chamadas concisas"
+    )]
     fn snapshot(recs: Vec<Value>) -> Value {
         json!({ "viewport": [1366.0, 768.0], "elements": recs })
     }
@@ -1008,6 +1031,10 @@ mod tests {
         rec.get(field)?.as_array()?.get(idx)
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "helper de teste: `json!(…)` mantém as chamadas concisas"
+    )]
     fn rec_with_sig(key: &str, tag: &str, sig: Value) -> Value {
         json!({
             "k": key, "t": tag, "r": [0.0, 0.0, 100.0, 40.0],
@@ -1214,7 +1241,7 @@ mod tests {
         )];
         for i in 0..5 {
             let key = format!("body > .a{i}");
-            let w = 100.0 + i as f64 * 50.0;
+            let w = f64::mul_add(f64::from(i), 50.0, 100.0);
             before_recs.push(rec(&key, "DIV", (0.0, 0.0, 0.0, 0.0), false, "none"));
             after_recs.push(rec(&key, "DIV", (10.0, 10.0, w, 40.0), true, "block"));
         }
@@ -1412,7 +1439,7 @@ mod tests {
         );
 
         // A real size change (unit-consistent) still surfaces.
-        let mut sig_c = sig_a.clone();
+        let mut sig_c = sig_a;
         sig_c["font-size"] = Value::String("20px".into());
         let after2 = snapshot(vec![
             rec(
@@ -1434,8 +1461,8 @@ mod tests {
         );
         let changed = report["changed"].as_array().unwrap();
         assert_eq!(changed.len(), 1);
-        assert!(changed[0]["css_diff"]["font-size"]["before"] == "16px");
-        assert!(changed[0]["css_diff"]["font-size"]["after"] == "20px");
+        assert_eq!(changed[0]["css_diff"]["font-size"]["before"], "16px");
+        assert_eq!(changed[0]["css_diff"]["font-size"]["after"], "20px");
     }
 
     #[test]

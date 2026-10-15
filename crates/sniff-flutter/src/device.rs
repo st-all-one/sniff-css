@@ -16,18 +16,31 @@ use tokio::process::{Child, Command};
 /// Errors from device/emulator management.
 #[derive(Debug, Error)]
 pub enum DeviceError {
+    /// `adb` was not found on `PATH`.
     #[error("adb not found on PATH (install Android platform-tools)")]
     AdbNotFound,
+    /// The `emulator` binary was not found on `PATH`.
     #[error("emulator binary not found on PATH")]
     EmulatorNotFound,
+    /// No attached device matched the request.
     #[error("no device found: run `adb devices` or pass --avd")]
     NoDevice,
+    /// `adb` returned an error.
     #[error("adb error: {0}")]
     Adb(String),
+    /// The emulator exited before becoming ready.
     #[error("emulator exited with {status} before becoming ready")]
-    EmulatorExited { status: String },
+    EmulatorExited {
+        /// Exit status or signal description.
+        status: String,
+    },
+    /// Timed out waiting for the device to come online.
     #[error("timed out waiting for device `{serial}` to be online")]
-    Timeout { serial: String },
+    Timeout {
+        /// `adb` serial of the awaited device.
+        serial: String,
+    },
+    /// Underlying I/O error.
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -53,14 +66,14 @@ impl std::fmt::Debug for EmulatorProcess {
         f.debug_struct("EmulatorProcess")
             .field("avd", &self.avd)
             .field("serial", &self.serial)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl EmulatorProcess {
     /// Launch an emulator AVD, waiting for it to come online.
     pub async fn launch(avd: &str) -> Result<Self, DeviceError> {
-        if std::env::var_os("ANDROID_SDK_ROOT").is_none() && which("emulator").is_none() {
+        if sniff_core::env::var_os("ANDROID_SDK_ROOT").is_none() && which("emulator").is_none() {
             return Err(DeviceError::EmulatorNotFound);
         }
         let mut child = Command::new("emulator")
@@ -94,11 +107,15 @@ impl EmulatorProcess {
             serial: None,
         };
         let device = wait_for_any_device(Duration::from_secs(120)).await?;
-        proc.serial = Some(device.serial.clone());
+        proc.serial = Some(device.serial);
         Ok(proc)
     }
 
     /// Wrap an already-running device/emulator; no process is owned.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "API pública simétrica a `launch`, que é falível"
+    )]
     pub fn attach(serial: &str) -> Result<Self, DeviceError> {
         Ok(Self {
             child: None,
@@ -126,7 +143,7 @@ impl EmulatorProcess {
 impl Drop for EmulatorProcess {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {
-            let _ = child.start_kill();
+            drop(child.start_kill());
         }
     }
 }
@@ -182,12 +199,12 @@ pub fn is_flutter_available() -> bool {
 
 /// Wait until at least one device appears on `adb devices`.
 async fn wait_for_any_device(timeout: Duration) -> Result<Device, DeviceError> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let start = tokio::time::Instant::now();
     loop {
         if let Some(dev) = list_devices().await?.into_iter().next() {
             return Ok(dev);
         }
-        if tokio::time::Instant::now() >= deadline {
+        if start.elapsed() >= timeout {
             return Err(DeviceError::Timeout { serial: "*".into() });
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -196,7 +213,7 @@ async fn wait_for_any_device(timeout: Duration) -> Result<Device, DeviceError> {
 
 /// Minimal `PATH` lookup (no external crate).
 fn which(bin: &str) -> Option<std::path::PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
+    sniff_core::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
             .map(|dir| dir.join(bin))
             .find(|p| p.exists())
@@ -243,12 +260,11 @@ pub async fn set_wm_size(serial: &str, width: u32, height: u32) -> Result<(), De
 /// Restore a previously-read `wm size` override, or reset to the physical size
 /// when none was active before.
 pub async fn restore_wm_size(serial: &str, prev: Option<(u32, u32)>) -> Result<(), DeviceError> {
-    match prev {
-        Some((w, h)) => set_wm_size(serial, w, h).await,
-        None => {
-            adb(&["-s", serial, "shell", "wm", "size", "reset"]).await?;
-            Ok(())
-        }
+    if let Some((w, h)) = prev {
+        set_wm_size(serial, w, h).await
+    } else {
+        adb(&["-s", serial, "shell", "wm", "size", "reset"]).await?;
+        Ok(())
     }
 }
 
@@ -297,7 +313,7 @@ impl Drop for ViewportGuard {
         let serial = self.serial.clone();
         let prev = self.prev;
         tokio::spawn(async move {
-            let _ = restore_wm_size(&serial, prev).await;
+            drop(restore_wm_size(&serial, prev).await);
         });
     }
 }
@@ -320,7 +336,7 @@ mod tests {
             eprintln!("skipping: no adb");
             return;
         }
-        let _ = list_devices().await;
+        drop(list_devices().await);
     }
 
     #[test]

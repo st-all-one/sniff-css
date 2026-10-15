@@ -81,7 +81,7 @@ impl ChromePool {
     ) -> SniffResult<SniffOutcome>
     where
         F: FnMut(Phase) -> Fut + Clone,
-        Fut: std::future::Future<Output = ()>,
+        Fut: Future<Output = ()>,
     {
         let _permit = self
             .inner
@@ -112,11 +112,11 @@ impl ChromePool {
     ) -> SniffResult<SniffOutcome>
     where
         F: FnMut(Phase) -> Fut,
-        Fut: std::future::Future<Output = ()>,
+        Fut: Future<Output = ()>,
     {
         let session = sniffer.new_session().await?;
         let result = sniff_session_with_progress(&session, config, on_progress).await;
-        let _ = session.close().await;
+        drop(session.close().await);
         result
     }
 

@@ -45,7 +45,7 @@ class _SniffFixtureAppState extends State<SniffFixtureApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'sniffCSS fixture',
+      title: 'sniff fixture',
       home: Scaffold(
         body: ColoredBox(
           color: const Color(0xFF2563EB),
@@ -54,7 +54,7 @@ class _SniffFixtureAppState extends State<SniffFixtureApp> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'Olá, sniffCSS',
+                  'Olá, sniff',
                   key: ValueKey('greeting'),
                   style: TextStyle(
                     color: Colors.white,

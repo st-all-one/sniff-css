@@ -10,11 +10,14 @@ use serde_json::{Map, Value};
 use sniff_core::properties::StyleCategory;
 use sniff_core::types::{ComputedProperty, ComputedStyles, ElementSnapshot};
 use sniff_core::{OutputConfig, OutputFormat, SniffError, SniffResult};
-use std::collections::HashMap;
 use std::io::Write;
 use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
 use crate::extractor::SniffOutcome;
+
+/// Global CSS custom properties keyed by name. Iterated in sorted order, so
+/// the emitted `css_variables` is byte-identical across runs.
+type GlobalVars = std::collections::BTreeMap<String, String>;
 
 /// Curated property allow-list for the summary (`--summary`/`--output slim`)
 /// digest: the props that answer "what does this look like / is it laid out"
@@ -66,7 +69,7 @@ const SLIM_PROPS: &[&str] = &[
 pub fn snapshot_to_json(
     snap: &ElementSnapshot,
     config: &OutputConfig,
-    global_vars: Option<&HashMap<String, String>>,
+    global_vars: Option<&GlobalVars>,
     defaults: Option<&Map<String, Value>>,
 ) -> Value {
     node_to_json(snap, config, global_vars, defaults, true)
@@ -76,7 +79,7 @@ pub fn snapshot_to_json(
 fn node_to_json(
     snap: &ElementSnapshot,
     config: &OutputConfig,
-    global_vars: Option<&HashMap<String, String>>,
+    global_vars: Option<&GlobalVars>,
     defaults: Option<&Map<String, Value>>,
     tree: bool,
 ) -> Value {
@@ -234,7 +237,7 @@ fn json_rect(x: f64, y: f64, width: f64, height: f64) -> Value {
 fn styles_to_json(
     styles: &ComputedStyles,
     config: &OutputConfig,
-    global_vars: Option<&HashMap<String, String>>,
+    global_vars: Option<&GlobalVars>,
 ) -> Value {
     let mut obj = Map::new();
     for (category, props) in &styles.groups {
@@ -259,7 +262,7 @@ fn styles_to_json(
         }
 
         let props = if config.compact {
-            compact_group(*category, props)
+            compact_group(props)
         } else {
             props.clone()
         };
@@ -288,7 +291,7 @@ fn props_map(props: &[ComputedProperty]) -> Map<String, Value> {
 /// Keep only variables whose value differs from the inherited global map.
 fn scope_variables(
     props: &[ComputedProperty],
-    global_vars: Option<&HashMap<String, String>>,
+    global_vars: Option<&GlobalVars>,
 ) -> Vec<ComputedProperty> {
     match global_vars {
         Some(global) => props
@@ -302,8 +305,8 @@ fn scope_variables(
 
 /// Reduce a category group in compact mode: drop logical properties that
 /// duplicate their physical counterpart, and suppress default/noise values.
-fn compact_group(category: StyleCategory, props: &[ComputedProperty]) -> Vec<ComputedProperty> {
-    let map: HashMap<&str, &str> = props
+fn compact_group(props: &[ComputedProperty]) -> Vec<ComputedProperty> {
+    let map: std::collections::BTreeMap<&str, &str> = props
         .iter()
         .map(|p| (p.name.as_str(), p.value.as_str()))
         .collect();
@@ -323,7 +326,6 @@ fn compact_group(category: StyleCategory, props: &[ComputedProperty]) -> Vec<Com
             if !KEEP_DEFAULTS.contains(&p.name.as_str()) && is_noise_value(p.value.trim()) {
                 return false;
             }
-            let _ = category;
             true
         })
         .cloned()
@@ -366,9 +368,6 @@ fn physical_equivalent(logical: &str) -> Option<String> {
         ("grid-column-gap", "column-gap"),
         ("grid-row-gap", "row-gap"),
     ];
-    if let Some(&(_, phys)) = MAP.iter().find(|(l, _)| *l == logical) {
-        return Some(phys.to_string());
-    }
     // Border logical variants: border-block-start-* -> border-top-*, etc.
     const BORDER: &[(&str, &str)] = &[
         ("border-block-start-", "border-top-"),
@@ -376,6 +375,9 @@ fn physical_equivalent(logical: &str) -> Option<String> {
         ("border-inline-start-", "border-left-"),
         ("border-inline-end-", "border-right-"),
     ];
+    if let Some(&(_, phys)) = MAP.iter().find(|(l, _)| *l == logical) {
+        return Some(phys.to_string());
+    }
     for (prefix, phys_prefix) in BORDER {
         if let Some(suffix) = logical.strip_prefix(prefix) {
             return Some(format!("{phys_prefix}{suffix}"));
@@ -521,7 +523,7 @@ pub fn write_output<W: Write>(
     let global = outcome
         .global_css_variables
         .as_ref()
-        .map(|vars| vars.iter().cloned().collect::<HashMap<_, _>>());
+        .map(|vars| vars.iter().cloned().collect::<GlobalVars>());
     // Compact constant-prop dedup: props whose value is identical across
     // every captured node are hoisted once to `__meta.style_defaults` and
     // omitted from each node's `styles`, slashing the JSONL by ~80% while
@@ -535,7 +537,7 @@ pub fn write_output<W: Write>(
 
     match config.format {
         OutputFormat::JsonLines => {
-            emit_meta_line(writer, &global, &defaults, config.viewport.as_ref())?;
+            emit_meta_line(writer, global.as_ref(), &defaults, config.viewport.as_ref())?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             for snap in &outcome.snapshots {
@@ -549,7 +551,7 @@ pub fn write_output<W: Write>(
             }
         }
         OutputFormat::JsonLinesFlat => {
-            emit_meta_line(writer, &global, &defaults, config.viewport.as_ref())?;
+            emit_meta_line(writer, global.as_ref(), &defaults, config.viewport.as_ref())?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             let mut nodes = Vec::new();
@@ -702,15 +704,13 @@ pub fn write_output<W: Write>(
                         "role".into(),
                         a.role
                             .as_ref()
-                            .map(|r| Value::String(r.clone()))
-                            .unwrap_or(Value::Null),
+                            .map_or(Value::Null, |r| Value::String(r.clone())),
                     );
                     ac.insert(
                         "name".into(),
                         a.name
                             .as_ref()
-                            .map(|n| Value::String(n.clone()))
-                            .unwrap_or(Value::Null),
+                            .map_or(Value::Null, |n| Value::String(n.clone())),
                     );
                     ac.insert("focusable".into(), Value::Bool(a.focusable));
                     obj.insert("aria".into(), Value::Object(ac));
@@ -735,7 +735,7 @@ pub fn write_output<W: Write>(
     Ok(())
 }
 
-/// Extract the curated `css` subset for the summary digest: the SLIM_PROPS
+/// Extract the curated `css` subset for the summary digest: the `SLIM_PROPS`
 /// allow-list values present in the (compacted) computed styles.
 fn slim_css(styles: &ComputedStyles, config: &OutputConfig) -> Map<String, Value> {
     let mut css = Map::new();
@@ -744,7 +744,7 @@ fn slim_css(styles: &ComputedStyles, config: &OutputConfig) -> Map<String, Value
             continue;
         }
         let filtered = if config.compact {
-            compact_group(*category, props)
+            compact_group(props)
         } else {
             props.clone()
         };
@@ -766,7 +766,7 @@ fn compacted_styles(styles: &ComputedStyles, config: &OutputConfig) -> Map<Strin
             continue;
         }
         let filtered = if config.compact {
-            compact_group(*category, props)
+            compact_group(props)
         } else {
             props.clone()
         };
@@ -816,7 +816,9 @@ fn compute_style_defaults(outcome: &SniffOutcome, config: &OutputConfig) -> Map<
 /// Hoist props that share an identical value across every node, grouped by
 /// category: returns `{category: {prop: value}}`.
 fn category_defaults(per_node: &[Map<String, Value>]) -> Map<String, Value> {
-    let first = &per_node[0];
+    let Some(first) = per_node.first() else {
+        return Map::new();
+    };
     let mut defaults: Map<String, Value> = Map::new();
     for (cat, props) in first {
         let Some(pmap) = props.as_object() else {
@@ -841,7 +843,9 @@ fn category_defaults(per_node: &[Map<String, Value>]) -> Map<String, Value> {
 /// Hoist props that share an identical value across every node in the flat
 /// summary `css` subset: returns `{prop: value}`.
 fn flat_defaults(per_node: &[Map<String, Value>]) -> Map<String, Value> {
-    let first = &per_node[0];
+    let Some(first) = per_node.first() else {
+        return Map::new();
+    };
     first
         .iter()
         .filter(|(prop, val)| per_node.iter().all(|m| m.get(*prop) == Some(*val)))
@@ -878,14 +882,11 @@ fn dedup_flat(value: &mut Map<String, Value>, defaults: &Map<String, Value>) {
     }
 }
 
-fn vars_to_json(vars: &HashMap<String, String>) -> Value {
-    // Deterministic order: sort keys so identical captures serialize
-    // byte-identically across runs (HashMap iteration order varies).
-    let mut keys: Vec<&String> = vars.keys().collect();
-    keys.sort();
+fn vars_to_json(vars: &GlobalVars) -> Value {
+    // `GlobalVars` is ordered, so identical captures serialize byte-identically.
     Value::Object(
-        keys.into_iter()
-            .map(|k| (k.clone(), Value::String(vars[k].clone())))
+        vars.iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
             .collect(),
     )
 }
@@ -895,7 +896,7 @@ fn vars_to_json(vars: &HashMap<String, String>) -> Value {
 /// nodes can omit them.
 fn emit_meta_line<W: Write>(
     writer: &mut W,
-    global: &Option<HashMap<String, String>>,
+    global: Option<&GlobalVars>,
     defaults: &Map<String, Value>,
     viewport: Option<&sniff_core::config::Viewport>,
 ) -> SniffResult<()> {
@@ -957,6 +958,10 @@ fn emit_actions_line<W: Write>(writer: &mut W, actions: Option<&Value>) -> Sniff
     Ok(())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "usado diretamente como `.map_err(io_err)`, que entrega o erro por valor"
+)]
 fn io_err(e: std::io::Error) -> SniffError {
     SniffError::Other(format!("io error: {e}"))
 }
@@ -1071,9 +1076,8 @@ mod tests {
     #[test]
     fn compact_scopes_css_variables_against_global() {
         let snap = sample_snapshot();
-        let global: HashMap<String, String> = [("--tenant-primary".into(), "#1a3c6e".into())]
-            .into_iter()
-            .collect();
+        let global: GlobalVars =
+            std::iter::once(("--tenant-primary".into(), "#1a3c6e".into())).collect();
         let cfg = OutputConfig {
             compact: true,
             ..OutputConfig::default()
@@ -1092,7 +1096,7 @@ mod tests {
             "--tenant-primary".to_string(),
             "#1a3c6e".to_string(),
         )]);
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: snaps,
             global_css_variables: global,
             ax_tree: None,
@@ -1120,7 +1124,7 @@ mod tests {
 
     #[test]
     fn meta_line_emits_viewport_when_configured() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: None,
@@ -1144,7 +1148,7 @@ mod tests {
 
     #[test]
     fn meta_line_omits_viewport_when_not_configured() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: None,
@@ -1164,14 +1168,14 @@ mod tests {
 
     #[test]
     fn meta_css_variables_are_sorted_deterministically() {
-        // HashMap iteration order is random; the __meta css_variables line
-        // must serialize identically regardless of insertion order.
+        // The `__meta` css_variables line must serialize identically
+        // regardless of the insertion order of the source variables.
         let global = Some(vec![
             ("--zebra".to_string(), "3".to_string()),
             ("--alpha".to_string(), "1".to_string()),
             ("--mango".to_string(), "2".to_string()),
         ]);
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: global,
             ax_tree: None,
@@ -1222,7 +1226,7 @@ mod tests {
         };
         let mut snap = sample_snapshot();
         snap.children.push(child);
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![snap],
             global_css_variables: None,
             ax_tree: None,
@@ -1284,7 +1288,7 @@ mod tests {
             unknown_reason: None,
         });
         snap.children.push(child);
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![snap],
             global_css_variables: None,
             ax_tree: None,
@@ -1391,7 +1395,7 @@ mod tests {
             .groups
             .push((StyleCategory::Typography, vec![cp("text-align", "center")]));
 
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![root],
             global_css_variables: None,
             ax_tree: None,
@@ -1431,7 +1435,7 @@ mod tests {
     #[test]
     fn compact_single_node_keeps_styles_inline() {
         // With a lone node there is nothing constant to hoist — styles stay.
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: None,
@@ -1454,7 +1458,7 @@ mod tests {
 
     #[test]
     fn json_array_wraps_global_meta_in_compact_mode() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: Some(vec![("--x".to_string(), "1".to_string())]),
             ax_tree: None,
@@ -1600,7 +1604,7 @@ mod tests {
 
     #[test]
     fn ax_tree_emitted_as_dedicated_line_in_jsonl() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: Some(serde_json::json!([
@@ -1620,7 +1624,7 @@ mod tests {
 
     #[test]
     fn json_mode_embeds_ax_tree_document() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: Some(serde_json::json!([{"role": "main"}])),
@@ -1640,7 +1644,7 @@ mod tests {
 
     #[test]
     fn actions_emitted_as_dedicated_line_in_jsonl() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: None,
@@ -1676,7 +1680,7 @@ mod tests {
 
     #[test]
     fn json_mode_embeds_actions_document() {
-        let outcome = crate::extractor::SniffOutcome {
+        let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: None,

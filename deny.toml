@@ -1,0 +1,40 @@
+# cargo-deny — políticas de supply chain do sniff.
+#
+# CI/local falha em advisory, licença fora da lista, wildcard de versão ou fonte
+# não confiável. Localmente: `cargo deny check`.
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Deps internas de workspace (path, sem versão de registry) não são wildcards de supply chain.
+allow-wildcard-paths = true
+# O sniff é deliberadamente async (tokio) por ser um cliente de rede (CDP/VM Service);
+# ao contrário de núcleos síncronos, não banimos runtime assíncrono.
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

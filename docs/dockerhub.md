@@ -9,7 +9,7 @@ toolchain em um único container, independente do host.
 
 - **Fidelidade-first**: o Chromium da GUI (`http://localhost:3001`) roda com
   **FullColor 4:4:4** (cores reais de 8 bits) e expõe CDP em loopback.
-  `sniffCSS` e `sniffCSS-mcp` **anexam ao mesmo browser que você vê na tela** —
+  `sniff` e `sniff-mcp` **anexam ao mesmo browser que você vê na tela** —
   o que aparece na GUI é exatamente o que é capturado.
 - **Multi-arch**: `linux/amd64` + `linux/arm64`.
 
@@ -24,12 +24,12 @@ docker run -d --name sniffcss \
 ```
 
 - **GUI**: `http://localhost:3001` (Chromium com FullColor 4:4:4)
-- **Snapshots**: persistidos em `./sniffcss-config/sniffCSS/`
+- **Snapshots**: persistidos em `./sniffcss-config/sniff/`
 
 ### Capture
 
 ```bash
-docker exec sniffcss sniffCSS \
+docker exec sniffcss sniff capture \
   -u http://localhost:3000 -s ".btn-primary" \
   --depth 0 --wait "network-idle:1200:60000"
 ```
@@ -37,13 +37,13 @@ docker exec sniffcss sniffCSS \
 ### Diff / checks (determinísticos, offline)
 
 ```bash
-docker exec sniffcss sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
-docker exec sniffcss sniffCSS-check --input snap.jsonl --uniform --rules
+docker exec sniffcss sniff diff base.jsonl head.jsonl --tolerance 0.5
+docker exec sniffcss sniff check --input snap.jsonl --uniform --rules
 ```
 
 ## MCP (agentes de IA)
 
-O `sniffCSS-mcp` roda via **stdio** dentro do container, anexando ao Chromium da
+O `sniff-mcp` roda via **stdio** dentro do container, anexando ao Chromium da
 GUI. Configuração no agente:
 
 ```json
@@ -51,14 +51,14 @@ GUI. Configuração no agente:
   "mcpServers": {
     "sniffcss": {
       "command": "docker",
-      "args": ["exec", "-i", "sniffcss", "sniffCSS-mcp"]
+      "args": ["exec", "-i", "sniffcss", "sniff-mcp"]
     }
   }
 }
 ```
 
-Ferramentas: `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`,
-`sniffCSS_snapshots`, `sniffCSS_categories`. O `sniffCSS_page` persiste cada
+Ferramentas: `sniff_page`, `sniff_diff`, `sniff_check`,
+`sniff_snapshots`, `sniff_categories`. O `sniff_page` persiste cada
 captura e retorna só um `__sniff` reference — o JSONL completo **nunca** entra
 no contexto do LLM.
 
@@ -67,7 +67,7 @@ no contexto do LLM.
 | Var                        | Default                                        | Descrição |
 |----------------------------|------------------------------------------------|-----------|
 | `SNIFF_CONNECT`            | `http://127.0.0.1:9222`                        | CDP do Chromium da GUI (loopback) |
-| `SNIFF_SNAPSHOT_DIR`       | `/config/sniffCSS`                             | Onde o MCP persiste snapshots |
+| `SNIFF_SNAPSHOT_DIR`       | `/config/sniff`                             | Onde o MCP persiste snapshots |
 | `SNIFF_DEFAULT_HEADERS`    | —                                              | JSON de headers HTTP aplicados a todo request do MCP (ex. `{"X-CMS-AI-Token":"<token>"}`) — auth de área restrita sem repetir por chamada |
 | `SNIFF_STORAGE_STATE`      | —                                              | Path de estado de sessão (cookies + `localStorage`) restaurado antes de toda navegação |
 | `SNIFF_BASE_URL`           | —                                              | Base URL prefixada a `url` relativas (ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`) |
@@ -94,7 +94,7 @@ services:
     environment:
       - SELKIES_H264_FULLCOLOR=true
       - SNIFF_CONNECT=http://127.0.0.1:9222
-      - SNIFF_SNAPSHOT_DIR=/config/sniffCSS
+      - SNIFF_SNAPSHOT_DIR=/config/sniff
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
@@ -118,7 +118,7 @@ Uso:
 
 ```bash
 docker compose -f docker-compose.override.yml up -d sniffcss
-docker exec sniffcss sniffCSS -u http://app:3000 -s ".btn-primary"
+docker exec sniffcss sniff capture -u http://app:3000 -s ".btn-primary"
 ```
 
 > Com `network_mode: service:app` o sniffcss usa a rede do serviço `app`, então
@@ -128,9 +128,9 @@ docker exec sniffcss sniffCSS -u http://app:3000 -s ".btn-primary"
 
 ```bash
 docker run --rm -v "$PWD:/ws" stallonels/sniffcss \
-  sniffCSS -u "$URL" -s "$SEL" --output "$PWD/base.jsonl"
+  sniff capture -u "$URL" -s "$SEL" --output "$PWD/base.jsonl"
 docker run --rm -v "$PWD:/ws" stallonels/sniffcss \
-  sniffCSS-diff "$PWD/base.jsonl" "$PWD/head.jsonl" --tolerance 0.5
+  sniff diff "$PWD/base.jsonl" "$PWD/head.jsonl" --tolerance 0.5
 ```
 
 ## Links

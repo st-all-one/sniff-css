@@ -1,6 +1,6 @@
-//! CLI argument parsing and mapping to [`SniffConfig`].
+//! Argumentos de `sniff capture`.
 
-use clap::Parser;
+use clap::Args;
 use sniff_core::config::{OutputFormat, parse_action, parse_categories, parse_wait_strategy};
 use sniff_core::{
     ElementFilter, OutputConfig, SniffConfig, SniffError, SniffResult, Viewport, WaitStrategy,
@@ -8,7 +8,7 @@ use sniff_core::{
 
 /// Which capture backend to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum Backend {
+pub(crate) enum Backend {
     /// Chromium over CDP (the classic computed-style capture).
     Web,
     /// A debug-mode Flutter app over the Dart VM Service.
@@ -17,16 +17,23 @@ pub enum Backend {
     Auto,
 }
 
-/// High-performance computed-style sniffer for AI-driven development.
-#[derive(Debug, Clone, Parser)]
-#[command(
-    name = "sniffCSS",
-    version,
-    about = "Capture real computed styles from a page for AI-driven debugging",
-    long_about = None
+/// Backend resolved from [`Backend::Auto`]; never `Auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectiveBackend {
+    /// Chromium over CDP.
+    Web,
+    /// Flutter over the Dart VM Service.
+    Flutter,
+}
+
+/// Flags de `sniff capture` (mapeadas para [`SniffConfig`]).
+#[derive(Debug, Clone, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flags independentes da CLI (clap), não estados mutuamente exclusivos"
 )]
-pub struct Cli {
-    /// Page URL to navigate to (e.g. http://localhost:3000/foo).
+pub(crate) struct CaptureArgs {
+    /// Page URL to navigate to (e.g. <http://localhost:3000/foo>).
     #[arg(long, short = 'u')]
     pub url: String,
 
@@ -48,22 +55,22 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub props: Vec<String>,
 
-    /// Pseudo-elements to capture (::before, ::after).
+    /// Pseudo-elements to capture (`::before`, `::after`).
     #[arg(long, value_delimiter = ',')]
     pub pseudo: Vec<String>,
 
     /// Wait strategy, repeatable. Format:
-    ///   delay:ms | network-idle:idle_ms[:timeout_ms] |
-    ///   fonts-loaded[:timeout_ms] | selector:sel[:timeout_ms] |
-    ///   element-ready:sel:cond1,cond2[:timeout_ms] |
-    ///   app-flag:flag[:timeout_ms]
+    ///   delay:ms | network-idle:idle_ms[:`timeout_ms`] |
+    ///   fonts-loaded[:`timeout_ms`] | selector:sel[:`timeout_ms`] |
+    ///   element-ready:sel:cond1,cond2[:`timeout_ms`] |
+    ///   app-flag:flag[:`timeout_ms`]
     /// Defaults to selector + network-idle + element-ready.
     #[arg(long, action = clap::ArgAction::Append)]
     pub wait: Vec<String>,
 
     /// Interaction action, repeatable and ORDERED. Format:
-    ///   click:<selector>[:<timeout_ms>[:<settle_ms>]] |
-    ///   hover:<selector>[:<timeout_ms>[:<settle_ms>]] |
+    ///   click:<selector>[:<`timeout_ms`>[:<`settle_ms`>]] |
+    ///   hover:<selector>[:<`timeout_ms`>[:<`settle_ms`>]] |
     ///   type:<selector>:<text>
     /// Reveals elements that only exist after an action (modals, dropdowns,
     /// hover menus, type-ahead suggestions). Each action waits for its own
@@ -190,7 +197,7 @@ pub struct Cli {
     pub fullpage_screenshot: bool,
 
     /// Persist the snapshot to disk, mirroring the MCP store: creates
-    /// `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` under the CWD (or
+    /// `sniff/[domain]/[UTC]-[path]-[selector].<ext>` under the CWD (or
     /// `SNIFF_SNAPSHOT_DIR` when set), using the selected `--output` format,
     /// and auto-ignores the tree with a `.gitignore`. The output is still
     /// written to stdout as usual.
@@ -322,7 +329,7 @@ pub struct Cli {
     )]
     pub ignore_certificate_errors: bool,
 
-    /// Emulated viewport as WxH (default: 1366x768 laptop).
+    /// Emulated viewport as `WxH` (default: 1366x768 laptop).
     #[arg(long)]
     pub viewport: Option<String>,
 
@@ -356,24 +363,19 @@ pub struct Cli {
     pub full: bool,
 }
 
-impl Cli {
+impl CaptureArgs {
     /// The effective backend: `--backend auto` (default) infers Flutter from
     /// a `flutter://` URL scheme, otherwise web. Explicit `--backend` wins.
-    pub fn effective_backend(&self) -> Backend {
+    pub(crate) fn effective_backend(&self) -> EffectiveBackend {
         match self.backend {
-            Backend::Auto => {
-                if self.url.starts_with("flutter://") {
-                    Backend::Flutter
-                } else {
-                    Backend::Web
-                }
-            }
-            b => b,
+            Backend::Flutter => EffectiveBackend::Flutter,
+            Backend::Auto if self.url.starts_with("flutter://") => EffectiveBackend::Flutter,
+            Backend::Web | Backend::Auto => EffectiveBackend::Web,
         }
     }
 
     /// The `adb` serial implied by a `flutter://<device>` URL (the URL host).
-    pub fn flutter_device(&self) -> Option<String> {
+    pub(crate) fn flutter_device(&self) -> Option<String> {
         let rest = self.url.strip_prefix("flutter://")?;
         let host = rest.split('/').next()?;
         if host.is_empty() {
@@ -384,8 +386,8 @@ impl Cli {
     }
 
     /// Convert parsed CLI arguments into a full sniffing config.
-    pub fn into_config(self) -> SniffResult<SniffConfig> {
-        let is_flutter = self.effective_backend() == Backend::Flutter;
+    pub(crate) fn into_config(self) -> SniffResult<SniffConfig> {
+        let is_flutter = self.effective_backend() == EffectiveBackend::Flutter;
         let selector = match self.selector {
             Some(s) => s,
             None if is_flutter => "root".to_string(),
@@ -409,12 +411,7 @@ impl Cli {
         // Ordered interactions. `--action` is the ordered, full-control form
         // (for mixed click/hover/type flows); the convenience flags map to
         // click -> hover -> type group order when --action is absent.
-        let actions = if !self.actions.is_empty() {
-            self.actions
-                .iter()
-                .map(|spec| parse_action(spec))
-                .collect::<SniffResult<Vec<_>>>()?
-        } else {
+        let actions = if self.actions.is_empty() {
             let mut out = Vec::new();
             for spec in &self.click {
                 out.push(parse_action(&format!("click:{spec}"))?);
@@ -429,11 +426,16 @@ impl Cli {
                 out.push(parse_action(&format!("upload:{spec}"))?);
             }
             out
+        } else {
+            self.actions
+                .iter()
+                .map(|spec| parse_action(spec))
+                .collect::<SniffResult<Vec<_>>>()?
         };
 
         // Headers: `SNIFF_DEFAULT_HEADERS` (JSON object) first, explicit
         // `--header` flags win on name collision.
-        let headers = merge_headers(std::env::var("SNIFF_DEFAULT_HEADERS").ok(), &self.header)?;
+        let headers = merge_headers(sniff_core::env::var("SNIFF_DEFAULT_HEADERS"), &self.header)?;
 
         let compact = self.compact && !self.no_compact && !self.full;
         let include_contrast = self.contrast && !self.no_contrast && !self.full;
@@ -564,6 +566,22 @@ mod tests {
     use sniff_core::WaitStrategy;
     use sniff_core::properties::StyleCategory;
 
+    /// `CaptureArgs` é um `Args` (não `Parser`): parseia por um wrapper descartável.
+    fn parse_capture<I, T>(argv: I) -> Result<CaptureArgs, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(flatten)]
+            args: CaptureArgs,
+        }
+        Wrapper::try_parse_from(argv).map(|wrapper| wrapper.args)
+    }
+
     #[test]
     fn parse_delay() {
         assert_eq!(
@@ -626,7 +644,7 @@ mod tests {
 
     #[test]
     fn cli_to_config_defaults() {
-        let cli = Cli {
+        let cli = CaptureArgs {
             url: "http://localhost:3000".into(),
             selector: Some(".card".into()),
             depth: 0,
@@ -713,7 +731,7 @@ mod tests {
 
     #[test]
     fn cli_to_config_wires_stable_key() {
-        let mut cli = Cli {
+        let mut cli = CaptureArgs {
             url: "http://localhost:3000".into(),
             selector: Some(".card".into()),
             depth: 0,
@@ -783,8 +801,8 @@ mod tests {
 
     #[test]
     fn cli_parses_ordered_actions() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -812,8 +830,8 @@ mod tests {
 
     #[test]
     fn cli_convenience_click_flag_maps_to_action() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -829,16 +847,15 @@ mod tests {
 
     #[test]
     fn cli_actions_absent_by_default() {
-        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
-            .unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", ".card"]).unwrap();
         let cfg = cli.into_config().unwrap();
         assert!(cfg.actions.is_empty());
     }
 
     #[test]
     fn cli_effects_default_on_and_tunable() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -851,8 +868,8 @@ mod tests {
         assert!(cfg.effects, "effects must be ON by default");
         assert_eq!(cfg.effects_limit, 10);
 
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -871,7 +888,7 @@ mod tests {
 
     #[test]
     fn full_mode_disables_all_optimizations() {
-        let mut cli = Cli {
+        let mut cli = CaptureArgs {
             url: "http://localhost:3000".into(),
             selector: Some(".card".into()),
             depth: 0,
@@ -949,7 +966,7 @@ mod tests {
 
     #[test]
     fn individual_no_flags_override_defaults() {
-        let mut cli = Cli {
+        let mut cli = CaptureArgs {
             url: "http://localhost:3000".into(),
             selector: Some(".card".into()),
             depth: 0,
@@ -1027,7 +1044,7 @@ mod tests {
 
     #[test]
     fn ax_tree_implies_ax_even_in_full_mode() {
-        let mut cli = Cli {
+        let mut cli = CaptureArgs {
             url: "http://localhost:3000".into(),
             selector: Some(".card".into()),
             depth: 0,
@@ -1099,8 +1116,8 @@ mod tests {
 
     #[test]
     fn ignore_certificate_errors_flag_parses() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "https://x.local:3443",
             "-s",
@@ -1113,8 +1130,7 @@ mod tests {
 
     #[test]
     fn summary_is_the_default_output() {
-        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
-            .unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", ".card"]).unwrap();
         let cfg = cli.into_config().unwrap();
         assert_eq!(
             cfg.output.format,
@@ -1125,8 +1141,8 @@ mod tests {
 
     #[test]
     fn summary_flag_and_output_summary_agree() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1137,8 +1153,8 @@ mod tests {
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.output.format, OutputFormat::Summary);
 
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1153,8 +1169,8 @@ mod tests {
 
     #[test]
     fn no_summary_forces_full_jsonl() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1172,8 +1188,8 @@ mod tests {
 
     #[test]
     fn output_json_still_available_without_summary_flag() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1188,8 +1204,8 @@ mod tests {
 
     #[test]
     fn header_flag_maps_to_config_headers() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1207,8 +1223,8 @@ mod tests {
 
     #[test]
     fn header_parse_rejects_missing_colon_or_value() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1219,8 +1235,8 @@ mod tests {
         .unwrap();
         assert!(cli.into_config().is_err());
 
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1234,8 +1250,8 @@ mod tests {
 
     #[test]
     fn upload_flag_maps_to_upload_action() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1254,8 +1270,8 @@ mod tests {
 
     #[test]
     fn storage_state_flags_map_to_config() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1273,8 +1289,8 @@ mod tests {
 
     #[test]
     fn flutter_backend_parses_device_and_attach() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "flutter://emulator-5554",
             "-s",
@@ -1291,8 +1307,8 @@ mod tests {
         assert_eq!(cli.device.as_deref(), Some("emulator-5554"));
         assert!(!cli.attach);
 
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "flutter://emulator-5554",
             "-s",
@@ -1310,16 +1326,15 @@ mod tests {
 
     #[test]
     fn web_is_the_default_backend() {
-        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
-            .unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", ".card"]).unwrap();
         assert_eq!(cli.backend, Backend::Auto);
-        assert_eq!(cli.effective_backend(), Backend::Web);
+        assert_eq!(cli.effective_backend(), EffectiveBackend::Web);
     }
 
     #[test]
     fn flutter_url_infers_backend_device_and_selector() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "flutter://emulator-5554",
             "--project",
@@ -1329,7 +1344,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.backend, Backend::Auto);
-        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        assert_eq!(cli.effective_backend(), EffectiveBackend::Flutter);
         assert_eq!(cli.flutter_device().as_deref(), Some("emulator-5554"));
         assert_eq!(cli.device, None);
 
@@ -1340,15 +1355,14 @@ mod tests {
     #[test]
     fn flutter_url_with_path_still_yields_device() {
         let cli =
-            Cli::try_parse_from(["sniffCSS", "-u", "flutter://emulator-5554/home", "-s", "*"])
-                .unwrap();
+            parse_capture(["sniff", "-u", "flutter://emulator-5554/home", "-s", "*"]).unwrap();
         assert_eq!(cli.flutter_device().as_deref(), Some("emulator-5554"));
     }
 
     #[test]
     fn explicit_backend_and_device_override_inference() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "flutter://emulator-5554",
             "--backend",
@@ -1357,10 +1371,10 @@ mod tests {
             ".card",
         ])
         .unwrap();
-        assert_eq!(cli.effective_backend(), Backend::Web);
+        assert_eq!(cli.effective_backend(), EffectiveBackend::Web);
 
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "--backend",
@@ -1371,20 +1385,19 @@ mod tests {
             "root",
         ])
         .unwrap();
-        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        assert_eq!(cli.effective_backend(), EffectiveBackend::Flutter);
         assert_eq!(cli.device.as_deref(), Some("emulator-5554"));
     }
 
     #[test]
     fn web_backend_requires_selector() {
-        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000"]).unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000"]).unwrap();
         assert!(cli.into_config().is_err());
     }
 
     #[test]
     fn storage_state_absent_by_default() {
-        let cli = Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", ".card"])
-            .unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", ".card"]).unwrap();
         let cfg = cli.into_config().unwrap();
         assert!(cfg.storage_state_path.is_none());
         assert!(cfg.save_storage_state.is_none());
@@ -1393,8 +1406,8 @@ mod tests {
 
     #[test]
     fn screenshot_flags_reach_config_on_web() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1414,8 +1427,8 @@ mod tests {
 
     #[test]
     fn screenshot_flags_reach_config_on_flutter() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "flutter://emulator-5554",
             "--project",
@@ -1425,7 +1438,7 @@ mod tests {
             "--fullpage-screenshot",
         ])
         .unwrap();
-        assert_eq!(cli.effective_backend(), Backend::Flutter);
+        assert_eq!(cli.effective_backend(), EffectiveBackend::Flutter);
         let cfg = cli.into_config().unwrap();
         assert!(
             cfg.screenshot,
@@ -1439,8 +1452,8 @@ mod tests {
 
     #[test]
     fn attrs_flag_maps_to_config_attributes() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1458,16 +1471,15 @@ mod tests {
 
     #[test]
     fn attrs_flag_absent_by_default() {
-        let cli =
-            Cli::try_parse_from(["sniffCSS", "-u", "http://localhost:3000", "-s", "form"]).unwrap();
+        let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", "form"]).unwrap();
         let cfg = cli.into_config().unwrap();
         assert!(cfg.attributes.is_empty());
     }
 
     #[test]
     fn viewport_flag_maps_to_config_viewport() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1491,8 +1503,8 @@ mod tests {
         // --pretty/--no-rect/--no-path/--no-metrics/--no-normalize-colors/
         // --no-group must each flip the matching OutputConfig field while the
         // rest stay at their defaults.
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1520,8 +1532,8 @@ mod tests {
 
     #[test]
     fn filter_flags_map_to_element_filter() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1546,8 +1558,8 @@ mod tests {
 
     #[test]
     fn wait_flags_parse_through_cli() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1572,8 +1584,8 @@ mod tests {
 
     #[test]
     fn depth_categories_props_and_pseudo_reach_config() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",
@@ -1635,8 +1647,8 @@ mod tests {
 
     #[test]
     fn chrome_and_connect_flags_parse() {
-        let cli = Cli::try_parse_from([
-            "sniffCSS",
+        let cli = parse_capture([
+            "sniff",
             "-u",
             "http://localhost:3000",
             "-s",

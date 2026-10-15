@@ -144,8 +144,8 @@ pub fn properties_for(categories: &[StyleCategory], custom: &[String]) -> Vec<St
     }
 
     // De-duplicate preserving order.
-    let mut out: Vec<String> = Vec::with_capacity(seen.len() + custom.len());
-    let mut used = std::collections::HashSet::with_capacity(seen.len());
+    let mut out: Vec<String> = Vec::with_capacity(seen.len().saturating_add(custom.len()));
+    let mut used = std::collections::BTreeSet::new();
     for name in seen {
         if used.insert(name) {
             out.push(name.to_string());
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn categories_have_unique_properties() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::BTreeSet::new();
         for cat in StyleCategory::all() {
             for prop in cat.properties() {
                 assert!(seen.insert(*prop), "duplicate property: {prop}");

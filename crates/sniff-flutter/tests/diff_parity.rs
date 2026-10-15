@@ -1,11 +1,16 @@
 //! Diff parity: two Flutter captures of the same tree must diff through the
-//! shared `sniffCSS-diff` machinery with only the real change reported.
+//! shared `sniff diff` machinery with only the real change reported.
 //!
 //! This is the Flutter analogue of the web regression contract: stable
 //! selectors (`ClassName[ordinal]`) let `diff_trees` match nodes across
 //! captures, so a single color change produces exactly one `CHANGED` and no
 //! `ADDED`/`REMOVED`.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "arquivo de teste: `.unwrap()`/`.expect()` é o mecanismo de falha, o panic aponta a linha"
+)]
 mod common;
 
 use common::{capture, default_properties, spawn_mock_vm_service};
@@ -44,7 +49,7 @@ fn jsonl_of(roots: Vec<sniff_flutter::ElementSnapshot>) -> String {
 #[tokio::test]
 async fn flutter_node_shape_matches_web_golden() {
     // The Flutter backend must emit the SAME per-node JSON shape as the web
-    // backend, so sniffCSS-diff / sniffCSS-check are backend-agnostic.
+    // backend, so sniff diff / sniff check are backend-agnostic.
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");
     let roots = capture(&uri, 5).await;
@@ -74,12 +79,11 @@ async fn flutter_node_shape_matches_web_golden() {
     // present in both.
     let web_keys: std::collections::BTreeSet<String> =
         web_root.as_object().unwrap().keys().cloned().collect();
-    for (k, v) in flutter_root.as_object().unwrap() {
+    for k in flutter_root.as_object().unwrap().keys() {
         assert!(
             web_keys.contains(k),
             "Flutter node emits `{k}` but web node does not — shape diverged"
         );
-        let _ = v;
     }
     for required in [
         "id", "tag", "selector", "path", "depth", "rect", "styles", "children",

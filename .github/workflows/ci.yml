@@ -1,0 +1,74 @@
+name: CI
+
+# Push em qualquer branch + PRs. O release (binários por plataforma) fica no
+# `release.yml`, disparado por tag `v*` — aqui não se compila release.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test --workspace` já cobre doc-tests.
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  supply-chain:
+    name: deny + audit + machete + typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-deny cargo-audit cargo-machete --locked
+      - run: cargo deny check
+      - run: cargo audit
+      - run: cargo machete
+      - uses: crate-ci/typos@master
+
+  miri:
+    name: miri (núcleo puro, smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri setup
+      # Só a suíte `tests/miri_smoke.rs` (segundos): o core é
+      # `#![forbid(unsafe_code)]` e a cobertura funcional fica no job `check`.
+      - run: cargo miri test -p sniff-core --test miri_smoke
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+
+  fuzz:
+    name: fuzz (JSONL + JSON-RPC, smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz build
+      - name: smoke de 30s por alvo
+        run: |
+          for target in jsonl_decode jsonrpc_decode; do
+            cargo fuzz run "$target" -- -max_total_time=30
+          done

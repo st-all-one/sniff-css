@@ -1,23 +1,28 @@
 [package]
 name = "sniff-css-check"
-description = "Deterministic UI checks over sniffCSS snapshots: uniformity + derived rules"
+description = "Deterministic UI checks over sniff snapshots: uniformity + derived rules"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 sniff-core = { path = "../sniff-core" }
 sniff-css-diff = { path = "../sniff-css-diff" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-clap = { workspace = true }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 
 [lib]
 name = "sniff_css_check"
 
-[[bin]]
-name = "sniffCSS-check"
-path = "src/main.rs"
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "check"
+harness = false
+
+[lints]
+workspace = true

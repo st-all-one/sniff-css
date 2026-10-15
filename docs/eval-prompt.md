@@ -1,18 +1,18 @@
 # Prompt de avaliação semântica (camada IA)
 
-Use este template quando a camada determinística (`sniffCSS-diff` + `sniffCSS-check`)
+Use este template quando a camada determinística (`sniff diff` + `sniff check`)
 já tiver produzido o delta e as evidências. O delta contém **apenas** os nós
 que mudaram; não mande snapshots completos para o LLM. Funciona igual para os
-dois backends: web (`sniffCSS_page`) e Flutter/Dart (`sniffFlutter_page`) —
+dois backends: web (`sniff_page`) e Flutter/Dart (`sniff_flutter_page`) —
 ambos emitem o mesmo modelo JSONL (no Flutter o `tag` é a classe do widget,
 ex. `FilledButton`, e os selectors usam `[<'key'>]` quando há `ValueKey`).
 
 ```text
 Você é um avaliador de qualidade de UI. Avalie o delta JSONL abaixo,
 produzido entre duas execuções de sniffing (web ou Flutter), e as evidências
-de checks determinísticos (sniffCSS-check).
+de checks determinísticos (sniff check).
 
-Retorne SOMENTE um JSON que valide contra docs/sniffCSS-eval.schema.json.
+Retorne SOMENTE um JSON que valide contra docs/sniff-eval.schema.json.
 Preencha o bloco opcional "measured" apenas com valores que o delta, o
 snapshot ou os checks realmente emitiram — usando os NOMES DE CAMPO da
 ferramenta (contrast.ratio/aa/aaa, aria.role/name/focusable, ax.role/name/
@@ -34,7 +34,7 @@ B) Estabilidade de layout (CLS/UX): dimensões fixas, position/z-index,
    mesmo ele existindo no DOM.
 C) Hierarquia visual / design system: alinhamento a escala (múltiplos de
    4px/8px), unificação de tipografia, fontes não mapeadas.
-D) Evidências de sniffCSS-check: outliers de `uniformity` (instância que desvia
+D) Evidências de sniff check: outliers de `uniformity` (instância que desvia
    da norma do grupo) e `fail`/`warn` de regras (contrast-aa/contrast-aaa,
    target-size, focus-indicator, hidden-focusable, empty-alt-image, occluded,
    e erros comuns de UI/UX como sticky-in-overflow-hidden, fixed-broken-by-transform,
@@ -61,17 +61,17 @@ Instruções:
   ou nas evidências de checks.
 
 Delta JSONL:
-<cole o output de `sniffCSS-diff base.jsonl head.jsonl` aqui>
+<cole o output de `sniff diff base.jsonl head.jsonl` aqui>
 
 Evidências de checks (se disponíveis):
-<cole o output de `sniffCSS-check --input head.jsonl --uniform --rules` aqui>
+<cole o output de `sniff check --input head.jsonl --uniform --rules` aqui>
 ```
 
 ## Uso em escala
 
-1. Extração (determinística): `sniffCSS --stable-key data-testid ...` (default otimizado: compact, stabilize, contrast e ax já ON); no Flutter `sniffCSS -u flutter://<serial> --project DIR --depth N`.
-2. Diff (determinística): `sniffCSS-diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
-3. Descoberta (determinística): `sniffCSS-check --input head.jsonl --uniform --rules > checks.jsonl`
+1. Extração (determinística): `sniff capture --stable-key data-testid ...` (default otimizado: compact, stabilize, contrast e ax já ON); no Flutter `sniff capture -u flutter://<serial> --project DIR --depth N`.
+2. Diff (determinística): `sniff diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
+3. Descoberta (determinística): `sniff check --input head.jsonl --uniform --rules > checks.jsonl`
 4. Avaliação (IA): envie `delta.jsonl` + `checks.jsonl` + este prompt; valide a
    resposta com `jq -e 'has("status") and has("score_change")'`.
 

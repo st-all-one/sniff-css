@@ -1,12 +1,30 @@
-# SniffCSS
+<div align="center">
 
-**SniffCSS** captura o **computed style real** de elementos de uma página via
-**Chrome DevTools Protocol (CDP)** — e a **árvore de widgets** de apps
-**Flutter/Dart** nativos via **Dart VM Service** — com saída estruturada e
-determinística para desenvolvimento assistido por IA sem frameworks de
-automação: rápido, determinístico e otimizado para LLMs.
+# sniff
+
+Computed styles reais e árvore de widgets Flutter, determinísticos, para agentes de IA — captura → diff → checks.
+
+[![License](https://img.shields.io/badge/license-CC0--1.0-2b3a42?style=for-the-badge)](./LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
+[![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-009739?style=for-the-badge)](CHANGELOG.md)
+
+</div>
+
+O sniff é uma CLI em Rust que lê o **computed style real** dos elementos de uma
+página via **Chrome DevTools Protocol (CDP)** — e a **árvore de widgets** de apps
+**Flutter/Dart** nativos via **Dart VM Service** — emitindo JSONL compacto e
+determinístico. Em vez de screenshots e julgamento visual, o pipeline mede:
+**`sniff capture`** captura, **`sniff diff`** devolve só o que mudou,
+**`sniff check`** roda regras de acessibilidade/consistência offline e
+**`sniff-mcp`** expõe tudo a agentes de IA. `sniff init` grava o protocolo de uso
+no `AGENTS.md` do projeto e `sniff prime` é o protocolo token-optimized para a
+IA. A IA interpreta apenas o delta.
 
 ## Instalação
+
+Release pré-compilado, verificado por SHA-256, que instala `sniff` e
+`sniff-mcp` em `~/.local/bin` (e remove os binários legados `sniffCSS*`):
 
 ```bash
 curl --proto '=https' \
@@ -17,167 +35,83 @@ curl --proto '=https' \
   | sh
 ```
 
+Versão fixa: `... | VERSION=v0.5.0 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
+[`docs/docker.md`](docs/docker.md).
+
 > Requisito: Chrome/Chromium no sistema (ou `SNIFF_CHROME_PATH` / `--chrome`).
 
-## Quickstart
+## Uso
 
 ```bash
-# Computed styles de um botão — default otimizado para IA
-sniffCSS -u https://example.net -s ".btn-primary"
+# capture — computed styles de um elemento (default otimizado para IA)
+sniff capture -u https://example.net -s ".btn-primary"
+sniff capture -u https://example.net -s ".card" --depth 4 --categories box-model,typography
+# snapshot completo (entrada de diff/check/jq): --no-summary
 
-# Subárvore, só box-model + tipografia
-sniffCSS -u https://example.net -s ".card" \
-  --depth 4 --categories box-model,typography
+# capture — revelar elementos que só existem após uma ação (modal, dropdown, menu)
+sniff capture -u https://example.net -s ".modal" --click "#open-modal"
+sniff capture -u https://example.net -s ".result" \
+  --action "click:#open-modal:5000" --action "type:#q:shoes"
 
-# Revelar elementos que só existem após uma ação (modal, dropdown, menu)
-sniffCSS -u https://example.net -s ".modal" --click "#open-modal"
-sniffCSS -u https://example.net -s ".search-results" --type "#q:shoes"
+# capture — área restrita e HTTPS self-signed (header em todo request, sem token na URL)
+sniff capture -u https://example.net/cms -s "main" --header "X-CMS-AI-Token: <token>"
+sniff capture -u https://app.local:3443/home -s "body" --ignore-certificate-errors
 
-# Ações ordenadas (fluxo misto: clicar → digitar → selecionar)
-sniffCSS -u https://example.net -s ".result" \
-  --action "click:#open-modal:5000" \
-  --action "type:#q:shoes" \
-  --action "click:.result-item"
+# capture — evidência visual para review humana (PNG ao lado do snapshot)
+sniff capture -u https://example.net -s ".btn-primary" --screenshot snap.png
 
-# Acesso a área restrita: header aplicado a todo request (sem token em URL)
-sniffCSS -u https://example.net/cms -s "main" \
-  --header "X-CMS-AI-Token: <token>"
-
-# Dev server com certificado self-signed (ignora o aviso de TLS)
-sniffCSS -u https://app.local:3443/home -s "body" --ignore-certificate-errors
-
-# Diff determinístico entre duas versões
-sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
-
-# Checks offline: contraste AA, alvos ≥24px, foco, uniformidade, oclusão
-sniffCSS-check --input snap.jsonl --uniform --rules
-
-# Evidência visual para review humana (PNG persistido ao lado do snapshot)
-sniffCSS -u https://example.net -s ".btn-primary" --screenshot snap.png
-
-# App Flutter/Dart (emulador/device Android, build debug) — mesmo pipeline
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 10
-sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
-sniffCSS -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
-
-# Ações (tocar um widget) e screenshot também funcionam no Flutter
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+# flutter — árvore de widgets de um app Android (build debug), mesmo pipeline JSONL
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10
+sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
+sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
   --action "click:FilledButton-[<'counter'>][0]" --screenshot snap.png
+
+# diff — só o que mudou entre duas capturas (CHANGED/ADDED/REMOVED + resumo)
+sniff diff base.jsonl head.jsonl --tolerance 0.5
+
+# check — regras offline: contraste AA/AAA, alvo ≥24px, foco, alt, uniformidade, oclusão
+sniff check --input snap.jsonl --uniform --rules
+
+# mcp — servidor stdio para agentes: captura → diff → checks → IA interpreta o delta
+sniff-mcp
+
+# prime — protocolo token-optimized para IA (byte-idêntico por versão)
+sniff prime
+# self — utilitários do binário (setup de cliente, completions, upgrade, version)
+sniff self setup pi
+sniff self completions bash
+
+# init — grava/atualiza o bloco do sniff no AGENTS.md do projeto (--force = sobrescreve)
+sniff init
 ```
 
-Para o snapshot **completo** (entrada de diff/check/jq), use `--no-summary`.
 Auth por header, login persistente (`--storage-state`), uploads reais e o mapa
 de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 [`docs/flutter.md`](docs/flutter.md).
 
-## O que esta ferramenta faz?
-
-**SniffCSS lê o estilo real renderizado pelo navegador** — não o que você
-escreveu no CSS, mas o que o Chrome *computou*: box-model, tipografia, cores,
-layout, `::before`/`::after`, variáveis e estado de acessibilidade. Para isso,
-conecta-se a uma instância de Chrome/Chromium via **CDP** e emite um snapshot
-estruturado (JSONL) de cada elemento.
-
-A partir daí, um pipeline determinístico substitui o julgamento visual:
-
-- **`sniffCSS`** captura o snapshot com um resumo otimizado para LLMs;
-- **`sniffCSS-diff`** compara duas capturas e devolve **só o que mudou** (não o
-  snapshot inteiro);
-- **`sniffCSS-check`** avalia regras offline: contraste (WCAG), alvo de toque,
-  foco, alt, uniformidade e oclusão (elemento coberto por outro que pinta por cima);
-- **`sniffCSS-mcp`** expõe tudo como ferramentas MCP para agentes de IA.
-
-O resultado: você (ou o agente) interpreta **evidências medidas** — como `contrast`
-de `4.5:1` ou `background-color: #fff` — em vez de adivinhar pelo screenshot.
-
-Além do estilo, cada snapshot carrega o **estado de acessibilidade** do elemento:
-o papel na **árvore de acessibilidade** do navegador (`ax.role`), o nome exposto
-(`aria.name`), e a nota computada pelo CDP (`accessibility_grade`: `AAA`/`AA`/
-`NONE`) — para saber, por exemplo, se um `DIV` clicável é "invisível" para
-leitores de tela ou se um `BUTTON` não tem nome acessível.
-
-### Apps Flutter/Dart nativos
-
-O mesmo snapshot pode vir de um app **Flutter** rodando num emulador/device
-Android: um URL `flutter://<serial>` faz o SniffCSS conversar com o **Dart VM
-Service** (`ext.flutter.inspector.*`) e capturar a **árvore de widgets** — a
-"tag" vira a classe do widget, cores são normalizadas para `#rrggbb` e o
-**contraste WCAG** é derivado como no web — tudo no **mesmo modelo JSONL**,
-então `sniffCSS-diff`, `sniffCSS-check` e a avaliação IA funcionam **sem
-mudança**. `--click`/`--type`/`--action` (via Flutter Driver) e `--viewport`
-(adb `wm size`) são suportados. Requer build **debug** (release não expõe o VM
-Service) e o app chamando `enableFlutterDriverExtension()` para ações.
-Setup completo: [`docs/flutter.md`](docs/flutter.md).
-
-### Casos de uso
-
-| Cenário | Como usar | Benefício |
-|---|---|---|
-| **Conferir um design** | `sniffCSS -u URL -s ".card" --depth 4` | Estilo exato renderizado (px, cor, fonte), sem inspecionar no DevTools |
-| **Caçar uma regressão** | `sniffCSS-diff base.jsonl head.jsonl` | Só o que mudou: um `padding` que alterou 2px ou um card que sumiu |
-| **Acessibilidade (WCAG)** | `sniffCSS-check --input snap.jsonl --rules` | Contraste real medido, alvo ≥24px, foco visível, alt, elemento atrás de outro (oclusão) — evidenciado |
-| **Review humana** | `sniffCSS -u URL -s SEL --screenshot out.png` | PNG do elemento/página ao lado do snapshot — prova visual para PR/release |
-| **UI que só existe após ação** | `sniffCSS -u URL -s ".modal" --click "#open"` | Modal/dropdown/upload capturado mesmo sem existir no DOM inicial |
-| **Área restrita (auth)** | `sniffCSS -u URL/cms -s "main" --header "X-CMS-AI-Token: <token>"` | Snapshot da página autenticada, sem token exposto na URL |
-| **App Flutter/Dart** | `sniffCSS -u flutter://emulator-5554 --project DIR --depth N` | Widget tree real (classe, estilo, contraste, acessibilidade) no mesmo modelo JSONL do web |
-| **Revisão de PR por IA** | MCP: captura → diff → checks → agente interpreta o delta | Revisão objetiva baseada em evidência, não em screenshot |
-
-Em resumo: onde antes você **abria o DevTools manualmente**, descrevia screenshots
-para a IA ou confiava no palpite, hoje o SniffCSS **mede e documenta** — o snapshot
-é a fonte de verdade e a IA só interpreta o delta.
-
-## MCP (agentes de IA)
-
-Exponha `sniffCSS-mcp` como servidor MCP (stdio) e deixe o agente capturar,
-difar e auditar sem jogar snapshot gigante no contexto. Fluxo recomendado:
-**captura determinística → diff → checks → IA interpreta o delta**.
-
-- Guia de integração: [`docs/ai-usage.md`](docs/ai-usage.md)
-- MCP no container Docker: [`docs/docker.md#mcp-via-docker`](docs/docker.md#mcp-via-docker)
-
-Para apps **Flutter**, o MCP expõe o mesmo pipeline via `sniffFlutter_page`
-(device/avd, project, `--viewport` e `actions` incluídos) — retorna o mesmo
-`sniffCSS_diff`/`sniffCSS_check` por path.
-
-Configuração de equipe (uma vez no ambiente do servidor — o agente não repete
-auth por chamada):
-`SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'` (headers aplicados a todo
-request; `headers` por chamada sobrescreve por chave), `SNIFF_STORAGE_STATE`
-(estado de sessão restaurado antes de toda navegação) e `SNIFF_BASE_URL`
-(prefixo para URLs relativas, ex. `cms/dashboard`).
-
-## Destaques
-
-- **Interações reais antes da captura** — `--click`, `--hover`, `--type`,
-  `--upload` e `--action` disparam **eventos confiáveis** (não `el.click()`
-  sintético) para revelar elementos que só existem após uma ação: modais,
-  dropdowns, menus de hover, type-ahead e uploads reais (cropper de CMS roda).
-- **Backend Flutter/Dart nativo** — `flutter://<device>` captura a árvore de
-  widgets de um app Android (build **debug**) via **Dart VM Service**, no
-  mesmo modelo JSONL do web (classe do widget como tag, cores `#rrggbb`,
-  contraste derivado) — `--click`/`--type`/`--action` e `--viewport` incluídos.
-- **Acesso a áreas restritas** — `--header "Name: Value"` aplica o header a
-  **todo** request (`Network.setExtraHTTPHeaders`), autenticando middleware
-  stateless de CMS **sem token em URL**; no MCP, configure uma vez via
-  `SNIFF_DEFAULT_HEADERS`.
-- **Determinístico de ponta a ponta** — capture → `sniffCSS-diff` →
-  `sniffCSS-check` → a IA interpreta só o delta (0 tokens antes do LLM).
-
 ## Documentação
 
-| Doc | Conteúdo |
+| Tema | Referência |
 |---|---|
-| [`docs/usage.md`](docs/usage.md) | Referência completa da CLI. |
-| [`docs/flutter.md`](docs/flutter.md) | Backend Flutter/Dart: instalação no Linux, modo `auto`, flags e resultado. |
-| [`docs/ai-usage.md`](docs/ai-usage.md) | Guia para IA: pipeline captura→diff→checks. |
-| [`docs/diff-checks.md`](docs/diff-checks.md) | `sniffCSS-diff` e `sniffCSS-check`. |
-| [`docs/accessibility.md`](docs/accessibility.md) | Auditoria de acessibilidade. |
-| [`docs/docker.md`](docs/docker.md) | Docker: quickstart, compose, MCP via container. |
-| [`docs/golden-run.md`](docs/golden-run.md) | Contrato de determinismo (padrão ouro). |
-| [`docs/eval-prompt.md`](docs/eval-prompt.md) | Prompt de avaliação semântica por IA. |
-| [`docs/architecture.md`](docs/architecture.md) | Arquitetura interna. |
-| [`SKILL.md`](SKILL.md) | Guia de uso ativo para agentes de IA. |
-| [`llms.txt`](llms.txt) | Índice para modelos de linguagem. |
+| Referência completa da CLI (captura) | [`docs/usage.md`](docs/usage.md) |
+| Superfície da CLI (verbos, `init`, `prime`, `self`, help) | [`docs/cli-surface.md`](docs/cli-surface.md) |
+| Backend Flutter/Dart (instalação no Linux, modo `auto`, flags) | [`docs/flutter.md`](docs/flutter.md) |
+| Guia para IA (pipeline captura→diff→checks) | [`docs/ai-usage.md`](docs/ai-usage.md) |
+| `sniff diff` e `sniff check` | [`docs/diff-checks.md`](docs/diff-checks.md) |
+| Auditoria de acessibilidade | [`docs/accessibility.md`](docs/accessibility.md) |
+| Docker / container (incl. MCP) | [`docs/docker.md`](docs/docker.md) |
+| Contrato de determinismo (padrão ouro) | [`docs/golden-run.md`](docs/golden-run.md) |
+| Prompt de avaliação semântica por IA | [`docs/eval-prompt.md`](docs/eval-prompt.md) |
+| Arquitetura interna | [`docs/architecture.md`](docs/architecture.md) |
+| Política de qualidade (lints, toolchain, CI) | [`docs/quality.md`](docs/quality.md) |
+| Revisão de dependências | [`docs/dependencies.md`](docs/dependencies.md) |
+| Baseline de desempenho (`criterion`) | [`docs/benchmarks.md`](docs/benchmarks.md) |
+| Guia ativo para agentes | [`SKILL.md`](SKILL.md) |
+| Índice para LLM | [`llms.txt`](llms.txt) |
+| Histórico de mudanças | [`CHANGELOG.md`](CHANGELOG.md) |
+| Contribuição | [`AGENTS.md`](AGENTS.md) |
 
 ## Licença
 

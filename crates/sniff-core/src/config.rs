@@ -5,6 +5,10 @@ use crate::properties::{StyleCategory, parse_category};
 use serde::{Deserialize, Serialize};
 
 /// Full specification of a sniffing run.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "config pública de serde: flags independentes de captura, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SniffConfig {
     /// URL to navigate to.
@@ -133,7 +137,9 @@ impl Default for SniffConfig {
 /// Emulated viewport dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewport {
+    /// Viewport width in CSS pixels.
     pub width: u32,
+    /// Viewport height in CSS pixels.
     pub height: u32,
 }
 
@@ -162,23 +168,47 @@ impl Viewport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum WaitStrategy {
     /// Wait until `selector` exists in the DOM.
-    Selector { selector: String, timeout_ms: u64 },
+    Selector {
+        /// CSS selector to wait for.
+        selector: String,
+        /// Maximum wait in milliseconds.
+        timeout_ms: u64,
+    },
     /// Wait until the network is idle (no in-flight requests) for
     /// `idle_ms`, up to `timeout_ms`.
-    NetworkIdle { idle_ms: u64, timeout_ms: u64 },
+    NetworkIdle {
+        /// How long the network must stay idle, in milliseconds.
+        idle_ms: u64,
+        /// Maximum wait in milliseconds.
+        timeout_ms: u64,
+    },
     /// Poll `selector` until its computed style satisfies every
     /// condition, up to `timeout_ms`.
     ElementReady {
+        /// CSS selector to poll.
         selector: String,
+        /// Conditions the element's computed style must satisfy.
         conditions: Vec<ReadyCondition>,
+        /// Maximum wait in milliseconds.
         timeout_ms: u64,
     },
     /// Wait until `document.fonts.ready` resolves.
-    FontsLoaded { timeout_ms: u64 },
+    FontsLoaded {
+        /// Maximum wait in milliseconds.
+        timeout_ms: u64,
+    },
     /// Wait until `window[flag] === true`.
-    AppFlag { flag: String, timeout_ms: u64 },
+    AppFlag {
+        /// Global flag name checked on `window`.
+        flag: String,
+        /// Maximum wait in milliseconds.
+        timeout_ms: u64,
+    },
     /// Fixed sleep.
-    Delay { ms: u64 },
+    Delay {
+        /// Sleep duration in milliseconds.
+        ms: u64,
+    },
 }
 
 impl WaitStrategy {
@@ -219,30 +249,40 @@ pub enum ReadyCondition {
 /// A single user interaction performed on the page before extraction,
 /// used to reveal elements that only exist after an action (modals,
 /// dropdowns, hover menus, type-ahead suggestions).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     /// Wait for `selector`, scroll it into view and click its center with
     /// a real trusted mouse event (`Input.dispatchMouseEvent`), triggering
     /// the full `pointer`/`mouse`/`click` chain and `:active` state.
     Click {
+        /// CSS selector of the element to click.
         selector: String,
+        /// Maximum wait for the target to become ready, in milliseconds.
         timeout_ms: u64,
+        /// Extra settle time after the action, in milliseconds.
         settle_ms: u64,
     },
     /// Wait for `selector`, scroll it into view and move the pointer to its
     /// center (`Input.dispatchMouseEvent` `mouseMoved`), revealing CSS
     /// `:hover` menus and tooltips.
     Hover {
+        /// CSS selector of the element to hover.
         selector: String,
+        /// Maximum wait for the target to become ready, in milliseconds.
         timeout_ms: u64,
+        /// Extra settle time after the action, in milliseconds.
         settle_ms: u64,
     },
     /// Wait for `selector`, focus it and insert `text`
     /// (`Input.insertText`), revealing search/type-ahead dropdowns.
     Type {
+        /// CSS selector of the input to type into.
         selector: String,
+        /// Text inserted into the focused element.
         text: String,
+        /// Maximum wait for the target to become ready, in milliseconds.
         timeout_ms: u64,
+        /// Extra settle time after the action, in milliseconds.
         settle_ms: u64,
     },
     /// Wait for `selector` to exist, then attach local `files` to an
@@ -253,9 +293,13 @@ pub enum Action {
     /// `files` are resolved by the browser process — in a container the paths
     /// must exist inside it.
     Upload {
+        /// CSS selector of the `<input type=file>`.
         selector: String,
+        /// Local file paths to attach.
         files: Vec<String>,
+        /// Maximum wait for the target to become ready, in milliseconds.
         timeout_ms: u64,
+        /// Extra settle time after the action, in milliseconds.
         settle_ms: u64,
     },
 }
@@ -270,40 +314,40 @@ impl Action {
     /// The kind of this action (`click`, `hover`, `type` or `upload`).
     pub fn kind(&self) -> &'static str {
         match self {
-            Action::Click { .. } => "click",
-            Action::Hover { .. } => "hover",
-            Action::Type { .. } => "type",
-            Action::Upload { .. } => "upload",
+            Self::Click { .. } => "click",
+            Self::Hover { .. } => "hover",
+            Self::Type { .. } => "type",
+            Self::Upload { .. } => "upload",
         }
     }
 
     /// The target selector of this action.
     pub fn selector(&self) -> &str {
         match self {
-            Action::Click { selector, .. }
-            | Action::Hover { selector, .. }
-            | Action::Type { selector, .. }
-            | Action::Upload { selector, .. } => selector,
+            Self::Click { selector, .. }
+            | Self::Hover { selector, .. }
+            | Self::Type { selector, .. }
+            | Self::Upload { selector, .. } => selector,
         }
     }
 
     /// Milliseconds to wait for the target to become ready.
     pub fn timeout_ms(&self) -> u64 {
         match self {
-            Action::Click { timeout_ms, .. }
-            | Action::Hover { timeout_ms, .. }
-            | Action::Type { timeout_ms, .. }
-            | Action::Upload { timeout_ms, .. } => *timeout_ms,
+            Self::Click { timeout_ms, .. }
+            | Self::Hover { timeout_ms, .. }
+            | Self::Type { timeout_ms, .. }
+            | Self::Upload { timeout_ms, .. } => *timeout_ms,
         }
     }
 
     /// Milliseconds to settle after the interaction.
     pub fn settle_ms(&self) -> u64 {
         match self {
-            Action::Click { settle_ms, .. }
-            | Action::Hover { settle_ms, .. }
-            | Action::Type { settle_ms, .. }
-            | Action::Upload { settle_ms, .. } => *settle_ms,
+            Self::Click { settle_ms, .. }
+            | Self::Hover { settle_ms, .. }
+            | Self::Type { settle_ms, .. }
+            | Self::Upload { settle_ms, .. } => *settle_ms,
         }
     }
 }
@@ -313,9 +357,9 @@ impl Action {
 pub struct ElementFilter {
     /// Keep only elements that are visible (display != none, visibility != hidden).
     pub visible: bool,
-    /// Keep only elements with width >= min_width.
+    /// Keep only elements with width >= `min_width`.
     pub min_width: Option<f64>,
-    /// Keep only elements with height >= min_height.
+    /// Keep only elements with height >= `min_height`.
     pub min_height: Option<f64>,
     /// Skip elements matching any of these selectors.
     pub exclude_selectors: Vec<String>,
@@ -333,7 +377,11 @@ impl Default for ElementFilter {
 }
 
 /// Output shaping options.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "config pública de serde: toggles independentes de saída, não estados mutuamente exclusivos"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputConfig {
     /// Serialization format.
     pub format: OutputFormat,
@@ -352,8 +400,8 @@ pub struct OutputConfig {
     /// Compact mode: drop redundant logical/default properties and scope
     /// `css_variables` to a single global map plus per-node overrides.
     pub compact: bool,
-    /// Emit `is_user_noticeable` per node (display_visible +
-    /// accessibility_grade, derived in-page from display/visibility/opacity/rect/aria).
+    /// Emit `is_user_noticeable` per node (`display_visible` +
+    /// `accessibility_grade`, derived in-page from display/visibility/opacity/rect/aria).
     pub include_visibility: bool,
     /// Emit `computed_style_hash` per node: a fast 64-bit checksum of the
     /// effective styles, for change detection between runs.
@@ -390,7 +438,7 @@ impl Default for OutputConfig {
             include_style_hash: true,
             include_aria: true,
             // Measured accessibility facets are cheap (~10-20 tokens per
-            // node) and high-value; they make sniffCSS-check work out of
+            // node) and high-value; they make sniff check work out of
             // the box. Use `--no-contrast`/`--no-ax`/`--full` to disable.
             include_contrast: true,
             include_ax: true,
@@ -585,20 +633,21 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
                     "too many numeric options in `{name}` action (a selector ending in `:digits` is ambiguous)"
                 )));
             }
-            let selector = toks[..toks.len() - trailing.len()].join(":");
+            let keep = toks.len().saturating_sub(trailing.len());
+            let selector = toks.split_at(keep).0.join(":");
             let selector = selector.trim().to_string();
             if selector.is_empty() {
                 return Err(err("missing selector".into()));
             }
-            // trailing is built from the end: [settle, timeout].
-            let timeout_ms = match trailing.as_slice() {
-                [] => Action::DEFAULT_TIMEOUT_MS,
-                [to] | [_, to] => to.parse().map_err(|_| {
+            // `trailing` is built from the end: [settle, timeout]. The last
+            // element is therefore the timeout in every arity (0/1/2).
+            let timeout_ms = match trailing.last() {
+                None => Action::DEFAULT_TIMEOUT_MS,
+                Some(raw) => raw.parse().map_err(|_| {
                     err(format!(
                         "invalid timeout_ms (expected milliseconds) for `{name}` action"
                     ))
                 })?,
-                _ => unreachable!(),
             };
             let settle_ms = match trailing.as_slice() {
                 [se, _] => se.parse().map_err(|_| {
@@ -758,11 +807,11 @@ mod tests {
         // longer timeouts explicitly when needed.
         match &pipe[0] {
             WaitStrategy::Selector { timeout_ms, .. } => assert_eq!(*timeout_ms, 10_000),
-            _ => unreachable!(),
+            other => panic!("expected Selector, got {other:?}"),
         }
         match &pipe[2] {
             WaitStrategy::ElementReady { timeout_ms, .. } => assert_eq!(*timeout_ms, 10_000),
-            _ => unreachable!(),
+            other => panic!("expected ElementReady, got {other:?}"),
         }
     }
 

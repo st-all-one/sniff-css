@@ -19,7 +19,6 @@ use sniff_core::config::Action;
 /// `Action::Type` taps the target first (to focus the field) then enters the
 /// text. The caller is responsible for the `settle_ms` pause afterwards.
 pub async fn perform(driver: &FlutterDriver, action: &Action) -> Result<()> {
-    unsupported(action)?;
     match action {
         Action::Click { selector, .. } => {
             let finder = finder_from_spec(selector);
@@ -30,7 +29,8 @@ pub async fn perform(driver: &FlutterDriver, action: &Action) -> Result<()> {
             driver.tap(&finder).await?;
             driver.enter_text(text).await
         }
-        Action::Hover { .. } | Action::Upload { .. } => unreachable!("checked by unsupported()"),
+        // Hover/upload (and any future web-only kind) are rejected here.
+        other => unsupported(other),
     }
 }
 

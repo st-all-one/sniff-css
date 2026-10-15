@@ -5,10 +5,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["process", "rt-multi-thread", "macros", "time", "sync", "io-util", "net"] }
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,3 +19,6 @@ base64 = "0.23"
 
 [dev-dependencies]
 sniff-core = { path = "../sniff-core" }
+
+[lints]
+workspace = true

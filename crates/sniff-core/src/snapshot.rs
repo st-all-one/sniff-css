@@ -1,6 +1,6 @@
 //! On-disk snapshot naming and git-ignore helpers, shared by the CLI
 //! (`--persist`) and the MCP snapshot store so both produce the same
-//! sortable `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` tree.
+//! sortable `sniff/[domain]/[UTC]-[path]-[selector].<ext>` tree.
 //!
 //! Everything here is dependency-light (std only): pure string naming plus
 //! two tiny filesystem helpers for creating/ignoring the root directory.
@@ -9,18 +9,16 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default root directory (relative to the process CWD).
-pub const DEFAULT_ROOT: &str = "sniffCSS";
+pub const DEFAULT_ROOT: &str = "sniff";
 
 /// Content of the `.gitignore` written into the snapshot root. A lone `*`
 /// ignores everything inside the tree — including the `.gitignore` itself —
 /// so the generated folder is never tracked by version control.
 pub const GITIGNORE_CONTENT: &str = "*\n";
 
-/// Root from `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD.
+/// Root from `SNIFF_SNAPSHOT_DIR` or `sniff` under the CWD.
 pub fn snapshot_root() -> PathBuf {
-    std::env::var("SNIFF_SNAPSHOT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_ROOT))
+    crate::env::var("SNIFF_SNAPSHOT_DIR").map_or_else(|| PathBuf::from(DEFAULT_ROOT), PathBuf::from)
 }
 
 /// Ensure `root` exists and carries a `.gitignore` that auto-ignores its
@@ -37,10 +35,7 @@ pub fn ensure_gitignored(root: &Path) -> std::io::Result<()> {
 /// Sanitized host of `url` (`localhost:3000` -> `localhost_3000`); `local`
 /// for `file://` URLs and anything without an authority.
 pub fn domain_of(url: &str) -> String {
-    let rest = match url.find("://") {
-        Some(i) => &url[i + 3..],
-        None => url,
-    };
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit('@').next().unwrap_or("");
     let slug = slug(host, 80);
@@ -53,10 +48,7 @@ pub fn domain_of(url: &str) -> String {
 
 /// Sanitized URL pathname (`/products/42` -> `products_42`); `index` for `/`.
 pub fn path_of(url: &str) -> String {
-    let rest = match url.find("://") {
-        Some(i) => &url[i + 3..],
-        None => url,
-    };
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let path = rest.split(['?', '#']).next().unwrap_or("");
     let path = match path.find('/') {
         Some(i) => &path[i..],
@@ -73,12 +65,13 @@ pub fn path_of(url: &str) -> String {
 /// `[UTC]-[path]-[selector].<ext>` — leading timestamp so file listings sort
 /// chronologically across executions of the same target.
 pub fn snapshot_file_name(url: &str, selector: &str, ext: &str) -> String {
-    format!(
-        "{}-{}-{}.{ext}",
-        utc_now(),
-        path_of(url),
-        slug(selector, 40),
-    )
+    snapshot_file_name_at(url, selector, ext, &utc_now())
+}
+
+/// Like [`snapshot_file_name`], but with an explicit timestamp: deterministic
+/// and injectable for tests.
+pub fn snapshot_file_name_at(url: &str, selector: &str, ext: &str, stamp: &str) -> String {
+    format!("{stamp}-{}-{}.{ext}", path_of(url), slug(selector, 40))
 }
 
 /// Collapse arbitrary text into a filesystem-safe slug.
@@ -108,18 +101,28 @@ pub fn slug(raw: &str, max: usize) -> String {
 
 /// Current UTC instant as `YYYYMMDDTHHMMSSZ` (Howard Hinnant's
 /// civil-from-days algorithm; no chrono dependency needed for the store).
+///
+/// This is the **single** clock read in the workspace; everything else takes a
+/// timestamp as a parameter (see [`snapshot_file_name_at`]).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "único ponto de leitura do relógio; nomes de arquivo são intencionalmente únicos por execução"
+)]
 pub fn utc_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let days = (secs / 86_400) as i64;
+        .map_or(0, |d| d.as_secs());
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
     let sod = secs % 86_400;
     let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
     let (y, mo, d) = civil_from_days(days);
     format!("{y:04}{mo:02}{d:02}T{h:02}{m:02}{s:02}Z")
 }
 
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "civil-from-days de Hinnant: entradas são timestamps Unix em ms (i64), ordens de magnitude abaixo do limite de overflow"
+)]
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
@@ -128,8 +131,8 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let d = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(0);
+    let m = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(0);
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
 }
@@ -171,7 +174,11 @@ mod tests {
             "[data-testid=\"widget\"]",
             "png",
         );
-        assert!(png.ends_with(".png"));
+        assert!(
+            Path::new(&png)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+        );
     }
 
     #[test]
@@ -192,14 +199,10 @@ mod tests {
 
     #[test]
     fn ensure_gitignored_creates_root_and_gitignore() {
-        let dir = std::env::temp_dir().join(format!(
-            "sniffCSS-snapshot-it-{}-{:?}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("sniff-snapshot-it-{}-{seq}", std::process::id()));
         ensure_gitignored(&dir).unwrap();
         let content = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert_eq!(content, "*\n");

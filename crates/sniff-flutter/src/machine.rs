@@ -22,14 +22,22 @@ use tokio::process::{Child, Command};
 /// Errors from driving `flutter run/attach --machine`.
 #[derive(Debug, Error)]
 pub enum MachineError {
+    /// `flutter` was not found on `PATH`.
     #[error("flutter not found on PATH")]
     FlutterNotFound,
+    /// `flutter` exited before reporting the VM Service.
     #[error("flutter exited with {status} before reporting the VM Service")]
-    FlutterExited { status: String },
+    FlutterExited {
+        /// Exit status or signal description.
+        status: String,
+    },
+    /// Timed out waiting for the VM Service URI.
     #[error("timed out waiting for the VM Service (is the app built in debug mode?)")]
     Timeout,
+    /// No `app.debugService` event was emitted.
     #[error("no app.debugService event in flutter output")]
     NoVmService,
+    /// Underlying I/O error.
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -56,7 +64,7 @@ pub fn parse_machine_line(line: &str) -> Option<MachineEvent> {
     let value = match value {
         serde_json::Value::Array(mut arr) => {
             if arr.len() == 1 {
-                arr.pop().expect("single-element array")
+                arr.pop().unwrap_or_default()
             } else {
                 return None;
             }
@@ -89,11 +97,7 @@ impl FlutterMachine {
     /// `project_dir` is the app root (containing `pubspec.yaml`); `target`
     /// is the app entry, e.g. `lib/main.dart`; `device_id` is an `adb` serial
     /// (e.g. `emulator-5554`) or `flutter-tester`.
-    pub async fn run(
-        project_dir: &Path,
-        target: &str,
-        device_id: &str,
-    ) -> Result<Self, MachineError> {
+    pub fn run(project_dir: &Path, target: &str, device_id: &str) -> Result<Self, MachineError> {
         let child = Command::new("flutter")
             .arg("run")
             .arg("--machine")
@@ -113,7 +117,7 @@ impl FlutterMachine {
     ///
     /// `project_dir` is the app root (containing `pubspec.yaml`); `flutter
     /// attach` needs it to resolve the target entry.
-    pub async fn attach(project_dir: &Path, device_id: &str) -> Result<Self, MachineError> {
+    pub fn attach(project_dir: &Path, device_id: &str) -> Result<Self, MachineError> {
         let child = Command::new("flutter")
             .arg("attach")
             .arg("--machine")
@@ -141,13 +145,12 @@ impl FlutterMachine {
             .ok_or_else(|| MachineError::Io(std::io::Error::other("no stdout pipe")))?;
         let mut lines = BufReader::new(stdout).lines();
 
-        let deadline = tokio::time::Instant::now() + timeout;
         if let Some(status) = child.try_wait()? {
             return Err(MachineError::FlutterExited {
                 status: status.to_string(),
             });
         }
-        match scan_machine_output(&mut lines, deadline).await? {
+        match scan_machine_output(&mut lines, timeout).await? {
             Some(uri) => Ok(uri),
             None => Err(MachineError::NoVmService),
         }
@@ -157,20 +160,18 @@ impl FlutterMachine {
 /// Scan a stream of `flutter --machine` lines for the VM Service URI.
 ///
 /// Keeps reading until it finds `app.debugService`/`app.debugPort`
-/// (`Ok(Some(ws_uri))`), hits EOF (`Ok(None)`) or passes `deadline`
+/// (`Ok(Some(ws_uri))`), hits EOF (`Ok(None)`) or passes `timeout`
 /// (`Err(Timeout)`). Extracted from [`FlutterMachine::wait_for_vm_service`] so
 /// the scanner is testable against canned streams.
 async fn scan_machine_output<R: AsyncBufRead + Unpin>(
     lines: &mut tokio::io::Lines<R>,
-    deadline: tokio::time::Instant,
+    timeout: Duration,
 ) -> Result<Option<String>, MachineError> {
+    let start = tokio::time::Instant::now();
     loop {
-        let line = tokio::time::timeout(
-            deadline.saturating_duration_since(tokio::time::Instant::now()),
-            lines.next_line(),
-        )
-        .await
-        .map_err(|_| MachineError::Timeout)??;
+        let line = tokio::time::timeout(timeout.saturating_sub(start.elapsed()), lines.next_line())
+            .await
+            .map_err(|_| MachineError::Timeout)??;
         let Some(line) = line else {
             return Ok(None);
         };
@@ -196,7 +197,7 @@ async fn scan_machine_output<R: AsyncBufRead + Unpin>(
 impl Drop for FlutterMachine {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {
-            let _ = child.start_kill();
+            drop(child.start_kill());
         }
     }
 }
@@ -209,9 +210,8 @@ mod tests {
     fn scan(text: &str) -> Result<Option<String>, MachineError> {
         let stream = Cursor::new(text.to_string());
         let mut lines = stream.lines();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(scan_machine_output(&mut lines, deadline))
+        rt.block_on(scan_machine_output(&mut lines, Duration::from_secs(2)))
     }
 
     #[test]

@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 /// A computed style value for a single CSS property.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComputedProperty {
+    /// CSS property name, e.g. `display`.
     pub name: String,
+    /// Resolved computed value, e.g. `block`.
     pub value: String,
 }
 
@@ -17,6 +19,7 @@ pub struct ComputedProperty {
 /// are kept in the order they were requested.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ComputedStyles {
+    /// Style groups in declaration order, each with its ordered properties.
     pub groups: Vec<(StyleCategory, Vec<ComputedProperty>)>,
 }
 
@@ -44,16 +47,22 @@ impl ComputedStyles {
 /// Bounding client rect of an element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
+    /// X coordinate of the top-left corner, in CSS pixels.
     pub x: f64,
+    /// Y coordinate of the top-left corner, in CSS pixels.
     pub y: f64,
+    /// Width in CSS pixels.
     pub width: f64,
+    /// Height in CSS pixels.
     pub height: f64,
 }
 
 /// Derived layout metrics useful for AI analysis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ElementMetrics {
+    /// Effective `z-index` as a CSS string (e.g. `auto`, `10`).
     pub z_index: String,
+    /// Whether the element creates a stacking context.
     pub stacking_context: bool,
 }
 
@@ -108,11 +117,11 @@ pub struct ElementSnapshot {
     /// Styles captured for pseudo-elements (`::before`, ...).
     pub pseudo: Vec<PseudoStyles>,
     /// Child snapshots (empty when depth limit was reached).
-    pub children: Vec<ElementSnapshot>,
+    pub children: Vec<Self>,
 }
 
 /// Computed styles for a single pseudo-element.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PseudoStyles {
     /// Pseudo-element name, e.g. `::before`.
     pub name: String,
@@ -122,6 +131,10 @@ pub struct PseudoStyles {
 
 /// Resolved accessibility attributes of an element, computed deterministically
 /// in-page (no AX tree required).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "fatos ARIA independentes por elemento, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AriaInfo {
     /// Effective role: the explicit `role` attribute when present,
@@ -134,13 +147,21 @@ pub struct AriaInfo {
     pub focusable: bool,
     /// Present only when the attribute is set and non-empty.
     pub aria_hidden: Option<String>,
+    /// `aria-expanded` attribute value, when set.
     pub aria_expanded: Option<String>,
+    /// `aria-checked` attribute value, when set.
     pub aria_checked: Option<String>,
+    /// `aria-controls` attribute value, when set.
     pub aria_controls: Option<String>,
+    /// `aria-labelledby` attribute value, when set.
     pub aria_labelledby: Option<String>,
+    /// `aria-describedby` attribute value, when set.
     pub aria_describedby: Option<String>,
+    /// `lang` attribute value, when set.
     pub lang: Option<String>,
+    /// `alt` attribute value, when set.
     pub alt: Option<String>,
+    /// `title` attribute value, when set.
     pub title: Option<String>,
     /// `hidden` HTML attribute present.
     pub html_hidden: bool,
@@ -157,14 +178,23 @@ pub struct AriaInfo {
 /// `ignored`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AxInfo {
+    /// AX role, e.g. `button`.
     pub role: Option<String>,
+    /// Accessible name.
     pub name: Option<String>,
+    /// Accessible value (form controls, sliders).
     pub value: Option<String>,
+    /// Whether the AX node is focusable.
     pub focusable: Option<bool>,
+    /// Whether Chrome marked the node as ignored in the AX tree.
     pub ignored: bool,
+    /// Heading level for headings.
     pub level: Option<i64>,
+    /// Whether the node is expanded (`aria-expanded`).
     pub expanded: Option<bool>,
+    /// Checked state of checkboxes/radios.
     pub checked: Option<String>,
+    /// Whether the node is disabled.
     pub disabled: Option<bool>,
 }
 
@@ -172,8 +202,11 @@ pub struct AxInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TriState {
+    /// The check passed.
     Pass,
+    /// The check failed.
     Fail,
+    /// The check could not be evaluated.
     Unknown,
 }
 
@@ -232,7 +265,11 @@ pub struct ContrastInfo {
 impl ElementSnapshot {
     /// Recursively count every node in the tree rooted at this snapshot.
     pub fn node_count(&self) -> usize {
-        1 + self.children.iter().map(Self::node_count).sum::<usize>()
+        self.children
+            .iter()
+            .map(Self::node_count)
+            .sum::<usize>()
+            .saturating_add(1)
     }
 }
 

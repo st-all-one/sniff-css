@@ -30,18 +30,55 @@ pub fn parse_color(input: &str) -> Option<([f64; 3], f64)> {
 
 fn parse_hex(hex: &str) -> Option<([f64; 3], f64)> {
     let h = hex.trim();
-    let byte = |i: usize| u8::from_str_radix(&h[i..i + 1], 16).ok();
-    let double = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    // Parse the whole run as one integer, then split into CSS hex channels.
+    // Only 3/4/6/8 digits are valid; each nibble is 0..=15, so `* 17` is
+    // bounded by 255 (hence `saturating_mul`, which can never saturate here).
+    let value = u32::from_str_radix(h, 16).ok()?;
     let (r, g, b, a) = match h.len() {
-        3 => (byte(0)? * 17, byte(1)? * 17, byte(2)? * 17, 255),
-        4 => (byte(0)? * 17, byte(1)? * 17, byte(2)? * 17, byte(3)? * 17),
-        6 => (double(0)?, double(2)?, double(4)?, 255),
-        8 => (double(0)?, double(2)?, double(4)?, double(6)?),
+        3 => {
+            let (r, g, b) = ((value >> 8) & 0xf, (value >> 4) & 0xf, value & 0xf);
+            (
+                u8::try_from(r).ok()?.saturating_mul(17),
+                u8::try_from(g).ok()?.saturating_mul(17),
+                u8::try_from(b).ok()?.saturating_mul(17),
+                255,
+            )
+        }
+        4 => {
+            let (r, g, b, a) = (
+                (value >> 12) & 0xf,
+                (value >> 8) & 0xf,
+                (value >> 4) & 0xf,
+                value & 0xf,
+            );
+            (
+                u8::try_from(r).ok()?.saturating_mul(17),
+                u8::try_from(g).ok()?.saturating_mul(17),
+                u8::try_from(b).ok()?.saturating_mul(17),
+                u8::try_from(a).ok()?.saturating_mul(17),
+            )
+        }
+        6 => (
+            u8::try_from((value >> 16) & 0xff).ok()?,
+            u8::try_from((value >> 8) & 0xff).ok()?,
+            u8::try_from(value & 0xff).ok()?,
+            255,
+        ),
+        8 => (
+            u8::try_from((value >> 24) & 0xff).ok()?,
+            u8::try_from((value >> 16) & 0xff).ok()?,
+            u8::try_from((value >> 8) & 0xff).ok()?,
+            u8::try_from(value & 0xff).ok()?,
+        ),
         _ => return None,
     };
     Some((
-        [r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0],
-        a as f64 / 255.0,
+        [
+            f64::from(r) / 255.0,
+            f64::from(g) / 255.0,
+            f64::from(b) / 255.0,
+        ],
+        f64::from(a) / 255.0,
     ))
 }
 
@@ -92,7 +129,10 @@ pub fn relative_luminance([r, g, b]: [f64; 3]) -> f64 {
             ((c + 0.055) / 1.055).powf(2.4)
         }
     };
-    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    0.0722f64.mul_add(
+        channel(b),
+        0.7152f64.mul_add(channel(g), 0.2126 * channel(r)),
+    )
 }
 
 /// Contrast ratio between two colors (1.0..=21.0).
@@ -260,9 +300,9 @@ fn resolve_background(
     match inherited {
         EffectiveBackground::Solid { color: under, raw } => {
             let composite = [
-                color[0] * alpha + under[0] * (1.0 - alpha),
-                color[1] * alpha + under[1] * (1.0 - alpha),
-                color[2] * alpha + under[2] * (1.0 - alpha),
+                f64::mul_add(under[0], 1.0 - alpha, color[0] * alpha),
+                f64::mul_add(under[1], 1.0 - alpha, color[1] * alpha),
+                f64::mul_add(under[2], 1.0 - alpha, color[2] * alpha),
             ];
             EffectiveBackground::Solid {
                 color: composite,
@@ -293,7 +333,7 @@ fn apply_contrast_node(snap: &mut ElementSnapshot, inherited: &EffectiveBackgrou
         // Still resolve background for children (they may render text).
         let eff = resolve_background(snap, inherited);
         let children = &mut snap.children;
-        for child in children.iter_mut() {
+        for child in &mut *children {
             apply_contrast_node(child, &eff);
         }
         return;
@@ -324,9 +364,9 @@ fn apply_contrast_node(snap: &mut ElementSnapshot, inherited: &EffectiveBackgrou
                     // text on white is effectively gray).
                     let fg_eff = if fg_alpha < 1.0 {
                         [
-                            fg_color[0] * fg_alpha + bg_color[0] * (1.0 - fg_alpha),
-                            fg_color[1] * fg_alpha + bg_color[1] * (1.0 - fg_alpha),
-                            fg_color[2] * fg_alpha + bg_color[2] * (1.0 - fg_alpha),
+                            f64::mul_add(bg_color[0], 1.0 - fg_alpha, fg_color[0] * fg_alpha),
+                            f64::mul_add(bg_color[1], 1.0 - fg_alpha, fg_color[1] * fg_alpha),
+                            f64::mul_add(bg_color[2], 1.0 - fg_alpha, fg_color[2] * fg_alpha),
                         ]
                     } else {
                         fg_color
@@ -356,7 +396,7 @@ fn apply_contrast_node(snap: &mut ElementSnapshot, inherited: &EffectiveBackgrou
         }
     }
     let children = &mut snap.children;
-    for child in children.iter_mut() {
+    for child in &mut *children {
         apply_contrast_node(child, &eff);
     }
 }
@@ -393,10 +433,10 @@ mod tests {
     fn parse_hex_variants() {
         assert_eq!(parse_color("#fff"), Some(([1.0, 1.0, 1.0], 1.0)));
         let (rgb, a) = parse_color("#2563eb").unwrap();
-        assert!((rgb[0] - 0x25 as f64 / 255.0).abs() < 1e-9);
+        assert!((rgb[0] - f64::from(0x25) / 255.0).abs() < 1e-9);
         assert_eq!(a, 1.0);
         let (_, a) = parse_color("#2563eb80").unwrap();
-        assert!((a - 0x80 as f64 / 255.0).abs() < 1e-9);
+        assert!((a - f64::from(0x80) / 255.0).abs() < 1e-9);
         assert!(parse_color("#xyz").is_none());
     }
 

@@ -15,15 +15,48 @@ use serde_json::{Map, Value, json};
 use sniff_cdp::session::CdpSession;
 use sniff_core::types::{AxInfo, ElementSnapshot};
 use sniff_core::{SniffError, SniffResult};
-use std::collections::HashMap;
+
+/// Snapshot node id -> compact AX facet, resolved while attaching facets to
+/// the snapshot forest.
+pub type AxFacets = std::collections::BTreeMap<u64, AxInfo>;
+
+/// `AX nodeId -> raw CDP node` index of `Accessibility.getFullAXTree`, read
+/// via `childIds` while building each subtree.
+type AxTreeIndex = std::collections::BTreeMap<String, Value>;
 
 /// Result of an AX capture pass.
 #[derive(Debug, Default)]
 pub struct AxCapture {
     /// Snapshot node id -> compact AX facet (when facets were requested).
-    pub facets: Option<HashMap<u64, AxInfo>>,
+    pub facets: Option<AxFacets>,
     /// Full AX subtree per matched root (when the tree was requested).
     pub tree: Option<Value>,
+}
+
+/// Which AX outputs a capture pass should produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AxOutput {
+    /// Nothing (the pass is skipped).
+    #[default]
+    None,
+    /// Compact per-node facets only.
+    Facets,
+    /// Full AX subtree dump only.
+    Tree,
+    /// Both facets and tree.
+    Both,
+}
+
+impl AxOutput {
+    /// Whether compact per-node facets were requested.
+    pub const fn wants_facets(self) -> bool {
+        matches!(self, Self::Facets | Self::Both)
+    }
+
+    /// Whether the full AX tree was requested.
+    pub const fn wants_tree(self) -> bool {
+        matches!(self, Self::Tree | Self::Both)
+    }
 }
 
 /// Capture accessibility information for a snapshot forest.
@@ -38,9 +71,10 @@ pub struct AxCapture {
 pub async fn capture(
     session: &CdpSession,
     roots: &[ElementSnapshot],
-    include_facets: bool,
-    include_tree: bool,
+    output: AxOutput,
 ) -> SniffResult<AxCapture> {
+    let include_facets = output.wants_facets();
+    let include_tree = output.wants_tree();
     if !include_facets && !include_tree {
         return Ok(AxCapture::default());
     }
@@ -53,7 +87,7 @@ pub async fn capture(
         return Ok(AxCapture::default());
     }
 
-    let mut full_tree: HashMap<String, Value> = HashMap::new();
+    let mut full_tree: AxTreeIndex = AxTreeIndex::new();
     if include_tree {
         match session.call_no_params("Accessibility.getFullAXTree").await {
             Ok(value) => {
@@ -80,7 +114,7 @@ pub async fn capture(
         .ok_or_else(|| SniffError::Other("DOM.getDocument missing root nodeId".into()))?;
 
     let mut facets = if include_facets {
-        Some(HashMap::new())
+        Some(AxFacets::new())
     } else {
         None
     };
@@ -219,7 +253,7 @@ fn ax_int(node: &Value, name: &str) -> Option<i64> {
 }
 
 /// Build a compact AX subtree from a root AX node id, walking `childIds`.
-fn build_subtree(ax_id: &str, full_tree: &HashMap<String, Value>) -> Option<Value> {
+fn build_subtree(ax_id: &str, full_tree: &AxTreeIndex) -> Option<Value> {
     let node = full_tree.get(ax_id)?;
     let children: Vec<Value> = node
         .get("childIds")
@@ -266,7 +300,7 @@ fn build_subtree(ax_id: &str, full_tree: &HashMap<String, Value>) -> Option<Valu
 }
 
 /// Attach AX facets to a snapshot forest by node id.
-pub fn attach_ax(snaps: &mut [ElementSnapshot], facets: &HashMap<u64, AxInfo>) {
+pub fn attach_ax(snaps: &mut [ElementSnapshot], facets: &AxFacets) {
     for snap in snaps {
         snap.ax = facets.get(&snap.id).cloned();
         attach_ax(&mut snap.children, facets);
@@ -324,7 +358,7 @@ mod tests {
 
     #[test]
     fn subtree_walks_child_ids() {
-        let mut tree: HashMap<String, Value> = HashMap::new();
+        let mut tree: AxTreeIndex = AxTreeIndex::new();
         tree.insert(
             "a".into(),
             json!({
@@ -361,7 +395,7 @@ mod tests {
 
     #[test]
     fn attach_ax_maps_by_id_recursively() {
-        let mut facets = HashMap::new();
+        let mut facets = AxFacets::new();
         facets.insert(
             1u64,
             AxInfo {
@@ -391,7 +425,7 @@ mod tests {
             contrast: None,
             ax: None,
             attributes: None,
-            styles: Default::default(),
+            styles: sniff_core::types::ComputedStyles::default(),
             pseudo: vec![],
             children: vec![ElementSnapshot {
                 id: 2,
@@ -408,7 +442,7 @@ mod tests {
                 contrast: None,
                 ax: None,
                 attributes: None,
-                styles: Default::default(),
+                styles: sniff_core::types::ComputedStyles::default(),
                 pseudo: vec![],
                 children: vec![],
             }],

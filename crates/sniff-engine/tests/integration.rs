@@ -4,6 +4,13 @@
 //! skipped (pass with a message) when no Chrome/Chromium binary is
 //! available on the machine, so `cargo test` stays green anywhere.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "arquivo de teste: falha (`.unwrap()`/`.expect()`/`panic!`) e skip (`eprintln!`) são o resultado esperado"
+)]
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::config::{OutputFormat, parse_categories};
 use sniff_core::{
@@ -286,7 +293,7 @@ async fn no_match_returns_error() -> SniffResult<()> {
     }];
     let result = sniffer.sniff(&config).await;
     assert!(
-        matches!(result, Err(sniff_core::SniffError::NoMatch { .. })),
+        matches!(result, Err(SniffError::NoMatch { .. })),
         "expected NoMatch, got {result:?}"
     );
     Ok(())
@@ -309,7 +316,7 @@ async fn element_ready_missing_element_reports_no_match() -> SniffResult<()> {
     }];
     let result = sniffer.sniff(&config).await;
     assert!(
-        matches!(result, Err(sniff_core::SniffError::NoMatch { .. })),
+        matches!(result, Err(SniffError::NoMatch { .. })),
         "expected NoMatch for never-matching element-ready, got {result:?}"
     );
     Ok(())
@@ -335,7 +342,7 @@ async fn element_ready_present_but_not_ready_reports_timeout_with_hint() -> Snif
     }];
     let result = sniffer.sniff(&config).await;
     match result {
-        Err(sniff_core::SniffError::Timeout(msg)) => {
+        Err(SniffError::Timeout(msg)) => {
             assert!(msg.contains("element exists but conditions"), "got: {msg}");
             assert!(msg.contains("delay:N"), "got: {msg}");
         }
@@ -754,7 +761,12 @@ fn effect_entry(
     outcome: &sniff_engine::extractor::SniffOutcome,
     index: usize,
 ) -> &serde_json::Value {
-    &outcome.actions.as_ref().unwrap().as_array().unwrap()[index]
+    outcome
+        .actions
+        .as_ref()
+        .and_then(|a| a.as_array())
+        .and_then(|a| a.get(index))
+        .unwrap()
 }
 
 #[tokio::test]
@@ -945,6 +957,20 @@ async fn broken_chain_error_names_the_step() -> SniffResult<()> {
 
 #[tokio::test]
 async fn attributes_capture_verifies_form_field_names() -> SniffResult<()> {
+    // Walk the tree collecting every input's `name` attribute.
+    fn collect(snap: &sniff_core::types::ElementSnapshot, out: &mut Vec<(String, String)>) {
+        if snap.tag == "INPUT"
+            && let Some(attrs) = &snap.attributes
+        {
+            for (k, v) in attrs {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+        for child in &snap.children {
+            collect(child, out);
+        }
+    }
+
     let Some(opts) = require_chrome() else {
         eprintln!("skipping: no Chrome binary found");
         return Ok(());
@@ -958,20 +984,7 @@ async fn attributes_capture_verifies_form_field_names() -> SniffResult<()> {
     let outcome = sniffer.sniff(&config).await?;
     let root = &outcome.snapshots[0];
 
-    // Walk the tree collecting every input's `name` attribute.
     let mut names: Vec<(String, String)> = Vec::new();
-    fn collect(snap: &sniff_core::types::ElementSnapshot, out: &mut Vec<(String, String)>) {
-        if snap.tag == "INPUT"
-            && let Some(attrs) = &snap.attributes
-        {
-            for (k, v) in attrs {
-                out.push((k.clone(), v.clone()));
-            }
-        }
-        for child in &snap.children {
-            collect(child, out);
-        }
-    }
     collect(root, &mut names);
 
     let attrs: Vec<(String, String)> = names.iter().filter(|(k, _)| k == "name").cloned().collect();

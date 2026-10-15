@@ -4,8 +4,8 @@
 //! `ext.flutter.inspector.getRootWidgetSummaryTree`, annotating each node with
 //! its render-object geometry (`getLayoutExplorerNode`) and diagnostics
 //! properties (`getProperties`), and maps the result onto the same
-//! `ElementSnapshot` JSONL model the web backend emits — so `sniffCSS-diff`
-//! and `sniffCSS-check` work on Flutter snapshots unchanged.
+//! `ElementSnapshot` JSONL model the web backend emits — so `sniff diff`
+//! and `sniff check` work on Flutter snapshots unchanged.
 //!
 //! Mapping conventions:
 //! - `tag` — widget class name (e.g. `Text`, `ElevatedButton`), derived from
@@ -37,7 +37,7 @@ pub async fn extract(inspector: &FlutterInspector, depth: usize) -> Result<Vec<E
     let mut nodes = Vec::new();
     let mut next_id = 1u64;
     walk(inspector, &root, depth, None, &mut next_id, &mut nodes).await?;
-    let roots = nest(nodes);
+    let roots = nest(&nodes);
     // Reuse the web contrast derivation: it reads `color`/`background-color`/
     // `font-size`/`font-weight` from the node styles, which `map_styles`
     // already emits with web-compatible keys and normalized colors, and it
@@ -51,24 +51,34 @@ pub async fn extract(inspector: &FlutterInspector, depth: usize) -> Result<Vec<E
 ///
 /// Pre-order guarantees a node's subtree occupies a contiguous range where
 /// children have `depth == parent.depth + 1`, so the nesting is unambiguous.
-fn nest(flat: Vec<ElementSnapshot>) -> Vec<ElementSnapshot> {
-    fn build(flat: &[ElementSnapshot], start: usize, depth: usize) -> (ElementSnapshot, usize) {
-        let src = &flat[start];
+fn nest(flat: &[ElementSnapshot]) -> Vec<ElementSnapshot> {
+    fn build(
+        flat: &[ElementSnapshot],
+        start: usize,
+        depth: usize,
+    ) -> Option<(ElementSnapshot, usize)> {
+        let src = flat.get(start)?;
         let mut node = src.clone();
         node.children.clear();
-        let mut idx = start + 1;
-        while idx < flat.len() && flat[idx].depth == depth + 1 {
-            let (child, next) = build(flat, idx, depth + 1);
+        let child_depth = depth.checked_add(1)?;
+        let mut idx = start.checked_add(1)?;
+        while let Some(next) = flat.get(idx) {
+            if next.depth != child_depth {
+                break;
+            }
+            let (child, after) = build(flat, idx, child_depth)?;
             node.children.push(child);
-            idx = next;
+            idx = after;
         }
-        (node, idx)
+        Some((node, idx))
     }
     let mut roots = Vec::new();
     let mut idx = 0;
-    while idx < flat.len() {
-        let depth = flat[idx].depth;
-        let (root, next) = build(&flat, idx, depth);
+    while let Some(node) = flat.get(idx) {
+        let depth = node.depth;
+        let Some((root, next)) = build(flat, idx, depth) else {
+            break;
+        };
         roots.push(root);
         idx = next;
     }
@@ -79,6 +89,10 @@ fn nest(flat: Vec<ElementSnapshot>) -> Vec<ElementSnapshot> {
 ///
 /// Implemented as an explicit pre-order stack so the async traversal does not
 /// recurse (the widget tree can be arbitrarily deep).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "estado do walk explícito evita alocação por frame"
+)]
 async fn walk(
     inspector: &FlutterInspector,
     root: &Value,
@@ -102,9 +116,9 @@ async fn walk(
     }];
     // Stable sibling ordinal per (parent, class): `Text[0]`, `Text[1]`, ...
     // Unlike the global id, this is stable across captures whose unrelated
-    // parts of the tree change, which is what `sniffCSS-diff` needs.
-    let mut sibling_seen: std::collections::HashMap<(Option<u64>, String), u64> =
-        std::collections::HashMap::new();
+    // parts of the tree change, which is what `sniff diff` needs.
+    let mut sibling_seen: std::collections::BTreeMap<(Option<u64>, String), u64> =
+        std::collections::BTreeMap::new();
 
     while let Some(frame) = stack.pop() {
         let value_id = frame.node.get("valueId").and_then(Value::as_str);
@@ -118,7 +132,7 @@ async fn walk(
         };
 
         let id = *next_id;
-        *next_id += 1;
+        *next_id = next_id.saturating_add(1);
 
         let class = widget_class_name(frame.node);
         let description = frame
@@ -130,16 +144,16 @@ async fn walk(
             let key = (frame.parent_id, class.clone());
             let n = sibling_seen.entry(key).or_insert(0);
             let ordinal = *n;
-            *n += 1;
+            *n = n.saturating_add(1);
             ordinal
         };
         let identity = widget_identity(&class, description, ordinal);
 
-        let (off_x, off_y) = geometry.as_ref().map(geometry_offset).unwrap_or((0.0, 0.0));
+        let (off_x, off_y) = geometry.as_ref().map_or((0.0, 0.0), geometry_offset);
         let pos = (frame.parent_pos.0 + off_x, frame.parent_pos.1 + off_y);
         let rect = geometry.as_ref().and_then(|g| map_rect(g, pos));
         let depth_here = match frame.parent_id {
-            Some(pid) => parent_depth(out, pid) + 1,
+            Some(pid) => parent_depth(out, pid).saturating_add(1),
             None => 0,
         };
 
@@ -169,7 +183,7 @@ async fn walk(
             for child in children.iter().rev() {
                 stack.push(Frame {
                     node: child,
-                    depth_left: frame.depth_left - 1,
+                    depth_left: frame.depth_left.saturating_sub(1),
                     parent_pos: pos,
                     parent_id: Some(id),
                 });
@@ -184,8 +198,7 @@ fn parent_depth(out: &[ElementSnapshot], pid: u64) -> usize {
     out.iter()
         .rev()
         .find(|n| n.id == pid)
-        .map(|n| n.depth)
-        .unwrap_or(0)
+        .map_or(0, |n| n.depth)
 }
 
 /// Widget class name from the diagnostics description: the leading
@@ -252,7 +265,7 @@ pub fn map_rect(geometry: &Value, pos: (f64, f64)) -> Option<Rect> {
 /// go to a per-node "custom" group so nothing is silently dropped. Colors are
 /// normalized to `#rrggbb`/`#rrggbbaa` and a few keys are renamed to their web
 /// equivalents (`backgroundColor` → `background-color`, `fontSize` →
-/// `font-size`, ...) so `sniff_core::contrast` and `sniffCSS-check` work on
+/// `font-size`, ...) so `sniff_core::contrast` and `sniff check` work on
 /// Flutter snapshots unchanged. Widgets whose `color` is a surface color
 /// (`ColoredBox`, `Container`, ...) map it to `background-color` so it can
 /// serve as the effective background for contrast.

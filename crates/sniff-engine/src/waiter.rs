@@ -60,11 +60,7 @@ async fn execute_strategy(session: &CdpSession, strategy: &WaitStrategy) -> Snif
                 Err(SniffError::Timeout(_)) => {
                     // Distinguish "selector never matched" (dynamic/empty
                     // page) from "matched but never satisfied conditions".
-                    if !eval_selector_exists(session, selector).await? {
-                        Err(SniffError::NoMatch {
-                            selector: selector.clone(),
-                        })
-                    } else {
+                    if eval_selector_exists(session, selector).await? {
                         Err(SniffError::Timeout(format!(
                             "`{selector}` to become ready — the element exists but conditions \
                              ({conds}) never held within {timeout_ms}ms (e.g. a carousel whose \
@@ -72,6 +68,10 @@ async fn execute_strategy(session: &CdpSession, strategy: &WaitStrategy) -> Snif
                              `element-ready` timeout",
                             conds = describe_conditions(conditions),
                         )))
+                    } else {
+                        Err(SniffError::NoMatch {
+                            selector: selector.clone(),
+                        })
                     }
                 }
                 Err(e) => Err(e),
@@ -115,7 +115,8 @@ async fn wait_until(
     what: String,
     expr: String,
 ) -> SniffResult<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let budget = Duration::from_millis(timeout_ms);
+    let start = tokio::time::Instant::now();
     loop {
         let ready = session
             .evaluate(&expr, false)
@@ -124,7 +125,7 @@ async fn wait_until(
         if ready.as_bool().unwrap_or(false) {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
+        if start.elapsed() >= budget {
             return Err(SniffError::Timeout(what));
         }
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -191,19 +192,21 @@ fn ready_check(condition: &ReadyCondition) -> String {
 async fn wait_network_idle(session: &CdpSession, idle_ms: u64, timeout_ms: u64) -> SniffResult<()> {
     const IDLE_GRACE_MS: u64 = 2000;
     let mut rx = session.subscribe();
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let budget = Duration::from_millis(timeout_ms);
+    let start = tokio::time::Instant::now();
     let mut last_active = tokio::time::Instant::now();
     let mut in_flight: u64 = 0;
     let mut seen_any = false;
 
     loop {
         let no_new_activity = last_active.elapsed() >= Duration::from_millis(idle_ms);
-        let grace_passed =
-            seen_any && last_active.elapsed() >= Duration::from_millis(idle_ms + IDLE_GRACE_MS);
+        let grace_passed = seen_any
+            && last_active.elapsed()
+                >= Duration::from_millis(idle_ms.saturating_add(IDLE_GRACE_MS));
         if (in_flight == 0 && no_new_activity) || grace_passed {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
+        if start.elapsed() >= budget {
             return Err(SniffError::Timeout("network to become idle".into()));
         }
 
@@ -213,7 +216,7 @@ async fn wait_network_idle(session: &CdpSession, idle_ms: u64, timeout_ms: u64) 
                     Ok(ev) if ev.session_id.as_deref() == Some(session.id()) => {
                         match ev.method.as_str() {
                             "Network.requestWillBeSent" => {
-                                in_flight += 1;
+                                in_flight = in_flight.saturating_add(1);
                                 seen_any = true;
                                 last_active = tokio::time::Instant::now();
                             }
@@ -228,7 +231,7 @@ async fn wait_network_idle(session: &CdpSession, idle_ms: u64, timeout_ms: u64) 
                     Err(_) => return Err(SniffError::Cdp("event stream closed".into())),
                 }
             }
-            _ = tokio::time::sleep(POLL_INTERVAL) => {}
+            () = tokio::time::sleep(POLL_INTERVAL) => {}
         }
     }
 }

@@ -1,4 +1,4 @@
-//! `sniffCSS-mcp` — Model Context Protocol server for computed-style sniffing.
+//! `sniff-mcp` — Model Context Protocol server for computed-style sniffing.
 //!
 //! Launches one headless Chrome and serves MCP tools over stdio, so AI
 //! agents can capture real computed styles and diff snapshots directly.
@@ -10,8 +10,8 @@ use sniff_css_mcp::{ChromePool, SniffMcpServer};
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let pool = match std::env::var("SNIFF_CONNECT") {
-        Ok(endpoint) if !endpoint.is_empty() => {
+    let pool = match sniff_core::env::var("SNIFF_CONNECT") {
+        Some(endpoint) if !endpoint.is_empty() => {
             tracing::info!(endpoint = %endpoint, "connecting to existing browser");
             let pool = ChromePool::connect(&endpoint).await?;
             pool.set_ignore_certificate_errors(env_flag("SNIFF_IGNORE_CERTIFICATE_ERRORS"))
@@ -30,9 +30,9 @@ async fn main() -> anyhow::Result<()> {
     let service = SniffMcpServer::new(pool);
 
     tracing::info!(
-        "sniffCSS-mcp ready: sniffCSS_page, sniffCSS_diff, sniffCSS_check, sniffCSS_snapshots, sniffCSS_categories over stdio"
+        "sniff-mcp ready: sniff_page, sniff_diff, sniff_check, sniff_snapshots, sniff_categories over stdio"
     );
-    let running = rmcp::serve_server(service, rmcp::transport::stdio()).await?;
+    let running = Box::pin(rmcp::serve_server(service, rmcp::transport::stdio())).await?;
     running.waiting().await?;
     Ok(())
 }
@@ -41,8 +41,7 @@ async fn main() -> anyhow::Result<()> {
 /// absent/empty/other values are `false`.
 fn env_flag(name: &str) -> bool {
     matches!(
-        std::env::var(name)
-            .ok()
+        sniff_core::env::var(name)
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
@@ -54,8 +53,12 @@ fn env_flag(name: &str) -> bool {
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
+    // A global subscriber may already be installed; that is not fatal.
+    if let Err(e) = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
-        .try_init();
+        .try_init()
+    {
+        sniff_core::diagnostic::write(format_args!("tracing subscriber not installed: {e}"));
+    }
 }

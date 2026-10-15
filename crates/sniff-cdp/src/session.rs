@@ -2,6 +2,7 @@
 
 use crate::client::{CdpClient, CdpError, Result};
 use crate::protocol::CdpEvent;
+use base64::Engine as _;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ impl std::fmt::Debug for CdpSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CdpSession")
             .field("session_id", &self.session_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -150,7 +151,6 @@ impl CdpSession {
                 method: "Page.captureScreenshot".into(),
                 message: "response missing `data`".into(),
             })?;
-        use base64::Engine;
         base64::engine::general_purpose::STANDARD
             .decode(data)
             .map_err(|e| CdpError::Protocol {
@@ -177,7 +177,7 @@ impl CdpSession {
                     {
                         return Ok(ev);
                     }
-                    Ok(_) => continue,
+                    Ok(_) => {}
                     Err(_) => return Err(CdpError::Closed),
                 }
             }
@@ -340,11 +340,11 @@ impl CdpSession {
         }
         let mut map = serde_json::Map::new();
         for (k, v) in headers {
-            map.insert(k.clone(), serde_json::Value::String(v.clone()));
+            map.insert(k.clone(), Value::String(v.clone()));
         }
         self.call(
             "Network.setExtraHTTPHeaders",
-            json!({ "headers": serde_json::Value::Object(map) }),
+            json!({ "headers": Value::Object(map) }),
         )
         .await?;
         Ok(())

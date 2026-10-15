@@ -1,6 +1,6 @@
 # Guia de uso — otimizado para IA
 
-Este guia mostra como usar `sniffCSS` + `sniffCSS-diff` + `sniffCSS-check` do
+Este guia mostra como usar `sniff` + `sniff diff` + `sniff check` do
 jeito certo quando o consumidor final é um modelo de IA (agente, MCP, pipeline
 de regressão). Para a referência completa de flags da CLI, veja
 [`usage.md`](usage.md).
@@ -9,7 +9,7 @@ de regressão). Para a referência completa de flags da CLI, veja
 
 ```
 captura determinística ──► diff determinístico ──► checks determinísticos ──► IA (só interpreta)
-  sniffCSS       sniffCSS-diff              sniffCSS-check / sniffCSS_check      eval-prompt
+  sniff       sniff diff              sniff check / sniff_check      eval-prompt
 ```
 
 A extração, o diff e os checks são **sem IA** e custam ~0 tokens. O LLM só vê o
@@ -17,7 +17,7 @@ delta (medido: ~79% menos tokens que os snapshots completos).
 
 ## 1. Capture — o default já é otimizado
 
-Para uso com IA, o **default** do `sniffCSS` já é o conjunto otimizado: você só
+Para uso com IA, o **default** do `sniff` já é o conjunto otimizado: você só
 precisa de `-u` + `-s` (e, se houver, `--stable-key`). Os 5 otimizadores abaixo
 vêm ligados; controle fino opcional (`--full` desliga os 5 de uma vez, `--no-*`
 individual). Flags completas: [`usage.md`](usage.md).
@@ -52,12 +52,12 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 
 ```bash
 # header auth (sem token em URL / .env / proxy)
-sniffCSS -u http://localhost:10011/cms -s "main" --header "X-CMS-AI-Token: <token>"
+sniff capture -u http://localhost:10011/cms -s "main" --header "X-CMS-AI-Token: <token>"
 # login via ações → exporta estado → restaura nas próximas
-sniffCSS -u "$URL/login" -s ".dashboard" \
+sniff capture -u "$URL/login" -s ".dashboard" \
   --type "#email:user@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/state.json
-sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
+sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
 ```
 
 ### Volumetria, prova visual e atributos DOM
@@ -65,9 +65,9 @@ sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
 | Flag | Efeito |
 |---|---|
 | `--summary` (ou `--output summary`) | **Formato padrão.** Digest de 1 linha por nó (estrutura + `css` curado + `contrast` + `aria`); constantes globais em `__meta.style_defaults`. |
-| `--no-summary` | Emite o snapshot completo não-sumarizado (`--output jsonl`) — use quando o output alimenta `sniffCSS-diff`/`sniffCSS-check`/jq. |
+| `--no-summary` | Emite o snapshot completo não-sumarizado (`--output jsonl`) — use quando o output alimenta `sniff diff`/`sniff check`/jq. |
 | `--screenshot PATH` (+ `--fullpage-screenshot`) | PNG do estado final (pós-stabilize, pós-interação) — prova visual. |
-| `--persist` | Grava no layout do store MCP (`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>`, git-ignored). A saída continua no stdout. |
+| `--persist` | Grava no layout do store MCP (`sniff/[domain]/[UTC]-[path]-[selector].<ext>`, git-ignored). A saída continua no stdout. |
 | `--attrs a,b` | Atributos DOM verbatim por nó sob `attrs` (ex.: validar `name` de forms); o diff compara `attrs` por chave. |
 
 > **Conteúdo oculto por animação (WOW.js / scroll-reveal):** com `--stabilize`
@@ -94,7 +94,7 @@ Campos derivados que a IA **não precisa inferir**:
 ## 2. Diff determinístico (antes da IA)
 
 ```bash
-sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
+sniff diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 ```
 
 - `CHANGED` → `changes` com `before`/`after` por propriedade (`styles`, `pseudo`,
@@ -106,11 +106,11 @@ sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 - `--no-structural` — suprime `ADDED`/`REMOVED` (feeds com contagem variável).
 - `--stats-only` → `nodes: N -> M | changed/added/removed` (varredura em escala).
 
-## 2b. Checks determinísticos (`sniffCSS-check`)
+## 2b. Checks determinísticos (`sniff check`)
 
 ```bash
-sniffCSS-check --input head.jsonl --uniform --tolerance 0.5   # o "card estranho"
-sniffCSS-check --input head.jsonl --rules                     # PASS/WARN/FAIL
+sniff check --input head.jsonl --uniform --tolerance 0.5   # o "card estranho"
+sniff check --input head.jsonl --rules                     # PASS/WARN/FAIL
 ```
 
 Saída JSONL com **evidência medida** (contraste AA/AAA, alvo 24×24, foco
@@ -122,7 +122,7 @@ medidos, não chutes.
 
 Só agora o LLM entra. Envie **apenas** `delta.jsonl` + o prompt de
 [`eval-prompt.md`](eval-prompt.md). A resposta deve validar contra
-[`sniffCSS-eval.schema.json`](sniffCSS-eval.schema.json):
+[`sniff-eval.schema.json`](sniff-eval.schema.json):
 
 ```jsonc
 {
@@ -152,13 +152,13 @@ jq -e 'has("status") and has("score_change") and (.changes_evaluated|length)>0' 
 
 ## 4. Padrões de uso por cenário
 
-### Agente/MCP (servidor `sniffCSS-mcp`)
+### Agente/MCP (servidor `sniff-mcp`)
 
-Exponha `sniffCSS-mcp` como servidor MCP (stdio) para agentes. O servidor
+Exponha `sniff-mcp` como servidor MCP (stdio) para agentes. O servidor
 mantém um Chrome headless compartilhado e oferece 6 tools; os defaults já são
 os otimizados (`compact`, `custom_props`, `stabilize`, `contrast`,
-`include_ax`). Por padrão cada `sniffCSS_page` **persiste** o snapshot em
-`sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` e responde o **digest
+`include_ax`). Por padrão cada `sniff_page` **persiste** o snapshot em
+`sniff/[domain]/[UTC]-[path]-[selector].jsonl` e responde o **digest
 summary**; `return:"reference"` devolve só a linha `{"__sniff": {...}}`
 (~200 tokens) e `return:"jsonl"` o JSONL completo inline (`persist:false`
 desativa a gravação; `return:"reference"` exige persist). Durante a execução
@@ -166,12 +166,12 @@ envia `notifications/progress` por fase.
 
 | Tool | Uso |
 |---|---|
-| `sniffCSS_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**). Para elementos que só existem após uma ação, passe `actions` (array **ordenado** de `{type, selector, text?, files?, timeout_ms?, settle_ms?}`); upload via `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` roda handlers reais. Com `actions`, o snapshot carrega a linha `__actions` (default ON; `effects:false` omite). |
-| `sniffFlutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot, **viewport**, **actions**). `viewport` (`WxH`) aplica `adb shell wm size` e restaura; `actions` (mesmos `ActionInput` do web: `{type, selector, text?, timeout_ms?, settle_ms?}`) dirigem o app pela extensão Flutter Driver antes do freeze/extract — `type:"click"|"type"`; `hover`/`upload` falham (web-only) e exigem `enableFlutterDriverExtension()` no app. Retorna o `__sniff` handle por padrão; os mesmos `sniffCSS_diff`/`sniffCSS_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
-| `sniffCSS_snapshots` | Lista os snapshots persistidos (domain/target/path/created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use para escolher o par base/head. |
-| `sniffCSS_diff` | Diff determinístico — **base_path/head_path** (o modo otimizado) ou base_jsonl/head_jsonl, tolerance, ignore_props, ignore_structural → delta + `__diff_summary`. Quando os dois lados carregam `__actions`, eles também são comparados (`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`). |
-| `sniffCSS_check` | Checks determinísticos offline — **path** ou jsonl, uniform, rules, tolerance → PASS/WARN/FAIL + outliers. Inclui a regra `occluded` (elemento **atrás** de outro que o cobre, por `rect` + `z-index`/ordem no DOM). |
-| `sniffCSS_categories` | Categorias aceitas. |
+| `sniff_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**). Para elementos que só existem após uma ação, passe `actions` (array **ordenado** de `{type, selector, text?, files?, timeout_ms?, settle_ms?}`); upload via `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` roda handlers reais. Com `actions`, o snapshot carrega a linha `__actions` (default ON; `effects:false` omite). |
+| `sniff_flutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot, **viewport**, **actions**). `viewport` (`WxH`) aplica `adb shell wm size` e restaura; `actions` (mesmos `ActionInput` do web: `{type, selector, text?, timeout_ms?, settle_ms?}`) dirigem o app pela extensão Flutter Driver antes do freeze/extract — `type:"click"|"type"`; `hover`/`upload` falham (web-only) e exigem `enableFlutterDriverExtension()` no app. Retorna o `__sniff` handle por padrão; os mesmos `sniff_diff`/`sniff_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
+| `sniff_snapshots` | Lista os snapshots persistidos (domain/target/path/created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use para escolher o par base/head. |
+| `sniff_diff` | Diff determinístico — **base_path/head_path** (o modo otimizado) ou base_jsonl/head_jsonl, tolerance, ignore_props, ignore_structural → delta + `__diff_summary`. Quando os dois lados carregam `__actions`, eles também são comparados (`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`). |
+| `sniff_check` | Checks determinísticos offline — **path** ou jsonl, uniform, rules, tolerance → PASS/WARN/FAIL + outliers. Inclui a regra `occluded` (elemento **atrás** de outro que o cobre, por `rect` + `z-index`/ordem no DOM). |
+| `sniff_categories` | Categorias aceitas. |
 
 **Defaults de equipe (env do servidor):** `SNIFF_DEFAULT_HEADERS` (headers
 aplicados a **todo** request; `headers` por chamada sobrescreve por chave),
@@ -180,32 +180,32 @@ aplicados a **todo** request; `headers` por chamada sobrescreve por chave),
 relativa, ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`).
 
 > **Fluxo low-token (recomendado):** cada captura salva no disco. No CLI
-> (preferido quando há shell), `sniffCSS ... --no-summary --persist` grava o
-> snapshot completo e emite o digest summary; `sniffCSS-diff <base> <head>` e
-> `sniffCSS-check --input <head>` leem os arquivos. No MCP, cada `sniffCSS_page`
-> salva e responde o summary; depois `sniffCSS_diff base_path/head_path` e
-> `sniffCSS_check path` leem os arquivos — o snapshot completo **nunca** entra
+> (preferido quando há shell), `sniff ... --no-summary --persist` grava o
+> snapshot completo e emite o digest summary; `sniff diff <base> <head>` e
+> `sniff check --input <head>` leem os arquivos. No MCP, cada `sniff_page`
+> salva e responde o summary; depois `sniff_diff base_path/head_path` e
+> `sniff_check path` leem os arquivos — o snapshot completo **nunca** entra
 > no contexto do LLM (nem no retorno, nem nos argumentos).
 
-Recursos embutidos: `sniffCSS://prompts/eval` (prompt),
-`sniffCSS://schemas/eval` (schema) e `sniffCSS://guides/golden` — leia-os em vez
+Recursos embutidos: `sniff://prompts/eval` (prompt),
+`sniff://schemas/eval` (schema) e `sniff://guides/golden` — leia-os em vez
 de copiar arquivos.
 
 Config do Claude Desktop:
 
 ```json
-{ "mcpServers": { "sniff": { "command": "sniffCSS-mcp" } } }
+{ "mcpServers": { "sniff": { "command": "sniff-mcp" } } }
 ```
 
 ### Monitor de regressão (CI)
 
 ```bash
-sniffCSS --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
+sniff capture --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
   > snapshots/base.jsonl
 # ... no build seguinte ... (mesmos flags nos dois lados)
-sniffCSS --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
+sniff capture --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
   > snapshots/head.jsonl
-sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
+sniff diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 # falha o job se changed/added/removed > limiar
 ```
 
@@ -215,9 +215,9 @@ sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 ### Debug de um elemento pontual
 
 ```bash
-sniffCSS -u http://localhost:3000 -s ".btn-primary" --categories visual,typography \
+sniff capture -u http://localhost:3000 -s ".btn-primary" --categories visual,typography \
   | jq '{color:.css.color, font:.css."font-size"}'                  # summary (default)
-sniffCSS -u http://localhost:3000 -s ".btn-primary" --no-summary --categories visual,typography \
+sniff capture -u http://localhost:3000 -s ".btn-primary" --no-summary --categories visual,typography \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'  # full
 ```
 
@@ -228,13 +228,13 @@ estruturadas, regras determinísticas, leitura de facets e checklist de
 julgamento: [`accessibility.md`](accessibility.md). O contraste é **medido**
 (fundo efetivo resolvido in-page, independente da profundidade), a
 perceptibilidade é **graduada** (`is_user_noticeable`) e as regras
-`sniffCSS-check` são **determinísticas** — a IA não chuta cores nem adivinha se
+`sniff check` são **determinísticas** — a IA não chuta cores nem adivinha se
 algo está invisível.
 
 ```bash
-sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
-sniffCSS-check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
-sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
+sniff capture -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
+sniff check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
+sniff check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 ```
 
 ## 6. Boas práticas / armadilhas
@@ -267,7 +267,7 @@ sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 
 | Ação | Comando |
 |---|---|
-| Capturar (default otimizado) | `sniffCSS -u URL -s SEL [flags]` |
+| Capturar (default otimizado) | `sniff capture -u URL -s SEL [flags]` |
 | Snapshot completo (diff/check/jq) | `--no-summary` (ou `--output jsonl`) |
 | Full-fidelity | `--full` nos dois lados |
 | Revelar elementos por interação | `--click #open` · `--hover #menu` · `--type #q:shoes` · `--action click:#open` · `--upload #file:foto.png` |
@@ -275,11 +275,11 @@ sniffCSS-check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 | Header auth / sessão | `--header "X: v"` · `--storage-state f` · `--save-storage-state f` |
 | TLS self-signed / `--connect` | `--ignore-certificate-errors` (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`) |
 | Auditoria a11y completa | [`accessibility.md`](accessibility.md) |
-| Resumo de mudanças | `sniffCSS-diff base.jsonl head.jsonl --stats-only` |
-| Ignorar props voláteis | `sniffCSS-diff ... --ignore-props transform,opacity` |
-| Listas de contagem variável | `sniffCSS-diff ... --no-structural` |
-| Delta completo | `sniffCSS-diff base.jsonl head.jsonl > delta.jsonl` |
-| Checagens determinísticas | `sniffCSS-check --input snap.jsonl --uniform --rules` |
-| Schema da resposta IA | [`sniffCSS-eval.schema.json`](sniffCSS-eval.schema.json) |
+| Resumo de mudanças | `sniff diff base.jsonl head.jsonl --stats-only` |
+| Ignorar props voláteis | `sniff diff ... --ignore-props transform,opacity` |
+| Listas de contagem variável | `sniff diff ... --no-structural` |
+| Delta completo | `sniff diff base.jsonl head.jsonl > delta.jsonl` |
+| Checagens determinísticas | `sniff check --input snap.jsonl --uniform --rules` |
+| Schema da resposta IA | [`sniff-eval.schema.json`](sniff-eval.schema.json) |
 | Prompt de avaliação | [`eval-prompt.md`](eval-prompt.md) |
 | Padrão ouro de execução | [`golden-run.md`](golden-run.md) |

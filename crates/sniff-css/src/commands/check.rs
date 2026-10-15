@@ -1,60 +1,22 @@
-//! `sniffCSS-check` binary: deterministic UI checks over a snapshot.
-//!
-//! Offline (no browser): reads a `sniffCSS` JSONL snapshot and
-//! runs uniformity (odd-card-out among sibling instances) and/or derived
-//! rule checks (contrast, target size, focus, hidden focusables, alt).
-//!
-//! ```text
-//! sniffCSS-check --input snap.jsonl --uniform --rules
-//! ```
+//! Handler de `sniff check`.
 
-use std::io::BufWriter;
-use std::path::PathBuf;
+use std::io::Write as _;
 
-use anyhow::Context;
-use clap::Parser;
+use crate::cli::CheckArgs;
+use crate::output::{AppError, Output};
 use sniff_css_check::rules::{self, summarize, write_checks};
 use sniff_css_check::uniformity::check_uniformity;
-use sniff_css_diff::load_file_doc;
-use std::io::Write;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "sniffCSS-check",
-    version,
-    about = "Deterministic UI checks over sniffCSS JSONL snapshots",
-    long_about = None
-)]
-struct Cli {
-    /// Snapshot JSONL file (output of sniffCSS).
-    #[arg(long, short = 'i')]
-    input: PathBuf,
-
-    /// Run the uniformity check (odd card out among sibling instances).
-    /// Defaults to on when --rules is not given.
-    #[arg(long, default_value_t = false)]
-    uniform: bool,
-
-    /// Run the derived rule checks (contrast, target size, focus, alt).
-    /// Defaults to on when --uniform is not given.
-    #[arg(long, default_value_t = false)]
-    rules: bool,
-
-    /// Tolerance for numeric deviations (same unit).
-    #[arg(long, default_value_t = 0.5)]
-    tolerance: f64,
-}
-
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let doc = load_file_doc(&cli.input).context("loading snapshot")?;
+/// Checks determinísticos (uniformidade + regras derivadas) sobre um snapshot.
+pub(crate) fn run(args: &CheckArgs) -> Result<Output, AppError> {
+    let doc = sniff_css_diff::load_file_doc(&args.input)?;
     let nodes = doc.nodes;
 
-    let run_uniform = cli.uniform || !cli.rules;
-    let run_rules = cli.rules || !cli.uniform;
+    let run_uniform = args.uniform || !args.rules;
+    let run_rules = args.rules || !args.uniform;
 
-    let stdout = std::io::stdout();
-    let mut out = BufWriter::new(stdout.lock());
+    let mut buf: Vec<u8> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     let mut rule_count = 0usize;
     let mut uniformity_instances = 0usize;
     let mut uniformity_outliers = 0usize;
@@ -63,19 +25,19 @@ fn main() -> anyhow::Result<()> {
         let lines = rules::run_rules(&nodes, doc.viewport);
         rule_count = lines.len();
         let (pass, warn, fail) = summarize(&lines);
-        write_checks(&mut out, &lines)?;
-        eprintln!("rules: {pass} pass | {warn} warn | {fail} fail");
+        write_checks(&mut buf, &lines).map_err(AppError::from)?;
+        notes.push(format!("rules: {pass} pass | {warn} warn | {fail} fail"));
     }
 
     if run_uniform {
-        let report = check_uniformity(&nodes, cli.tolerance);
+        let report = check_uniformity(&nodes, args.tolerance);
         uniformity_instances = report.instances;
         uniformity_outliers = report.outliers.len();
         if report.instances < 2 {
-            eprintln!(
+            notes.push(format!(
                 "note: uniformity needs 2+ instances of the same selector (got {})",
                 report.instances
-            );
+            ));
         }
         for outlier in &report.outliers {
             let evidence = outlier
@@ -91,7 +53,7 @@ fn main() -> anyhow::Result<()> {
                 .collect::<Vec<_>>()
                 .join("; ");
             serde_json::to_writer(
-                &mut out,
+                &mut buf,
                 &serde_json::json!({
                     "check": "uniformity",
                     "selector": outlier.selector,
@@ -101,8 +63,9 @@ fn main() -> anyhow::Result<()> {
                         report.instances, report.instances
                     ),
                 }),
-            )?;
-            writeln!(out)?;
+            )
+            .map_err(|e| AppError::internal(e.to_string()))?;
+            writeln!(buf).map_err(|e| AppError::internal(e.to_string()))?;
         }
     }
 
@@ -113,8 +76,15 @@ fn main() -> anyhow::Result<()> {
             "rules": rule_count,
         }
     });
-    serde_json::to_writer(&mut out, &summary)?;
-    writeln!(out)?;
-    out.flush()?;
-    Ok(())
+    serde_json::to_writer(&mut buf, &summary).map_err(|e| AppError::internal(e.to_string()))?;
+    writeln!(buf).map_err(|e| AppError::internal(e.to_string()))?;
+
+    let data = serde_json::json!({
+        "uniformity_instances": uniformity_instances,
+        "uniformity_outliers": uniformity_outliers,
+        "rules": rule_count,
+    });
+    let mut output = Output::new(String::from_utf8_lossy(&buf).into_owned(), data);
+    output.warnings = notes;
+    Ok(output)
 }

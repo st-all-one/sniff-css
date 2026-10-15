@@ -1,7 +1,7 @@
 //! MCP server for computed-style sniffing.
 //!
-//! Exposes `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`,
-//! `sniffCSS_snapshots` and `sniffCSS_categories` as MCP tools over stdio,
+//! Exposes `sniff_page`, `sniff_diff`, `sniff_check`,
+//! `sniff_snapshots` and `sniff_categories` as MCP tools over stdio,
 //! backed by a shared headless Chrome pool, with phase progress streamed
 //! asynchronously via `notifications/progress`.
 

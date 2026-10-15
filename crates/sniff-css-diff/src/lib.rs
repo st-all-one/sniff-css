@@ -1,4 +1,4 @@
-//! Deterministic diffing of `sniffCSS` JSONL snapshots.
+//! Deterministic diffing of `sniff` JSONL snapshots.
 //!
 //! The extraction step produces the *exact* computed-style truth; this
 //! crate answers "what changed" structurally and cheaply (matching by
@@ -6,6 +6,8 @@
 //! a subpixel tolerance), so an LLM only ever needs to see the small
 //! delta. The semantic evaluation itself (positive/negative) stays in the
 //! prompt layer, not in this crate.
+
+#![forbid(unsafe_code)]
 
 pub mod diff;
 pub mod error;

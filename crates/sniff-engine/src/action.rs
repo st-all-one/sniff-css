@@ -90,6 +90,7 @@ pub async fn prepare(session: &CdpSession, action: &Action) -> SniffResult<Actio
         }),
     }
 }
+/// Perform a user action against a resolved target.
 pub async fn perform(
     session: &CdpSession,
     action: &Action,
@@ -149,7 +150,8 @@ async fn wait_for_target(
     timeout_ms: u64,
     require_visible: bool,
 ) -> SniffResult<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let budget = Duration::from_millis(timeout_ms);
+    let start = tokio::time::Instant::now();
     loop {
         let ready = session
             .evaluate(&ready_expr(selector), false)
@@ -166,7 +168,7 @@ async fn wait_for_target(
         if exists && (!require_visible || visible) {
             return Ok(());
         }
-        if tokio::time::Instant::now() >= deadline {
+        if start.elapsed() >= budget {
             return Err(SniffError::NoMatch {
                 selector: selector.to_string(),
             });
@@ -234,6 +236,10 @@ fn timeout_of(action: &Action) -> u64 {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "usado diretamente como `.map_err(cdp_err)`, que entrega o erro por valor"
+)]
 fn cdp_err(e: sniff_cdp::session::CdpSessionError) -> SniffError {
     SniffError::Cdp(e.to_string())
 }

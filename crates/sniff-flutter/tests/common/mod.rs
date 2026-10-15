@@ -4,16 +4,23 @@
 //! extensions over a real WebSocket, so the JSON-RPC protocol layer can be
 //! exercised end-to-end without an emulator or a Flutter app.
 
-#![allow(dead_code)]
-
+#![allow(
+    dead_code,
+    reason = "módulo de suporte compartilhado; cada teste usa um subconjunto"
+)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "arquivo de teste: `.unwrap()`/`.expect()` é o mecanismo de falha, o panic aponta a linha"
+)]
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
-pub const ROOT_TREE: &str = r#"{
+pub(crate) const ROOT_TREE: &str = r#"{
   "valueId": "inspector-0",
   "description": "MaterialApp",
   "name": "MaterialApp",
@@ -58,8 +65,8 @@ pub const ROOT_TREE: &str = r#"{
   ]
 }"#;
 
-pub fn default_properties() -> HashMap<String, &'static str> {
-    let mut m = HashMap::new();
+pub(crate) fn default_properties() -> BTreeMap<String, &'static str> {
+    let mut m = BTreeMap::new();
     m.insert("inspector-0".into(), "[]");
     m.insert("inspector-1".into(), "[]");
     m.insert(
@@ -82,7 +89,7 @@ pub fn default_properties() -> HashMap<String, &'static str> {
     m
 }
 
-fn respond(method: &str, params: &Value, props: &HashMap<String, &'static str>) -> Value {
+fn respond(method: &str, params: &Value, props: &BTreeMap<String, &'static str>) -> Value {
     // Service-extension responses are wrapped by the VM Service in an
     // `_extensionType` envelope; `VmService::call` must strip both layers.
     let extension = |payload: Value| {
@@ -177,7 +184,7 @@ fn respond(method: &str, params: &Value, props: &HashMap<String, &'static str>) 
 }
 
 /// Spawn a mock VM Service on an ephemeral port; returns its address.
-pub async fn spawn_mock_vm_service(props: HashMap<String, &'static str>) -> SocketAddr {
+pub(crate) async fn spawn_mock_vm_service(props: BTreeMap<String, &'static str>) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
@@ -192,10 +199,9 @@ pub async fn spawn_mock_vm_service(props: HashMap<String, &'static str>) -> Sock
     addr
 }
 
-async fn handle_ws(stream: TcpStream, props: HashMap<String, &'static str>) {
-    let ws = match tokio_tungstenite::accept_async(stream).await {
-        Ok(ws) => ws,
-        Err(_) => return,
+async fn handle_ws(stream: TcpStream, props: BTreeMap<String, &'static str>) {
+    let Ok(ws) = tokio_tungstenite::accept_async(stream).await else {
+        return;
     };
     let (mut sink, mut source) = ws.split();
     while let Some(msg) = source.next().await {
@@ -220,7 +226,7 @@ async fn handle_ws(stream: TcpStream, props: HashMap<String, &'static str>) {
 }
 
 /// Capture the mock widget tree through `extract` and return the roots.
-pub async fn capture(ws_uri: &str, depth: usize) -> Vec<sniff_flutter::ElementSnapshot> {
+pub(crate) async fn capture(ws_uri: &str, depth: usize) -> Vec<sniff_flutter::ElementSnapshot> {
     let inspector = sniff_flutter::FlutterInspector::connect(ws_uri)
         .await
         .expect("connect");

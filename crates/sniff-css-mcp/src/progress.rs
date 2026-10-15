@@ -50,7 +50,7 @@ mod tests {
     fn absent_token_makes_reporter_noop() {
         // We can't build a Peer in unit tests cheaply; here we only assert
         // the type is constructible from an empty RequestMetaObject shape.
-        let _ = RequestMetaObject::new();
+        drop(RequestMetaObject::new());
     }
 
     #[test]

@@ -23,8 +23,8 @@ pub fn parse_flutter_color(input: &str) -> Option<String> {
             return Some(color_from_argb(bytes));
         }
         if hex.len() == 6 {
-            let rgb = bytes & 0x00FF_FFFF;
-            return Some(format!("#{:06x}", rgb));
+            let rgb = bytes & 0x00ff_ffff;
+            return Some(format!("#{rgb:06x}"));
         }
         return None;
     }
@@ -57,11 +57,15 @@ pub fn parse_color_value(
     description: &str,
 ) -> Option<String> {
     if let Some(vp) = value_properties {
-        let ch = |k: &str| vp.get(k).and_then(serde_json::Value::as_u64);
+        let ch = |k: &str| {
+            vp.get(k)
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|n| u8::try_from(n).ok())
+        };
         if let (Some(r), Some(g), Some(b)) = (ch("red"), ch("green"), ch("blue")) {
             let a = ch("alpha").unwrap_or(255);
             return Some(color_from_argb(
-                ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | b as u32,
+                (u32::from(a) << 24) | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
             ));
         }
     }
@@ -90,7 +94,7 @@ fn from_named_channels(rest: &str) -> Option<String> {
             _ => {}
         }
     }
-    let to = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let to = |v: f64| sniff_core::numeric::f64_to_u32(v.clamp(0.0, 1.0) * 255.0);
     Some(color_from_argb(
         (to(alpha) << 24) | (to(red) << 16) | (to(green) << 8) | to(blue),
     ))
@@ -98,9 +102,9 @@ fn from_named_channels(rest: &str) -> Option<String> {
 
 /// Format a 32-bit ARGB int as `#rrggbb` (opaque) or `#rrggbbaa`.
 fn color_from_argb(argb: u32) -> String {
-    let a = (argb >> 24) & 0xFF;
-    let rgb = argb & 0x00FF_FFFF;
-    if a == 0xFF {
+    let a = (argb >> 24) & 0xff;
+    let rgb = argb & 0x00ff_ffff;
+    if a == 0xff {
         format!("#{rgb:06x}")
     } else {
         format!("#{rgb:06x}{a:02x}")
@@ -124,7 +128,7 @@ fn from_rgbo_args(rest: &str) -> Option<String> {
     let g = it.next()?.parse::<u32>().ok()?;
     let b = it.next()?.parse::<u32>().ok()?;
     let opacity = it.next()?.parse::<f64>().ok()?;
-    let a = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let a = sniff_core::numeric::f64_to_u32(opacity.clamp(0.0, 1.0) * 255.0);
     Some(color_from_argb((a << 24) | (r << 16) | (g << 8) | b))
 }
 

@@ -5,7 +5,7 @@ container, independente do host.
 
 - **Fidelidade**: o Chromium da GUI (`http://localhost:3001`) roda com
   **FullColor 4:4:4** (`SELKIES_H264_FULLCOLOR=true`) e expõe CDP em
-  `127.0.0.1:9222`. O `sniffCSS` e o `sniffCSS-mcp` **anexam ao mesmo browser**
+  `127.0.0.1:9222`. O `sniff` e o `sniff-mcp` **anexam ao mesmo browser**
   que você vê na tela — o que aparece na GUI é exatamente o que é capturado.
 - **Multi-arch**: `linux/amd64` + `linux/arm64`.
 - **Imagem publicada** no [Docker Hub](https://hub.docker.com/r/stallonels/sniffcss)
@@ -25,12 +25,12 @@ docker run -d --name sniffcss \
 ```
 
 - **GUI**: `http://localhost:3001` (Chromium com FullColor 4:4:4)
-- **Snapshots**: persistidos em `./sniffcss-config/sniffCSS/`
+- **Snapshots**: persistidos em `./sniffcss-config/sniff/`
 
 Capture:
 
 ```bash
-docker exec sniffcss sniffCSS \
+docker exec sniffcss sniff capture \
   -u http://localhost:3000 -s ".btn-primary" \
   --depth 0 --wait "network-idle:1200:60000"
 ```
@@ -40,7 +40,7 @@ docker exec sniffcss sniffCSS \
 ```bash
 docker compose -f docker/docker-compose.yml up -d
 docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS -u "$URL" -s "$SEL" --stable-key data-testid
+  sniff capture -u "$URL" -s "$SEL" --stable-key data-testid
 ```
 
 ## docker-compose.yml otimizado para integração em projetos
@@ -58,7 +58,7 @@ services:
     environment:
       - SELKIES_H264_FULLCOLOR=true
       - SNIFF_CONNECT=http://127.0.0.1:9222
-      - SNIFF_SNAPSHOT_DIR=/config/sniffCSS
+      - SNIFF_SNAPSHOT_DIR=/config/sniff
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
@@ -82,7 +82,7 @@ services:
 
 ## MCP via Docker
 
-O `sniffCSS-mcp` roda via **stdio** dentro do container, anexando ao Chromium
+O `sniff-mcp` roda via **stdio** dentro do container, anexando ao Chromium
 da GUI (`SNIFF_CONNECT=http://127.0.0.1:9222` é o default da imagem). O jeito
 mais simples (sem compose file, direto do Docker Hub) é usar o wrapper
 [`scripts/mcp-docker.sh`](../scripts/mcp-docker.sh): ele cria o container
@@ -97,7 +97,7 @@ que mantém o canal JSON-RPC limpo.
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "sniffcss": {
+    "sniff": {
       "type": "local",
       "command": ["/caminho/para/sniff-css/scripts/mcp-docker.sh"],
       "enabled": true,
@@ -119,9 +119,9 @@ Variáveis do wrapper: `SNIFF_DOCKER_IMAGE` (default `stallonels/sniffcss:latest
 ```json
 {
   "mcpServers": {
-    "sniffcss": {
+    "sniff": {
       "command": "docker",
-      "args": ["exec", "-i", "sniffcss-mcp", "/opt/sniffcss/bin/sniffCSS-mcp"]
+      "args": ["exec", "-i", "sniffcss-mcp", "/opt/sniffcss/bin/sniff-mcp"]
     }
   }
 }
@@ -132,16 +132,16 @@ Variáveis do wrapper: `SNIFF_DOCKER_IMAGE` (default `stallonels/sniffcss:latest
 ```bash
 scripts/mcp-docker.sh   # inicia o container se preciso e sobe o MCP via stdio
 # ou, com o container já rodando:
-docker exec -i sniffcss-mcp /opt/sniffcss/bin/sniffCSS-mcp
+docker exec -i sniffcss-mcp /opt/sniffcss/bin/sniff-mcp
 ```
 
 ### Ferramentas e persistência
 
-- Ferramentas: `sniffCSS_page`, `sniffCSS_diff`, `sniffCSS_check`,
-  `sniffCSS_snapshots`, `sniffCSS_categories`.
-- O `sniffCSS_page` persiste cada captura e retorna só um `__sniff` reference —
+- Ferramentas: `sniff_page`, `sniff_diff`, `sniff_check`,
+  `sniff_snapshots`, `sniff_categories`.
+- O `sniff_page` persiste cada captura e retorna só um `__sniff` reference —
   o JSONL completo **nunca** entra no contexto do LLM.
-- Snapshots persistidos em `/config/sniffCSS` (volume `./chromium-config:/config`
+- Snapshots persistidos em `/config/sniff` (volume `./chromium-config:/config`
   no compose do repositório, ou `./sniffcss-config:/config` no override acima).
 
 ### Uso manual (fora de agente)
@@ -155,16 +155,16 @@ scripts/mcp-docker.sh
 Ou com o container do compose já rodando:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp
+docker compose -f docker/docker-compose.yml exec -i sniffcss sniff-mcp
 ```
 
 ## Diff / checks dentro do container
 
 ```bash
 docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
+  sniff diff base.jsonl head.jsonl --tolerance 0.5
 docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniffCSS-check --input snap.jsonl --uniform --rules
+  sniff check --input snap.jsonl --uniform --rules
 ```
 
 ## Variáveis de ambiente (defaults)
@@ -172,7 +172,7 @@ docker compose -f docker/docker-compose.yml exec sniffcss \
 | Var | Default | Descrição |
 |---|---|---|
 | `SNIFF_CONNECT` | `http://127.0.0.1:9222` | CDP do Chromium da GUI (loopback) |
-| `SNIFF_SNAPSHOT_DIR` | `/config/sniffCSS` | Onde o MCP persiste snapshots |
+| `SNIFF_SNAPSHOT_DIR` | `/config/sniff` | Onde o MCP persiste snapshots |
 | `SNIFF_DEFAULT_HEADERS` | — | JSON de headers HTTP aplicados a todo request do MCP (ex. `{"X-CMS-AI-Token":"<token>"}`) — auth de área restrita sem repetir por chamada |
 | `SNIFF_STORAGE_STATE` | — | Path de estado de sessão (cookies + `localStorage`) restaurado antes de toda navegação; `--storage-state`/`storage_state` por chamada sobrescreve |
 | `SNIFF_BASE_URL` | — | Base URL prefixada a `url` relativas (ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`) |
@@ -185,7 +185,7 @@ docker compose -f docker/docker-compose.yml exec sniffcss \
 ## Como a imagem é construída
 
 - Por padrão o `docker/Dockerfile` **baixa os binários pré-compilados do
-  GitHub Release** (`--build-arg VERSION=v0.4.0`) e verifica o `sha256sums.txt`
+  GitHub Release** (`--build-arg VERSION=v0.5.0`) e verifica o `sha256sums.txt`
   — não compila nada.
 - Para desenvolvimento local sem Release publicado:
   `scripts/docker.sh build-source` (compila do fonte, `--build-arg BUILD_FROM_SOURCE=1`).

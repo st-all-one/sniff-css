@@ -1,10 +1,10 @@
-# sniffCSS — Backend Flutter/Dart
+# sniff — Backend Flutter/Dart
 
-Guia completo de configuração e uso do backend **Flutter** da `sniffCSS` em
+Guia completo de configuração e uso do backend **Flutter** da `sniff` em
 Linux. Ele captura a **árvore de widgets** de um app Flutter/Dart nativo em
 emulador/device Android sobre o **Dart VM Service** (o análogo do sniff web,
 que usa Chromium/CDP), e emite o **mesmo modelo JSONL** — então os mesmos
-`sniffCSS-diff` / `sniffCSS-check` funcionam por path.
+`sniff diff` / `sniff check` funcionam por path.
 
 A referência completa de flags fica em [`docs/usage.md`](usage.md#backend-flutterdart---backend-flutter);
 este guia foca em instalação, o modo padrão `auto` e o resultado.
@@ -21,7 +21,7 @@ este guia foca em instalação, o modo padrão `auto` e o resultado.
 | Estilos | Computed CSS (~400 props) | Diagnostics do widget (`getProperties`) |
 | Cores | `#rrggbb` | `#rrggbb` (Flutter normalizado) |
 | Contraste | WCAG derivado | WCAG derivado (mesmo código) |
-| Diff/check | `sniffCSS-diff` / `sniffCSS-check` | idênticos, por path |
+| Diff/check | `sniff diff` / `sniff check` | idênticos, por path |
 
 **Requisito fundamental:** o app precisa estar em build **debug** (ou profile).
 Build `release` não expõe o VM Service e a captura falha.
@@ -136,7 +136,7 @@ flutter build apk --debug
 
 ## 3. Configuração no app alvo
 
-Para que a `sniffCSS` capture um app, ele precisa estar **rodando em debug**
+Para que a `sniff` capture um app, ele precisa estar **rodando em debug**
 com o VM Service exposto — e o app precisa conseguir **abrir sockets** no
 device. Isso exige a permissão `INTERNET` no build debug:
 
@@ -196,10 +196,10 @@ adb root && adb shell setenforce 0   # imagem google_apis (ver §2.3)
 
 ```bash
 # Forma enxuta: backend e device vêm do URL; -s vira "root" se omitido.
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 10
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10
 
 # Forma explícita equivalente:
-sniffCSS --backend flutter --device emulator-5554 \
+sniff capture --backend flutter --device emulator-5554 \
   --project ~/projetos/app --target lib/main.dart --depth 10 -s root
 ```
 
@@ -213,13 +213,13 @@ Com o app debug já em execução (ex.: via `flutter run` ou hot-reload), sem
 recompilar:
 
 ```bash
-sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
+sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
 ```
 
 ### 4.4 Lançar AVD + rodar o app
 
 ```bash
-sniffCSS -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
+sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
 ```
 
 > Neste host, prefira `--device` com o emulador subido por `-gpu host` (§4.1):
@@ -228,7 +228,7 @@ sniffCSS -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
 ### 4.5 Screenshot junto com a captura
 
 ```bash
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
 ```
 
 ### 4.6 Controlar o viewport do app
@@ -239,7 +239,7 @@ media queries e a geometria capturada mudam) e **restaura** o tamanho anterior
 ao final — inclusive em caminhos de erro:
 
 ```bash
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
   --viewport 540x1200 --depth 10
 ```
 
@@ -266,7 +266,7 @@ Tabela resumida (referência completa: [`docs/usage.md`](usage.md)):
 | `--backend web\|flutter\|auto` | Forçar backend (vence a inferência) | `auto` |
 | `--output summary\|jsonl\|jsonl-flat\|json` | Formato de saída | `summary` |
 | `--no-summary` | Atalho para `--output jsonl` | — |
-| `--persist` | Grava em `sniffCSS/[domain]/[UTC]-…` (mesma árvore do MCP) | `off` |
+| `--persist` | Grava em `sniff/[domain]/[UTC]-…` (mesma árvore do MCP) | `off` |
 | `--screenshot PATH` | PNG do device (`adb exec-out screencap -p`) | — |
 | `--viewport WxH` | Tamanho lógico do app (`adb shell wm size WxH`); restaurado ao final | device |
 | `--no-visible` | Incluir widgets sem render box / fora do layout | `on` |
@@ -293,15 +293,15 @@ e a captura roda **depois**, sobre o estado pós-interação (ex.: o
 
 ```bash
 # toca o FilledButton de key `counter` (o snapshot passa a mostrar "Counter: 1")
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=click:FilledButton-[<'counter'>][0]"
 
 # abre o modal antes de capturar:
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=click:OutlinedButton-[<'modal'>][0]"
 
 # foca o TextField e digita (após o tap, o campo recebe o texto):
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=type:TextField-[<'field'>][0]:hello"
 ```
 
@@ -320,7 +320,7 @@ sniffCSS -u flutter://emulator-5554 --project ~/projetos/app \
 
 ## 6. Testar de fato num app real (checklist)
 
-Roteiro passo a passo para alguém que vai rodar a `sniffCSS` contra **o próprio
+Roteiro passo a passo para alguém que vai rodar a `sniff` contra **o próprio
 app Flutter** pela primeira vez — do setup ao diff. Vale para emulador ou
 device físico.
 
@@ -378,17 +378,17 @@ adb wait-for-device
 adb root && adb shell setenforce 0
 
 # no diretório do app:
-flutter run --machine -d emulator-5554   # mantém aberto (a sniffCSS anexa nele)
+flutter run --machine -d emulator-5554   # mantém aberto (o sniff anexa nele)
 ```
 
 > Sem a janela (`-no-window`), actions estouram em *timeout* (vsync morto) —
-> ver §4.1. Se o app for rodar com `flutter run --machine` próprio da sniffCSS
+> ver §4.1. Se o app for rodar com `flutter run --machine` próprio da sniff
 > (`--backend flutter` sem `--attach`), pode pular o `flutter run` manual.
 
 ### 6.3 Smoke test — captura sem ações
 
 ```bash
-sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
   --depth 10 --output jsonl-flat > base.jsonl
 ```
 
@@ -415,7 +415,7 @@ Sinais de problema:
 
    ```bash
    # snapshot do contador antes
-   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat | rg -o '"data":"Counter: [0-9]+"' | head -1
    ```
 
@@ -424,7 +424,7 @@ Sinais de problema:
    ```bash
    # ATENÇÃO às aspas: o selector carrega apóstrofos — aspas simples do shell
    # quebram (vira ByText, o alvo não é achado e dá timeout). Use aspas duplas.
-   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:FilledButton-[<'counter'>][0]" \
      | rg -o '"data":"Counter: [0-9]+"' | head -1
@@ -434,15 +434,15 @@ Sinais de problema:
    base, mude o app, capture o head e compare:
 
    ```bash
-   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:OutlinedButton-[<'modal'>][0]" > base.jsonl
    # ... edite o app (hot-restart 'R' no flutter run), re-capture:
-   sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:OutlinedButton-[<'modal'>][0]" > head.jsonl
-   sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
-   sniffCSS-check --input base.jsonl --rules
+   sniff diff base.jsonl head.jsonl --tolerance 0.5
+   sniff check --input base.jsonl --rules
    ```
 
    > O `selector`/`path` dos nós (ex. `AlertDialog[0]`) é o identificador estável
@@ -498,19 +498,19 @@ Os campos importantes:
 - `--output jsonl` — uma linha por raiz com `children` aninhados (snapshot
   completo, inclui `styles`, `computed_style_hash`).
 - `--output jsonl-flat` — uma linha **por nó** em pré-ordem com `parent_id`
-  (o mais direto para alimentar `sniffCSS-diff`/`sniffCSS-check`).
+  (o mais direto para alimentar `sniff diff`/`sniff check`).
 - `--output json` — um único documento JSON.
 
 ### 7.3 Diff e checks (mesmo pipeline do web)
 
 ```bash
 # Captura base e head em jsonl-flat, depois compara:
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
   --output jsonl-flat > base.jsonl
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
   --output jsonl-flat > head.jsonl
-sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5
-sniffCSS-check --input base.jsonl --rules
+sniff diff base.jsonl head.jsonl --tolerance 0.5
+sniff check --input base.jsonl --rules
 ```
 
 Os selectors estáveis (`ClassName[ordinal]`) fazem o diff casar nós entre
@@ -539,5 +539,5 @@ capturas; apenas mudanças reais aparecem como `CHANGED`/`ADDED`/`REMOVED`
   exemplos (fonte única de verdade para a CLI).
 - [`docs/architecture.md`](architecture.md#backend-flutter-sniff-flutter) —
   desenho interno do backend Flutter (máquina, VM Service, envelope `_extensionType`).
-- [`docs/diff-checks.md`](diff-checks.md) — `sniffCSS-diff` e `sniffCSS-check`.
+- [`docs/diff-checks.md`](diff-checks.md) — `sniff diff` e `sniff check`.
 - [`docs/accessibility.md`](accessibility.md) — auditoria de acessibilidade.

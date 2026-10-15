@@ -1,40 +1,61 @@
 //! Snapshot node model and JSONL loading.
 //!
-//! Parses the JSONL produced by `sniffCSS` into a lightweight
+//! Parses the JSONL produced by `sniff` into a lightweight
 //! [`DiffNode`] tree, accepting both `jsonl` (tree: one root per line with
 //! nested `children`) and `jsonl-flat` (one node per line with
-//! `id`/`parent_id`) inputs. `__meta` lines (global css_variables and the
+//! `id`/`parent_id`) inputs. `__meta` lines (global `css_variables` and the
 //! compact `style_defaults` hoist map) are parsed; `style_defaults` are
 //! merged back into every node's `styles` so the diff always sees the full
 //! effective values (lossless reconstruction of the compact dedup).
 
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{DiffError, DiffResult};
 
+/// A flat-mode entry: `(id, parent_id, node)` as emitted by `jsonl-flat`.
+type FlatEntry = (u64, Option<u64>, DiffNode);
+
+/// `node id -> flat index` lookup used while rebuilding the forest.
+type NodeIndex = std::collections::BTreeMap<u64, usize>;
+
 /// A single captured element, in a form convenient for structural diffing.
 #[derive(Debug, Clone)]
 pub struct DiffNode {
+    /// Stable node id assigned during extraction (pre-order).
     pub id: u64,
+    /// Id of the parent node, if any.
     pub parent_id: Option<u64>,
+    /// Stable selector identifying the node.
     pub selector: String,
+    /// Tag name, when known.
     pub tag: Option<String>,
+    /// DOM path, when captured.
     pub path: Option<String>,
+    /// Depth in the captured tree, when known.
     pub depth: Option<usize>,
+    /// Bounding client rect, when captured.
     pub rect: Option<Value>,
+    /// Derived layout metrics (`z-index`, stacking context).
     pub metrics: Option<Value>,
     /// `{"display_visible": bool, "accessibility_grade": "NONE"|"AA"|"AAA"}`.
     pub noticeable: Option<Value>,
+    /// Computed-style hash used for fast equality checks.
     pub hash: Option<String>,
+    /// Computed styles by category.
     pub styles: Option<Map<String, Value>>,
+    /// Per-pseudo-element styles.
     pub pseudo: Option<Map<String, Value>>,
+    /// Resolved ARIA attributes.
     pub aria: Option<Value>,
+    /// Contrast facet.
     pub contrast: Option<Value>,
+    /// Accessibility-tree facet.
     pub ax: Option<Value>,
+    /// Extra captured DOM attributes.
     pub attributes: Option<Value>,
-    pub children: Vec<DiffNode>,
+    /// Child nodes.
+    pub children: Vec<Self>,
 }
 
 impl DiffNode {
@@ -42,9 +63,9 @@ impl DiffNode {
         let children = v
             .get("children")
             .and_then(Value::as_array)
-            .map(|a| a.iter().map(DiffNode::from_value).collect())
+            .map(|a| a.iter().map(Self::from_value).collect())
             .unwrap_or_default();
-        DiffNode {
+        Self {
             id: v.get("id").and_then(Value::as_u64).unwrap_or(0),
             parent_id: v.get("parent_id").and_then(Value::as_u64),
             selector: v
@@ -54,7 +75,10 @@ impl DiffNode {
                 .to_string(),
             tag: v.get("tag").and_then(Value::as_str).map(String::from),
             path: v.get("path").and_then(Value::as_str).map(String::from),
-            depth: v.get("depth").and_then(Value::as_u64).map(|d| d as usize),
+            depth: v
+                .get("depth")
+                .and_then(Value::as_u64)
+                .map(|d| usize::try_from(d).unwrap_or(usize::MAX)),
             rect: v.get("rect").cloned(),
             metrics: v.get("metrics").cloned(),
             noticeable: v.get("is_user_noticeable").cloned(),
@@ -93,21 +117,41 @@ impl DiffNode {
 
 /// Reconstruct a forest of `DiffNode`s from flat JSONL (nodes referencing
 /// each other via `parent_id`, emitted in pre-order).
-fn build_forest(flat: &[(u64, Option<u64>, DiffNode)]) -> Vec<DiffNode> {
+fn build_forest(flat: &[FlatEntry]) -> Vec<DiffNode> {
+    fn build(i: usize, flat: &[FlatEntry], children: &[Vec<usize>]) -> Option<DiffNode> {
+        let entry = flat.get(i)?;
+        let mut node = entry.2.clone();
+        node.children = children
+            .get(i)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|&c| build(c, flat, children))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(node)
+    }
+
     if flat.is_empty() {
         return Vec::new();
     }
-    let by_id: HashMap<u64, usize> = flat
+    let by_id: NodeIndex = flat
         .iter()
         .enumerate()
         .map(|(i, (id, _, _))| (*id, i))
         .collect();
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); flat.len()];
     let mut roots: Vec<usize> = Vec::new();
+
     for (i, (_, parent, _)) in flat.iter().enumerate() {
         match parent {
             Some(p) => match by_id.get(p) {
-                Some(&pi) => children[pi].push(i),
+                Some(&pi) => match children.get_mut(pi) {
+                    Some(slot) => slot.push(i),
+                    // Should be unreachable (`pi` indexes `flat`), but never
+                    // drop a node: treat it as a root instead.
+                    None => roots.push(i),
+                },
                 // Orphan parent: treat as a root so no node is lost.
                 None => roots.push(i),
             },
@@ -115,24 +159,20 @@ fn build_forest(flat: &[(u64, Option<u64>, DiffNode)]) -> Vec<DiffNode> {
         }
     }
 
-    fn build(i: usize, flat: &[(u64, Option<u64>, DiffNode)], children: &[Vec<usize>]) -> DiffNode {
-        let mut node = flat[i].2.clone();
-        node.children = children[i]
-            .iter()
-            .map(|&c| build(c, flat, children))
-            .collect();
-        node
-    }
-
     roots.sort_unstable();
-    roots.iter().map(|&i| build(i, flat, &children)).collect()
+    roots
+        .iter()
+        .filter_map(|&i| build(i, flat, &children))
+        .collect()
 }
 
 /// A parsed snapshot: the node forest plus any `__actions` UI-effect map
 /// (per-interaction before/after reports) that the capture carried.
 #[derive(Debug, Clone, Default)]
 pub struct DiffDocument {
+    /// Root nodes of the captured forest.
     pub nodes: Vec<DiffNode>,
+    /// `__actions` UI-effect entries carried by the capture.
     pub actions: Vec<Value>,
     /// Emulated viewport `(width, height)` from the `__meta` line, when the
     /// capture recorded it (used by viewport-relative offline checks).
@@ -210,7 +250,7 @@ pub fn load_file(path: &Path) -> DiffResult<Vec<DiffNode>> {
 /// [`load_file`], without touching disk).
 pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
     let mut roots: Vec<DiffNode> = Vec::new();
-    let mut flat: Vec<(u64, Option<u64>, DiffNode)> = Vec::new();
+    let mut flat: Vec<FlatEntry> = Vec::new();
     let mut mode: Option<bool> = None;
     let mut style_defaults: Map<String, Value> = Map::new();
 
@@ -224,7 +264,7 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             if let Some(meta) = v.get("__meta")
                 && let Some(d) = meta.get("style_defaults").and_then(Value::as_object)
             {
-                style_defaults = d.clone();
+                style_defaults.clone_from(d);
             }
             continue;
         }
@@ -316,7 +356,7 @@ mod tests {
         assert_eq!(forest.len(), 1);
         assert_eq!(forest[0].selector, "div.card");
         assert_eq!(forest[0].children.len(), 0);
-        let _ = std::fs::remove_file(&path);
+        drop(std::fs::remove_file(&path));
     }
 
     #[test]
@@ -337,7 +377,7 @@ mod tests {
         assert_eq!(forest[0].id, 1);
         assert_eq!(forest[0].children.len(), 1);
         assert_eq!(forest[0].children[0].id, 2);
-        let _ = std::fs::remove_file(&path);
+        drop(std::fs::remove_file(&path));
     }
 
     #[test]
@@ -352,7 +392,7 @@ mod tests {
         let forest = load_file(&path).unwrap();
         assert_eq!(forest.len(), 1);
         assert_eq!(forest[0].id, 7);
-        let _ = std::fs::remove_file(&path);
+        drop(std::fs::remove_file(&path));
     }
 
     #[test]

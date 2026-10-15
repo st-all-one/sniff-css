@@ -26,7 +26,11 @@ const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 10_000;
 /// Mirrors the serialization of the Flutter Driver `SerializableFinder`
 /// classes (`ByValueKey`, `ByType`, `ByText`) so the params map can be sent
 /// verbatim over the VM Service.
-#[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "espelha os nomes das classes SerializableFinder do Flutter Driver"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverFinder {
     /// `ByValueKey` — a widget with a `ValueKey` (most precise).
     ByValueKey(String),
@@ -40,16 +44,16 @@ impl DriverFinder {
     fn serialize(&self) -> Map<String, Value> {
         let mut map = Map::new();
         match self {
-            DriverFinder::ByValueKey(key) => {
+            Self::ByValueKey(key) => {
                 map.insert("finderType".into(), json!("ByValueKey"));
                 map.insert("keyValueString".into(), json!(key));
                 map.insert("keyValueType".into(), json!("String"));
             }
-            DriverFinder::ByType(ty) => {
+            Self::ByType(ty) => {
                 map.insert("finderType".into(), json!("ByType"));
                 map.insert("type".into(), json!(ty));
             }
-            DriverFinder::ByText(text) => {
+            Self::ByText(text) => {
                 map.insert("finderType".into(), json!("ByText"));
                 map.insert("text".into(), json!(text));
             }
@@ -60,9 +64,9 @@ impl DriverFinder {
     /// Human-readable description for error messages.
     pub fn describe(&self) -> String {
         match self {
-            DriverFinder::ByValueKey(key) => format!("key `{key}`"),
-            DriverFinder::ByType(ty) => format!("type `{ty}`"),
-            DriverFinder::ByText(text) => format!("text `{text}`"),
+            Self::ByValueKey(key) => format!("key `{key}`"),
+            Self::ByType(ty) => format!("type `{ty}`"),
+            Self::ByText(text) => format!("text `{text}`"),
         }
     }
 }
@@ -92,10 +96,11 @@ pub fn finder_from_spec(spec: &str) -> DriverFinder {
 /// The `ValueKey` string embedded in a widget diagnostics description
 /// (`FilledButton-[<'counter'>]` → `Some("counter")`).
 fn extract_value_key(spec: &str) -> Option<String> {
-    let start = spec.find("<'")? + 2;
-    let rest = &spec[start..];
+    let rest = spec
+        .find("<'")
+        .and_then(|start| spec.get(start.saturating_add(2)..))?;
     let end = rest.find("'>")?;
-    Some(rest[..end].to_string())
+    Some(rest.get(..end)?.to_string())
 }
 
 /// Whether `s` looks like a Flutter widget runtime type (an identifier
@@ -120,7 +125,7 @@ impl std::fmt::Debug for FlutterDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FlutterDriver")
             .field("isolate", &self.isolate_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -238,7 +243,10 @@ impl FlutterDriver {
     /// Wait until the widget located by `finder` appears (or `timeout` elapses).
     pub async fn wait_for(&self, finder: &DriverFinder, timeout: Duration) -> Result<()> {
         let mut extra = Map::new();
-        extra.insert("timeout".into(), json!(timeout.as_millis() as u64));
+        extra.insert(
+            "timeout".into(),
+            json!(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
+        );
         self.call_command("waitFor", Some(finder), extra).await?;
         Ok(())
     }

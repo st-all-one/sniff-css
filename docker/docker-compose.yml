@@ -1,15 +1,15 @@
-# sniffCSS in a self-contained Chromium container.
+# sniff in a self-contained Chromium container.
 #
 # The GUI Chromium runs with FullColor 4:4:4 (true 8-bit color) and a DevTools
-# port on loopback; sniffCSS / sniffCSS-mcp attach to that same browser, so what
+# port on loopback; sniff / sniff-mcp attach to that same browser, so what
 # you see at http://localhost:3001 is exactly what gets captured (fidelity).
 #
 #   docker compose -f docker/docker-compose.yml up -d
-#   docker compose -f docker/docker-compose.yml exec sniffcss sniffCSS -u URL -s SEL
+#   docker compose -f docker/docker-compose.yml exec sniffcss sniff capture -u URL -s SEL
 #
-# MCP integration (run sniffCSS-mcp inside the container, stdio):
-#   docker compose -f docker/docker-compose.yml exec -i sniffcss sniffCSS-mcp
-#   # agent config: command = docker, args = [compose ... exec -i sniffcss sniffCSS-mcp]
+# MCP integration (run sniff-mcp inside the container, stdio):
+#   docker compose -f docker/docker-compose.yml exec -i sniffcss sniff-mcp
+#   # agent config: command = docker, args = [compose ... exec -i sniffcss sniff-mcp]
 services:
   sniffcss:
     build:
@@ -25,10 +25,10 @@ services:
       - SELKIES_H264_FULLCOLOR=true
       # GUI Chromium flags: CDP on loopback + allow the ws client origin.
       - CHROME_CLI=--remote-debugging-port=9222 --remote-allow-origins=*
-      # sniffCSS + MCP connect to the GUI browser by default.
+      # sniff + MCP connect to the GUI browser by default.
       - SNIFF_CONNECT=http://127.0.0.1:9222
       # Snapshots persist under the /config volume.
-      - SNIFF_SNAPSHOT_DIR=/config/sniffCSS
+      - SNIFF_SNAPSHOT_DIR=/config/sniff
       # Optional: ignore TLS/HTTPS cert errors (self-signed dev server) for
       # both the CLI and the MCP server (accepts 1/true/yes/on).
       # - SNIFF_IGNORE_CERTIFICATE_ERRORS=1

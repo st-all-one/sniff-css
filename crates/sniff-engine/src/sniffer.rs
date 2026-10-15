@@ -20,15 +20,20 @@ use std::time::Duration;
 /// to any transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    /// Navigating to the target URL.
     Navigating,
     /// Performing user interactions (click/hover/type) that reveal
     /// elements only present after an action.
     Interacting,
+    /// Running the configured wait strategies.
     Waiting,
+    /// Extracting computed styles from the page.
     Extracting,
     /// Capturing the accessibility tree (only when requested).
     Accessibility,
+    /// Serializing the snapshot into the output stream.
     Formatting {
+        /// Number of nodes being formatted.
         nodes: usize,
     },
 }
@@ -37,12 +42,12 @@ impl Phase {
     /// A rough 0..=1.0 progress estimate for the phase.
     pub fn progress(&self) -> f64 {
         match self {
-            Phase::Navigating => 0.2,
-            Phase::Interacting => 0.35,
-            Phase::Waiting => 0.4,
-            Phase::Extracting => 0.7,
-            Phase::Accessibility => 0.8,
-            Phase::Formatting { .. } => 0.9,
+            Self::Navigating => 0.2,
+            Self::Interacting => 0.35,
+            Self::Waiting => 0.4,
+            Self::Extracting => 0.7,
+            Self::Accessibility => 0.8,
+            Self::Formatting { .. } => 0.9,
         }
     }
 }
@@ -51,7 +56,7 @@ impl Phase {
 /// emulates `prefers-reduced-motion: reduce`, cancels running animations
 /// and injects an override that disables future animations/transitions,
 /// so the captured state is deterministic across runs.
-const STABILIZE_JS: &str = r#"
+const STABILIZE_JS: &str = r"
 (() => {
   const id = '__sniff_stabilize';
   if (!document.getElementById(id)) {
@@ -63,14 +68,14 @@ const STABILIZE_JS: &str = r#"
   document.getAnimations().forEach((a) => { try { a.cancel(); } catch (e) {} });
   return true;
 })()
-"#;
+";
 
 /// A reusable sniffer: owns one browser process + CDP connection and
 /// serves any number of sequential sniffing runs (each gets a fresh
 /// page target, avoiding the cold-start cost of relaunching Chrome).
 pub struct Sniffer {
     client: CdpClient,
-    _process: BrowserProcess,
+    process: BrowserProcess,
     /// When set, every freshly created page session ignores TLS/HTTPS
     /// certificate errors (`Security.setIgnoreCertificateErrors`), so
     /// local dev servers behind a self-signed certificate load instead of
@@ -82,8 +87,8 @@ pub struct Sniffer {
 impl std::fmt::Debug for Sniffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sniffer")
-            .field("endpoint", &self._process.ws_endpoint)
-            .finish()
+            .field("endpoint", &self.process.ws_endpoint)
+            .finish_non_exhaustive()
     }
 }
 
@@ -99,7 +104,7 @@ impl Sniffer {
             .map_err(|e| SniffError::Cdp(e.to_string()))?;
         Ok(Self {
             client,
-            _process: process,
+            process,
             ignore_certificate_errors: AtomicBool::new(opts.ignore_certificate_errors),
         })
     }
@@ -114,7 +119,7 @@ impl Sniffer {
         let process = BrowserProcess::placeholder(endpoint);
         Ok(Self {
             client,
-            _process: process,
+            process,
             ignore_certificate_errors: AtomicBool::new(false),
         })
     }
@@ -151,7 +156,7 @@ impl Sniffer {
     pub async fn sniff(&self, config: &SniffConfig) -> SniffResult<SniffOutcome> {
         let session = self.new_session().await?;
         let result = sniff_session(&session, config).await;
-        let _ = session.close().await;
+        drop(session.close().await);
         result
     }
 }
@@ -173,7 +178,7 @@ pub async fn sniff_session_with_progress<F, Fut>(
 ) -> SniffResult<SniffOutcome>
 where
     F: FnMut(Phase) -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: Future<Output = ()>,
 {
     if let Some(vp) = config.viewport {
         session
@@ -215,9 +220,7 @@ where
     }
     on_progress(Phase::Waiting).await;
     let mut action_reports: Vec<serde_json::Value> = Vec::new();
-    if config.actions.is_empty() {
-        waiter::wait_for_page(session, config).await?;
-    } else {
+    if !config.actions.is_empty() {
         // Reveal elements that only exist after an interaction: each
         // action waits for its own target and performs the interaction;
         // the wait pipeline then targets the post-interaction DOM (e.g. a
@@ -226,7 +229,7 @@ where
         for (index, act) in config.actions.iter().enumerate() {
             let target = action::prepare(session, act)
                 .await
-                .map_err(|e| chain_error(index, act, &config.actions, e))?;
+                .map_err(|e| chain_error(index, act, &config.actions, &e))?;
             let before = if config.effects {
                 Some(effects::capture(session, config.stable_key.as_deref()).await?)
             } else {
@@ -234,7 +237,7 @@ where
             };
             action::perform(session, act, &target)
                 .await
-                .map_err(|e| chain_error(index, act, &config.actions, e))?;
+                .map_err(|e| chain_error(index, act, &config.actions, &e))?;
             let after = if config.effects {
                 Some(effects::capture(session, config.stable_key.as_deref()).await?)
             } else {
@@ -263,8 +266,8 @@ where
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         on_progress(Phase::Waiting).await;
-        waiter::wait_for_page(session, config).await?;
     }
+    waiter::wait_for_page(session, config).await?;
     on_progress(Phase::Extracting).await;
     let mut outcome = extractor::extract(session, config).await?;
     if !action_reports.is_empty() {
@@ -282,13 +285,13 @@ where
 
     if config.output.include_ax || config.ax_tree {
         on_progress(Phase::Accessibility).await;
-        let capture = ax::capture(
-            session,
-            &outcome.snapshots,
-            config.output.include_ax,
-            config.ax_tree,
-        )
-        .await?;
+        let output = match (config.output.include_ax, config.ax_tree) {
+            (true, true) => ax::AxOutput::Both,
+            (true, false) => ax::AxOutput::Facets,
+            (false, true) => ax::AxOutput::Tree,
+            (false, false) => ax::AxOutput::None,
+        };
+        let capture = ax::capture(session, &outcome.snapshots, output).await?;
         if let Some(facets) = capture.facets {
             ax::attach_ax(&mut outcome.snapshots, &facets);
         }
@@ -312,7 +315,11 @@ where
         save_storage_state(session, path).await?;
     }
 
-    let nodes: usize = outcome.snapshots.iter().map(|s| s.node_count()).sum();
+    let nodes: usize = outcome
+        .snapshots
+        .iter()
+        .map(sniff_core::ElementSnapshot::node_count)
+        .sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)
 }
@@ -349,9 +356,9 @@ async fn save_storage_state(session: &CdpSession, path: &str) -> SniffResult<()>
     // effort — cookies alone still persist the login.
     let page_state = session
         .evaluate(
-            r#"(() => { try { return { origin: location.origin,
+            r"(() => { try { return { origin: location.origin,
                 items: Object.entries(localStorage).map(([name, value]) => ({ name, value })) }; }
-              catch (e) { return null; } })()"#,
+              catch (e) { return null; } })()",
             false,
         )
         .await
@@ -364,7 +371,7 @@ async fn save_storage_state(session: &CdpSession, path: &str) -> SniffResult<()>
 /// Enrich an action failure with chain context so a broken sequence names
 /// the exact step and its predecessors (e.g. "the mini-modal trigger never
 /// appeared after the modal opened").
-fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: SniffError) -> SniffError {
+fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: &SniffError) -> SniffError {
     let describe = |a: &Action| match a {
         Action::Click { selector, .. } => format!("click:{selector}"),
         Action::Hover { selector, .. } => format!("hover:{selector}"),
@@ -373,7 +380,9 @@ fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: SniffErro
             selector, files, ..
         } => format!("upload:{selector}:{}", files.join(",")),
     };
-    let prior = chain[..index]
+    let prior = chain
+        .get(..index)
+        .unwrap_or_default()
         .iter()
         .map(describe)
         .collect::<Vec<_>>()

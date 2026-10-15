@@ -1,5 +1,5 @@
 #!/bin/sh
-# sniffCSS installer — estilo `curl | sh` (como o rustup).
+# sniff installer — estilo `curl | sh` (como o rustup).
 #
 # Baixa os binários pré-compilados do GitHub Release (latest por padrão, ou
 # VERSION=vX.Y.Z), verifica o checksum SHA-256 e instala em ~/.local/bin.
@@ -9,7 +9,7 @@
 #
 # Uso:
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.4.1 sh
+#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.0 sh
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #
 # Variáveis de ambiente:
@@ -22,7 +22,9 @@ set -eu
 
 REPO="${SNIFF_REPO:-st-all-one/sniff-css}"
 BASE_URL_ROOT="${SNIFF_BASE_URL:-https://github.com}"
-BINARIES="sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp"
+BINARIES="sniff sniff-mcp"
+# Nomes legados removidos na instalação (0.5.0 renomeou o binário para `sniff`).
+LEGACY="sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${VERSION:-latest}"
 
@@ -86,11 +88,11 @@ resolve_version() {
 
 # ── versão instalada / upgrade ───────────────────────────────────────────────
 
-# Versão atualmente instalada (saída `sniffCSS --version`, último campo), ou
+# Versão atualmente instalada (saída `sniff --version`, último campo), ou
 # string vazia quando ainda não há binário. O upgrade é feito por overwrite
 # (`install` substitui o binário antigo), então basta re-rodar o instalador.
 current_version() {
-    local bin="$INSTALL_DIR/sniffCSS"
+    local bin="$INSTALL_DIR/sniff"
     [ -x "$bin" ] || return 0
     "$bin" --version 2>/dev/null | awk '{print $NF}'
 }
@@ -122,11 +124,11 @@ check_upgrade() {
     [ -n "$installed" ] || return 0
 
     if [ "$installed" = "${VERSION#v}" ]; then
-        ok "sniffCSS ${VERSION} já instalado em ${INSTALL_DIR} — nada a fazer."
+        ok "sniff ${VERSION} já instalado em ${INSTALL_DIR} — nada a fazer."
         exit 0
     fi
     if version_gt "${VERSION#v}" "$installed"; then
-        info "Atualizando sniffCSS v${installed} → v${VERSION#v}"
+        info "Atualizando sniff v${installed} → v${VERSION#v}"
     else
         warn "Versão mais nova instalada (v${installed}); instalando v${VERSION#v} (downgrade)."
     fi
@@ -148,7 +150,7 @@ add_path_line() {
     local file="$1"
     local line marker display
     line="$(path_line)"
-    marker="# --- sniffCSS path ---"
+    marker="# --- sniff path ---"
 
     [ -f "$file" ] || return 0
     grep -qxF "$line" "$file" 2>/dev/null && return 0
@@ -193,7 +195,7 @@ info "Detectado: ${TARGET}"
 
 VERSION="$(resolve_version)"
 VERSION_NO_V="${VERSION#v}"
-info "Instalando sniffCSS ${VERSION} (${TARGET}) em ${INSTALL_DIR}/..."
+info "Instalando sniff ${VERSION} (${TARGET}) em ${INSTALL_DIR}/..."
 
 check_upgrade
 
@@ -244,12 +246,21 @@ for bin in $BINARIES; do
     ok "Instalado: ${INSTALL_DIR}/${bin}"
 done
 
+# Remove os binários legados da superfície antiga (não são mais publicados).
+for old in $LEGACY; do
+    if [ -e "$INSTALL_DIR/$old" ]; then
+        rm -f "$INSTALL_DIR/$old"
+        ok "Removido (legado): ${INSTALL_DIR}/${old}"
+    fi
+done
+
 setup_path
 echo ""
 info "Pronto! Execute no terminal:"
-echo "  sniffCSS -u <URL> -s <selector> --stable-key data-testid   # default otimizado p/ IA"
-echo "  sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5"
-echo "  sniffCSS-check --input snap.jsonl --uniform --rules"
-echo "  sniffCSS-mcp   # servidor MCP (stdio) para agentes de IA"
+echo "  sniff capture -u <URL> -s <selector>   # captura (--output summary por padrão)"
+echo "  sniff check -i snap.jsonl --rules --uniform"
+echo "  sniff diff base.jsonl head.jsonl --tolerance 0.5"
+echo "  sniff prime                             # protocolo para IA (byte-idêntico)"
+echo "  sniff-mcp                               # servidor MCP (stdio) para agentes de IA"
 echo ""
 info "Guia para IA: docs/ai-usage.md | Docs: https://github.com/${REPO}"

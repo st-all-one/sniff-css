@@ -36,12 +36,17 @@ impl Default for DiffOptions {
 /// One delta line: a node that changed, was added or removed.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DeltaLine {
+    /// Line kind: `CHANGED`, `ADDED`, `REMOVED` or `ACTION_CHANGED`.
     pub status: &'static str,
+    /// Selector of the affected node.
     pub selector: String,
+    /// Tag name, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// DOM path, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Depth in the captured tree, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<usize>,
     /// For `CHANGED` nodes: the concrete property-level differences.
@@ -55,10 +60,15 @@ pub struct DeltaLine {
 /// Aggregate counters for a diff run.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct DiffStats {
+    /// Nodes whose styles changed.
     pub changed: usize,
+    /// Nodes present only in the head snapshot.
     pub added: usize,
+    /// Nodes present only in the base snapshot.
     pub removed: usize,
+    /// Total nodes in the base snapshot.
     pub base_nodes: usize,
+    /// Total nodes in the head snapshot.
     pub head_nodes: usize,
     /// Number of `__actions` interaction-effect entries that changed between
     /// the two snapshots (UI-effect regression signal).
@@ -109,7 +119,7 @@ pub fn diff_actions(
                 if changes.is_empty() {
                     continue;
                 }
-                stats.actions_changed += 1;
+                stats.actions_changed = stats.actions_changed.saturating_add(1);
                 out.push(DeltaLine {
                     status: "ACTION_CHANGED",
                     selector: format!("action[{index}]"),
@@ -121,7 +131,7 @@ pub fn diff_actions(
                 });
             }
             (Some(b), None) => {
-                stats.actions_changed += 1;
+                stats.actions_changed = stats.actions_changed.saturating_add(1);
                 out.push(DeltaLine {
                     status: "ACTION_REMOVED",
                     selector: format!("action[{index}]"),
@@ -133,7 +143,7 @@ pub fn diff_actions(
                 });
             }
             (None, Some(h)) => {
-                stats.actions_changed += 1;
+                stats.actions_changed = stats.actions_changed.saturating_add(1);
                 out.push(DeltaLine {
                     status: "ACTION_ADDED",
                     selector: format!("action[{index}]"),
@@ -278,7 +288,10 @@ fn compare_action_value(
 }
 
 fn count_nodes(nodes: &[DiffNode]) -> usize {
-    nodes.iter().map(|n| 1 + count_nodes(&n.children)).sum()
+    nodes
+        .iter()
+        .map(|n| count_nodes(&n.children).saturating_add(1))
+        .sum()
 }
 
 /// Match and diff two sibling lists.
@@ -294,41 +307,56 @@ fn diff_children(
 
     // Pass 1: match by stable selector.
     for (bi, b) in base.iter().enumerate() {
-        for (hi, h) in head.iter().enumerate() {
-            if !used_h[hi] && !b.selector.is_empty() && b.selector == h.selector {
-                used_h[hi] = true;
-                match_h[bi] = Some(hi);
-                break;
+        if b.selector.is_empty() {
+            continue;
+        }
+        if let Some(hi) = head
+            .iter()
+            .enumerate()
+            .find(|(hi, h)| !used_h.get(*hi).copied().unwrap_or(true) && b.selector == h.selector)
+            .map(|(hi, _)| hi)
+        {
+            if let Some(slot) = used_h.get_mut(hi) {
+                *slot = true;
+            }
+            if let Some(slot) = match_h.get_mut(bi) {
+                *slot = Some(hi);
             }
         }
     }
     // Pass 2: positional fallback for the remainder.
-    for slot in match_h.iter_mut() {
+    for slot in &mut match_h {
         if slot.is_some() {
             continue;
         }
-        if let Some(hi) = (0..head.len()).find(|&hi| !used_h[hi]) {
-            used_h[hi] = true;
+        if let Some(hi) = (0..head.len()).find(|hi| !used_h.get(*hi).copied().unwrap_or(true)) {
+            if let Some(u) = used_h.get_mut(hi) {
+                *u = true;
+            }
             *slot = Some(hi);
         }
     }
 
     // Recurse over matches, report removals inline (pre-order).
-    for (bi, b) in base.iter().enumerate() {
-        match match_h[bi] {
-            Some(hi) => diff_node(b, &head[hi], opts, out, stats),
+    for (b, slot) in base.iter().zip(&match_h) {
+        match *slot {
+            Some(hi) => {
+                if let Some(h) = head.get(hi) {
+                    diff_node(b, h, opts, out, stats);
+                }
+            }
             None => {
                 if !opts.ignore_structural {
                     out.push(removed_line(b));
-                    stats.removed += 1;
+                    stats.removed = stats.removed.saturating_add(1);
                 }
             }
         }
     }
     for (hi, h) in head.iter().enumerate() {
-        if !used_h[hi] && !opts.ignore_structural {
+        if !used_h.get(hi).copied().unwrap_or(true) && !opts.ignore_structural {
             out.push(added_line(h));
-            stats.added += 1;
+            stats.added = stats.added.saturating_add(1);
         }
     }
 }
@@ -351,7 +379,7 @@ fn diff_node(
             changes: Some(changes),
             snapshot: None,
         });
-        stats.changed += 1;
+        stats.changed = stats.changed.saturating_add(1);
     }
     diff_children(&base.children, &head.children, opts, out, stats);
 }
@@ -596,9 +624,7 @@ fn value_equal(base: Option<&Value>, head: Option<&Value>, opts: &DiffOptions) -
             a == b || (opts.tolerance > 0.0 && numeric_close(a, b, opts.tolerance))
         }
         (Some(Value::Number(a)), Some(Value::Number(b))) => match (a.as_f64(), b.as_f64()) {
-            (Some(x), Some(y)) => {
-                x == y || (opts.tolerance > 0.0 && (x - y).abs() <= opts.tolerance)
-            }
+            (Some(x), Some(y)) => (x - y).abs() <= opts.tolerance.max(0.0),
             _ => a == b,
         },
         (Some(a), Some(b)) => a == b,
@@ -717,6 +743,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "helper de teste: `Option` mantém `node(sel, box_width(..))` uniforme"
+    )]
     fn box_width(v: &str) -> Option<Map<String, Value>> {
         let obj: Value = serde_json::json!({
             "box_model": {"width": v}

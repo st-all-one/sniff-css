@@ -1,16 +1,17 @@
-# sniffCSS
+# sniff
 
-> sniffCSS is a high-performance Rust CLI that captures the **real computed CSS
+> sniff is a high-performance Rust CLI that captures the **real computed CSS
 > styles** of DOM elements from a live page (especially localhost) via the raw
 > Chrome DevTools Protocol (CDP) over WebSocket — no puppeteer/chromiumoxide —
 > and emits structured, compact JSONL optimized for consumption by AI agents. It
-> also ships deterministic diffing (`sniffCSS-diff`), deterministic
-> a11y/consistency checks (`sniffCSS-check`), and an MCP server
-> (`sniffCSS-mcp`) so a model gets only a minimal delta to interpret instead of
+> also ships deterministic diffing (`sniff diff`), deterministic
+> a11y/consistency checks (`sniff check`), and an MCP server
+> (`sniff-mcp`) so a model gets only a minimal delta to interpret instead of
 > raw snapshots.
 
-Things to remember when using sniffCSS:
+Things to remember when using sniff:
 
+- **Verb surface (like `kd`)**: `sniff init` · `sniff capture` · `sniff diff` · `sniff check` · `sniff snapshots` · `sniff prime` · `sniff self`. No verb → help (exit 0). `sniff init` upserts a marker-delimited block into the project's `AGENTS.md` (`--force` overwrites the file). `sniff prime` is the byte-identical AI protocol; `sniff self` handles `setup`/`completions`/`upgrade`/`version`; `--json` emits `{success, command, data?, error{code,message,retryable}, warnings?}` (exit 2 invalid / 3 not_found / 5 io / 70 internal).
 - Talks to the browser over raw CDP; needs Chrome/Chromium on the system (or `--chrome PATH` / `SNIFF_CHROME_PATH`), or attaches to a running browser via `--connect`.
 - `--ignore-certificate-errors` (env `SNIFF_IGNORE_CERTIFICATE_ERRORS`) captures pages behind a self-signed TLS certificate instead of the browser's "connection is not private" interstitial; works when launching (Chromium flag) and with `--connect` (CDP `Security.setIgnoreCertificateErrors`).
 - Default output is the **summary digest** (token-lean, ~5-10x smaller than full); `--no-summary` emits the full JSONL used by diff/check/jq.
@@ -18,9 +19,9 @@ Things to remember when using sniffCSS:
 - **Determinism is a contract**: both diff sides must share mode (default+default or `--full`+`--full`, never mixed), viewport, wait strategy and actions.
 - **The AI only judges**: cite the measured facets (`contrast.ratio`, `aria.name`, `accessibility_grade`, `ax.role`); never re-derive them or feed full snapshots to the model — diff/check first.
 - Interactions reveal action-only elements: `--click`/`--hover`/`--type`/`--upload`/`--action` (real trusted input events); `--header`/`--storage-state`/`--save-storage-state` handle auth + persistent sessions.
-- `sniffCSS-check` is fully offline and LLM-free (`--uniform` finds the odd card; `--rules` emits PASS/WARN/FAIL for contrast, 24px targets, focus, alt, occlusion, plus ~17 deterministic UI/UX heuristics for common CSS bugs: `sticky-in-overflow-hidden`, `fixed-broken-by-transform`, `backdrop-over-modal`, `horizontal-overflow`, `aria-hidden-focusable`, `control-without-name`, etc. — see `docs/diff-checks.md`). The `occluded` rule flags elements **visually behind** another overlapping node painted above it (rect overlap among non-ancestor/non-descendant nodes; paint order by `z-index`, else DOM order; fail ≥75% / warn ≥50% coverage) — useful when an element exists in the DOM but the user can't see it.
+- `sniff check` is fully offline and LLM-free (`--uniform` finds the odd card; `--rules` emits PASS/WARN/FAIL for contrast, 24px targets, focus, alt, occlusion, plus ~17 deterministic UI/UX heuristics for common CSS bugs: `sticky-in-overflow-hidden`, `fixed-broken-by-transform`, `backdrop-over-modal`, `horizontal-overflow`, `aria-hidden-focusable`, `control-without-name`, etc. — see `docs/diff-checks.md`). The `occluded` rule flags elements **visually behind** another overlapping node painted above it (rect overlap among non-ancestor/non-descendant nodes; paint order by `z-index`, else DOM order; fail ≥75% / warn ≥50% coverage) — useful when an element exists in the DOM but the user can't see it.
 - CLI action strings: `click`/`hover` selectors may contain `:` (e.g. `:nth-child(2)`; only trailing `:N` fields are timeout/settle); `type`/`upload` selectors cannot (first `:` splits selector from text/files).
-- **Flutter/Dart backend**: `--backend flutter` (CLI, or default `auto` inferred from a `flutter://<device>` URL) / `sniffFlutter_page` (MCP) captures a **debug-mode** Flutter app's widget tree on an Android emulator/device over the Dart VM Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`), emitting the same JSONL model (widget class as tag, colors normalized to `#rrggbb`, shared WCAG contrast) so the same `sniffCSS-diff`/`sniffCSS-check` work by path. The device is inferred from `flutter://<serial>` (or `--device <serial>` / `--avd <name>`); release builds (no VM Service) are unsupported. Actions (`--action`/`--click`/`--type`; `hover`/`upload` web-only) drive the app via the Flutter Driver extension (needs `enableFlutterDriverExtension()` in `main()`) and `--viewport` applies `adb shell wm size`; both are restored after the capture.
+- **Flutter/Dart backend**: `--backend flutter` (CLI, or default `auto` inferred from a `flutter://<device>` URL) / `sniff_flutter_page` (MCP) captures a **debug-mode** Flutter app's widget tree on an Android emulator/device over the Dart VM Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`), emitting the same JSONL model (widget class as tag, colors normalized to `#rrggbb`, shared WCAG contrast) so the same `sniff diff`/`sniff check` work by path. The device is inferred from `flutter://<serial>` (or `--device <serial>` / `--avd <name>`); release builds (no VM Service) are unsupported. Actions (`--action`/`--click`/`--type`; `hover`/`upload` web-only) drive the app via the Flutter Driver extension (needs `enableFlutterDriverExtension()` in `main()`) and `--viewport` applies `adb shell wm size`; both are restored after the capture.
 
 ## Docs
 
@@ -31,12 +32,12 @@ Things to remember when using sniffCSS:
 - [`docs/usage.md`](docs/usage.md) — complete CLI reference: flags, waits, actions, output formats, persistence. The single source of truth for flags.
 - [`docs/flutter.md`](docs/flutter.md) — Flutter/Dart backend: Linux setup (Ubuntu/Fedora/Arch), `auto` mode, flutter flags, output shape.
 - [`docs/ai-usage.md`](docs/ai-usage.md) — AI-consumption flows: capture → diff → checks → eval prompt; MCP tools; team defaults; CI monitoring.
-- [`docs/diff-checks.md`](docs/diff-checks.md) — `sniffCSS-diff` and `sniffCSS-check` reference.
+- [`docs/diff-checks.md`](docs/diff-checks.md) — `sniff diff` and `sniff check` reference.
 - [`docs/accessibility.md`](docs/accessibility.md) — accessibility audit workflow (facets, jq queries, judgment checklist).
 - [`docs/docker.md`](docs/docker.md) — self-contained Chromium container: quickstart, compose, MCP via Docker, env vars.
 - [`docs/golden-run.md`](docs/golden-run.md) — the determinism contract (golden run).
 - [`docs/eval-prompt.md`](docs/eval-prompt.md) — AI evaluation prompt template (takes only the delta).
-- [`docs/sniffCSS-eval.schema.json`](docs/sniffCSS-eval.schema.json) — response contract for the AI evaluation.
+- [`docs/sniff-eval.schema.json`](docs/sniff-eval.schema.json) — response contract for the AI evaluation.
 - [`docs/architecture.md`](docs/architecture.md) — internal design: single `Runtime.evaluate` extraction, raw CDP, wait/action strategies as data, snapshot store.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
@@ -44,24 +45,25 @@ Things to remember when using sniffCSS:
 
 - Categories: `box-model` · `layout` · `typography` · `visual` · `transform` · `animation` · `interaction` · `accessibility` · `all`.
 - Wait strategies: `selector`, `network-idle`, `element-ready`, `fonts-loaded`, `app-flag`, `delay`. Default: selector (10s) → network-idle (30s) → element-ready (10s, visible+has-size).
-- `sniffCSS-diff base.jsonl head.jsonl --tolerance 0.5` emits `CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`; `--stats-only` for scale.
-- `sniffCSS-check --input snap.jsonl --uniform --rules` emits PASS/WARN/FAIL + `__check_summary`.
-- MCP tools over stdio: `sniffCSS_page`, `sniffFlutter_page`, `sniffCSS_diff`, `sniffCSS_check`, `sniffCSS_snapshots`, `sniffCSS_categories`. Snapshots persist to `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
-- Embedded resources: `sniffCSS://prompts/eval`, `sniffCSS://schemas/eval`, `sniffCSS://guides/golden`.
-- Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.88.
+- `sniff diff base.jsonl head.jsonl --tolerance 0.5` emits `CHANGED`/`ADDED`/`REMOVED` + `__diff_summary`; `--stats-only` for scale.
+- `sniff check --input snap.jsonl --uniform --rules` emits PASS/WARN/FAIL + `__check_summary`.
+- MCP tools over stdio: `sniff_page`, `sniff_flutter_page`, `sniff_diff`, `sniff_check`, `sniff_snapshots`, `sniff_categories`. Snapshots persist to `sniff/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
+- Embedded resources: `sniff://prompts/eval`, `sniff://schemas/eval`, `sniff://guides/golden`.
+- Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.99.
+- Quality: Rust 1.99 / Edition 2024, `clippy` pedantic+nursery (zero warnings), determinism as a contract, zero `unsafe`; CI runs `cargo deny`/`audit`, Miri and fuzz.
 
 ## Examples
 
-- Capture a button's computed styles: `sniffCSS --url http://localhost:3000 --selector ".btn-primary"`.
+- Capture a button's computed styles: `sniff capture --url http://localhost:3000 --selector ".btn-primary"`.
 - Deterministic regression diff in CI:
 
 ```bash
-sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/base.jsonl
+sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/base.jsonl
 # ... deploy ...
-sniffCSS -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/head.jsonl
-sniffCSS-diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
+sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > snapshots/head.jsonl
+sniff diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 ```
 
-- Reveal action-only elements: `sniffCSS -u "$URL" -s ".modal" --click "#open-modal"`.
-- Self-signed HTTPS dev server: `sniffCSS -u https://app.local:3443/home -s "body" --ignore-certificate-errors`.
-- Serve as MCP for AI agents: `sniffCSS-mcp` (stdio, shares one headless Chrome).
+- Reveal action-only elements: `sniff capture -u "$URL" -s ".modal" --click "#open-modal"`.
+- Self-signed HTTPS dev server: `sniff capture -u https://app.local:3443/home -s "body" --ignore-certificate-errors`.
+- Serve as MCP for AI agents: `sniff-mcp` (stdio, shares one headless Chrome).

@@ -1,6 +1,6 @@
 //! On-disk snapshot store backing the MCP tools.
 //!
-//! Sniffs are persisted as `sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl`
+//! Sniffs are persisted as `sniff/[domain]/[UTC]-[path]-[selector].jsonl`
 //! relative to the server's working directory (or `SNIFF_SNAPSHOT_DIR` when
 //! set), so diff/check tools can operate on **paths** instead of round-tripping
 //! full snapshots through the LLM context. The leading UTC stamp sorts the
@@ -41,7 +41,7 @@ pub struct SnapshotStore {
 }
 
 impl SnapshotStore {
-    /// Root from `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD.
+    /// Root from `SNIFF_SNAPSHOT_DIR` or `sniff` under the CWD.
     pub fn from_env() -> Self {
         Self {
             root: sniff_core::snapshot::snapshot_root(),
@@ -82,16 +82,16 @@ impl SnapshotStore {
         fs::create_dir_all(parent)
             .map_err(|e| SniffError::Other(format!("create {}: {e}", parent.display())))?;
 
-        let tmp = parent.join(format!(".{name}.tmp"));
+        let temp_path = parent.join(format!(".{name}.tmp"));
         {
-            let mut f = fs::File::create(&tmp)
-                .map_err(|e| SniffError::Other(format!("create {}: {e}", tmp.display())))?;
+            let mut f = fs::File::create(&temp_path)
+                .map_err(|e| SniffError::Other(format!("create {}: {e}", temp_path.display())))?;
             f.write_all(jsonl.as_bytes())
-                .map_err(|e| SniffError::Other(format!("write {}: {e}", tmp.display())))?;
+                .map_err(|e| SniffError::Other(format!("write {}: {e}", temp_path.display())))?;
             f.sync_all()
-                .map_err(|e| SniffError::Other(format!("sync {}: {e}", tmp.display())))?;
+                .map_err(|e| SniffError::Other(format!("sync {}: {e}", temp_path.display())))?;
         }
-        fs::rename(&tmp, &abs)
+        fs::rename(&temp_path, &abs)
             .map_err(|e| SniffError::Other(format!("rename {}: {e}", abs.display())))?;
         Ok(rel)
     }
@@ -117,16 +117,16 @@ impl SnapshotStore {
         fs::create_dir_all(parent)
             .map_err(|e| SniffError::Other(format!("create {}: {e}", parent.display())))?;
 
-        let tmp = parent.join(format!(".{name}.tmp"));
+        let temp_path = parent.join(format!(".{name}.tmp"));
         {
-            let mut f = fs::File::create(&tmp)
-                .map_err(|e| SniffError::Other(format!("create {}: {e}", tmp.display())))?;
+            let mut f = fs::File::create(&temp_path)
+                .map_err(|e| SniffError::Other(format!("create {}: {e}", temp_path.display())))?;
             f.write_all(bytes)
-                .map_err(|e| SniffError::Other(format!("write {}: {e}", tmp.display())))?;
+                .map_err(|e| SniffError::Other(format!("write {}: {e}", temp_path.display())))?;
             f.sync_all()
-                .map_err(|e| SniffError::Other(format!("sync {}: {e}", tmp.display())))?;
+                .map_err(|e| SniffError::Other(format!("sync {}: {e}", temp_path.display())))?;
         }
-        fs::rename(&tmp, &abs)
+        fs::rename(&temp_path, &abs)
             .map_err(|e| SniffError::Other(format!("rename {}: {e}", abs.display())))?;
         Ok(rel)
     }
@@ -154,9 +154,8 @@ impl SnapshotStore {
     }
 
     fn collect_dir(&self, dir: &Path, out: &mut Vec<SnapshotEntry>) -> SniffResult<()> {
-        let entries = match fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()), // missing root/domain dir => empty list
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Ok(()); // missing root/domain dir => empty list
         };
         for entry in entries {
             let entry = entry.map_err(|e| SniffError::Other(e.to_string()))?;
@@ -177,7 +176,7 @@ impl SnapshotStore {
                 .and_then(|d| d.to_str())
                 .unwrap_or("")
                 .to_string();
-            let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let size = fs::metadata(&path).map_or(0, |m| m.len());
             let rel = path
                 .strip_prefix(&self.root)
                 .unwrap_or(&path)
@@ -220,7 +219,7 @@ fn parse_snapshot_name(name: &str) -> Option<(String, String)> {
 fn is_timestamp(s: &str) -> bool {
     s.len() == 15
         && s.bytes().take(8).all(|b| b.is_ascii_digit())
-        && s.as_bytes()[8] == b'T'
+        && s.as_bytes().get(8) == Some(&b'T')
         && s.bytes().skip(9).take(6).all(|b| b.is_ascii_digit())
 }
 
@@ -247,7 +246,7 @@ mod tests {
     use sniff_core::config::OutputFormat;
     use sniff_core::snapshot::{path_of, utc_now};
     use sniff_core::{ElementFilter, OutputConfig, SniffConfig, WaitStrategy};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::path::PathBuf;
 
     fn config(url: &str, selector: &str) -> SniffConfig {
         SniffConfig {
@@ -290,7 +289,7 @@ mod tests {
         let gitignore = dir.join(".gitignore");
         assert!(gitignore.exists(), "store root must carry a .gitignore");
         assert_eq!(
-            std::fs::read_to_string(&gitignore).unwrap(),
+            fs::read_to_string(&gitignore).unwrap(),
             "*\n",
             ".gitignore must ignore everything inside the snapshot tree"
         );
@@ -378,20 +377,15 @@ mod tests {
 
     #[test]
     fn store_uses_shared_snapshot_naming() {
-        let ts = sniff_core::snapshot::utc_now();
+        let ts = utc_now();
         assert_eq!(ts.len(), 16);
         assert!(ts.ends_with('Z'));
         assert_eq!(ts.as_bytes()[8], b'T');
     }
 
     fn temp_dir(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "sniffCSS-mcp-{label}-{}-{:?}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ))
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("sniff-mcp-{label}-{}-{seq}", std::process::id()))
     }
 }

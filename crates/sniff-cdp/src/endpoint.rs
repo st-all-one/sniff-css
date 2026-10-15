@@ -57,8 +57,8 @@ fn parse_http_authority(endpoint: &str) -> Result<(String, u16)> {
         let end = stripped
             .find(']')
             .ok_or_else(|| CdpError::Connect(format!("invalid endpoint `{endpoint}`")))?;
-        let host = &stripped[..end];
-        let after = &stripped[end + 1..];
+        let host = stripped.get(..end).unwrap_or_default();
+        let after = stripped.get(end.saturating_add(1)..).unwrap_or_default();
         let port = match after.strip_prefix(':') {
             Some(p) => p
                 .parse()
@@ -91,7 +91,7 @@ async fn http_get_json(host: &str, port: u16) -> Result<serde_json::Value> {
         .map_err(|e| CdpError::Connect(format!("http fetch {host}:{port}: {e}")))?;
 
     let request = format!(
-        "GET /json/version HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nUser-Agent: sniffCSS/0.1\r\nAccept: application/json\r\n\r\n"
+        "GET /json/version HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nUser-Agent: sniff/0.1\r\nAccept: application/json\r\n\r\n"
     );
     stream
         .write_all(request.as_bytes())
@@ -124,7 +124,12 @@ async fn http_get_json(host: &str, port: u16) -> Result<serde_json::Value> {
         CdpError::Connect("missing Content-Length in /json/version response".into())
     })?;
 
-    let mut body = Vec::with_capacity(content_length as usize);
+    let body_capacity = usize::try_from(content_length).map_err(|_| {
+        CdpError::Connect(format!(
+            "Content-Length {content_length} exceeds addressable memory"
+        ))
+    })?;
+    let mut body = Vec::with_capacity(body_capacity);
     stream
         .take(content_length)
         .read_to_end(&mut body)
@@ -236,14 +241,13 @@ mod tests {
             }
             let body = r#"{"Browser":"Chromium/151.0.7922.108","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/abc"}"#;
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
             );
-            let _ = sock.write_all(resp.as_bytes()).await;
+            drop(sock.write_all(resp.as_bytes()).await);
             // Keep the socket open a moment, like a keep-alive server would.
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            let _ = sock.shutdown().await;
+            drop(sock.shutdown().await);
         });
 
         let resolved = resolve_endpoint(&format!("http://{addr}")).await.unwrap();

@@ -1,15 +1,15 @@
 //! MCP service exposing sniffing and diffing as tools for AI agents.
 //!
 //! Tools:
-//! - `sniffCSS_page` — capture computed styles from a live page (JSONL),
+//! - `sniff_page` — capture computed styles from a live page (JSONL),
 //!   streaming phase progress via `notifications/progress`.
-//! - `sniffCSS_diff` — deterministic diff of two inline JSONL snapshots,
+//! - `sniff_diff` — deterministic diff of two inline JSONL snapshots,
 //!   returning only what changed.
-//! - `sniffCSS_categories` — available CSS property categories.
+//! - `sniff_categories` — available CSS property categories.
 //!
 //! Resources:
-//! - `sniffCSS://prompts/eval` — the AI evaluation prompt template.
-//! - `sniffCSS://schemas/eval` — the rigid JSON Schema for the AI answer.
+//! - `sniff://prompts/eval` — the AI evaluation prompt template.
+//! - `sniff://schemas/eval` — the rigid JSON Schema for the AI answer.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,10 +35,10 @@ use crate::progress::ProgressReporter;
 use crate::store::SnapshotStore;
 
 const EVAL_PROMPT: &str = include_str!("../../../docs/eval-prompt.md");
-const EVAL_SCHEMA: &str = include_str!("../../../docs/sniffCSS-eval.schema.json");
+const EVAL_SCHEMA: &str = include_str!("../../../docs/sniff-eval.schema.json");
 const GOLDEN_RUN: &str = include_str!("../../../docs/golden-run.md");
 
-/// Team-wide defaults applied to every `sniffCSS_page` call so the agent does
+/// Team-wide defaults applied to every `sniff_page` call so the agent does
 /// not have to repeat auth/session plumbing per capture. Read from the
 /// environment once at server start:
 ///
@@ -59,17 +59,13 @@ pub struct ServerDefaults {
 impl ServerDefaults {
     /// Read defaults from the environment.
     pub fn from_env() -> Self {
-        let headers = std::env::var("SNIFF_DEFAULT_HEADERS")
-            .ok()
+        let headers = sniff_core::env::var("SNIFF_DEFAULT_HEADERS")
             .filter(|raw| !raw.trim().is_empty())
             .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
             .unwrap_or_default();
-        let storage_state = std::env::var("SNIFF_STORAGE_STATE")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
-        let base_url = std::env::var("SNIFF_BASE_URL")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
+        let storage_state =
+            sniff_core::env::var("SNIFF_STORAGE_STATE").filter(|v| !v.trim().is_empty());
+        let base_url = sniff_core::env::var("SNIFF_BASE_URL").filter(|v| !v.trim().is_empty());
         Self {
             headers,
             storage_state,
@@ -93,7 +89,7 @@ pub struct SniffMcpServer {
 
 impl SniffMcpServer {
     /// Build a server backed by the given browser pool, with the snapshot
-    /// store rooted at `SNIFF_SNAPSHOT_DIR` or `sniffCSS` under the CWD, and
+    /// store rooted at `SNIFF_SNAPSHOT_DIR` or `sniff` under the CWD, and
     /// team defaults read from the environment.
     pub fn new(pool: ChromePool) -> Self {
         Self::new_with(pool, SnapshotStore::from_env(), ServerDefaults::from_env())
@@ -146,7 +142,11 @@ pub struct ActionInput {
     pub settle_ms: Option<u64>,
 }
 
-/// Parameters for the `sniffCSS_page` tool.
+/// Parameters for the `sniff_page` tool.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "parâmetros de ferramenta MCP: toggles independentes, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SniffPageRequest {
     /// Page URL to navigate to (http://, https:// or file://).
@@ -259,7 +259,7 @@ pub struct SniffPageRequest {
     /// Defaults to `false`.
     #[serde(default)]
     pub full: bool,
-    /// Persist the snapshot to disk as `sniffCSS/[domain]/[UTC]-[path]-
+    /// Persist the snapshot to disk as `sniff/[domain]/[UTC]-[path]-
     /// [selector].jsonl` (root overridable via `SNIFF_SNAPSHOT_DIR`). Defaults
     /// to `true` so diff/check can run on paths instead of inline JSONL.
     #[serde(default = "default_true")]
@@ -290,12 +290,16 @@ pub struct SniffPageRequest {
     pub save_storage_state: Option<String>,
 }
 
-/// Parameters for the `sniffFlutter_page` tool (Flutter/Dart backend).
+/// Parameters for the `sniff_flutter_page` tool (Flutter/Dart backend).
 ///
 /// The widget tree is captured from a **debug-mode** Flutter app on an Android
 /// emulator/device over the Dart VM Service; `device` or `avd` selects the
 /// target, and the app is either run (`flutter run --machine`) or attached to
 /// (`flutter attach --machine`).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "parâmetros de ferramenta MCP: toggles independentes, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SniffFlutterRequest {
@@ -314,7 +318,7 @@ pub struct SniffFlutterRequest {
     pub depth: usize,
     /// Snapshot label used for persistence naming (default `*`).
     pub selector: String,
-    /// Persist the snapshot to disk under `sniffCSS/` (default true).
+    /// Persist the snapshot to disk under `sniff/` (default true).
     pub persist: bool,
     /// Return mode: `reference` (default; tiny `__sniff` handle) or `jsonl`
     /// (full snapshot inline).
@@ -328,7 +332,7 @@ pub struct SniffFlutterRequest {
     #[serde(default)]
     pub viewport: String,
     /// Ordered user interactions run on the app before capture, mirroring
-    /// `sniffCSS_page.actions`. Supported kinds: `click` (tap a widget found
+    /// `sniff_page.actions`. Supported kinds: `click` (tap a widget found
     /// by `ValueKey`/type/text — the app must call
     /// `enableFlutterDriverExtension()` in `main()`), `type` (tap then enter
     /// text). `hover`/`upload` are web-only and rejected with a clear error.
@@ -355,14 +359,14 @@ impl Default for SniffFlutterRequest {
     }
 }
 
-/// Parameters for the `sniffCSS_diff` tool.
+/// Parameters for the `sniff_diff` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DiffRequest {
-    /// Base snapshot JSONL (output of `sniffCSS_page`); ignored when `base_path`
+    /// Base snapshot JSONL (output of `sniff_page`); ignored when `base_path`
     /// is set.
     #[serde(default)]
     pub base_jsonl: String,
-    /// Head snapshot JSONL (output of `sniffCSS_page`); ignored when `head_path`
+    /// Head snapshot JSONL (output of `sniff_page`); ignored when `head_path`
     /// is set.
     #[serde(default)]
     pub head_jsonl: String,
@@ -379,7 +383,7 @@ pub struct DiffRequest {
     #[serde(default)]
     pub ignore_structural: bool,
     /// Base snapshot on disk (root-relative or absolute), produced by a
-    /// persisted `sniffCSS_page`. Precedence over `base_jsonl`; keeps the full
+    /// persisted `sniff_page`. Precedence over `base_jsonl`; keeps the full
     /// snapshot out of the tool call.
     #[serde(default)]
     pub base_path: Option<String>,
@@ -389,10 +393,14 @@ pub struct DiffRequest {
     pub head_path: Option<String>,
 }
 
-/// Parameters for the `sniffCSS_check` tool.
+/// Parameters for the `sniff_check` tool.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "parâmetros de ferramenta MCP: toggles independentes, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CheckRequest {
-    /// Snapshot JSONL (output of `sniffCSS_page`) to evaluate offline; ignored
+    /// Snapshot JSONL (output of `sniff_page`) to evaluate offline; ignored
     /// when `path` is set.
     #[serde(default)]
     pub jsonl: String,
@@ -406,12 +414,12 @@ pub struct CheckRequest {
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
     /// Snapshot on disk (root-relative or absolute), produced by a persisted
-    /// `sniffCSS_page`. Precedence over `jsonl`.
+    /// `sniff_page`. Precedence over `jsonl`.
     #[serde(default)]
     pub path: Option<String>,
 }
 
-/// Parameters for the `sniffCSS_snapshots` tool.
+/// Parameters for the `sniff_snapshots` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ListSnapshotsRequest {
     /// Filter by sanitized host directory (e.g. `localhost_3000`).
@@ -452,14 +460,14 @@ fn default_return_mode() -> String {
 impl SniffMcpServer {
     /// Capture computed styles from a live page as JSONL.
     #[tool(
-        name = "sniffCSS_page",
+        name = "sniff_page",
         description = "Capture the real computed CSS styles of elements on a page. By default the snapshot \
-                        is persisted to disk as sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the \
+                        is persisted to disk as sniff/[domain]/[UTC]-[path]-[selector].jsonl and the \
                         tool returns the token-lean per-node summary digest (structural skeleton + \
                         curated css subset + contrast + aria) — pass return=\"reference\" for only a tiny \
                         __sniff handle (path, url, selector, node count), or return=\"jsonl\" for the full \
-                        snapshot inline. Feed two persisted captures to sniffCSS_diff via \
-                        base_path/head_path (or sniffCSS_check via path) so the full snapshot never \
+                        snapshot inline. Feed two persisted captures to sniff_diff via \
+                        base_path/head_path (or sniff_check via path) so the full snapshot never \
                         enters the LLM context. Each node carries readable fields (tag, \
                         selector, path, rect, metrics, styles grouped by category) plus \
                         is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
@@ -508,9 +516,11 @@ impl SniffMcpServer {
                 move |phase| {
                     let reporter = reporter.clone();
                     async move {
-                        let _ = reporter
-                            .report(phase.progress(), &phase_message(&phase))
-                            .await;
+                        drop(
+                            reporter
+                                .report(phase.progress(), &phase_message(&phase))
+                                .await,
+                        );
                     }
                 }
             })
@@ -562,12 +572,18 @@ impl SniffMcpServer {
                         "url": request.url,
                         "selector": request.selector,
                         "nodes": outcome.snapshots.len(),
-                        "actions": outcome.actions.as_ref().and_then(|a| a.as_array()).map(|a| a.len()),
+                        "actions": outcome.actions.as_ref().and_then(|a| a.as_array()).map(Vec::len),
                     }
                 });
-                if let Some(shot) = &screenshot_path {
-                    reference["__sniff"]["screenshot_path"] =
-                        serde_json::Value::String(shot.display().to_string());
+                if let Some(shot) = &screenshot_path
+                    && let Some(sniff) = reference
+                        .get_mut("__sniff")
+                        .and_then(serde_json::Value::as_object_mut)
+                {
+                    sniff.insert(
+                        "screenshot_path".into(),
+                        serde_json::Value::String(shot.display().to_string()),
+                    );
                 }
                 serde_json::to_string(&reference)
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))
@@ -592,13 +608,13 @@ impl SniffMcpServer {
 
     /// Capture the widget tree of a debug-mode Flutter app as JSONL.
     #[tool(
-        name = "sniffFlutter_page",
+        name = "sniff_flutter_page",
         description = "Capture the real widget/render tree of a Flutter/Dart app on an Android emulator or \
-                       device (the Flutter analogue of sniffCSS_page). The app must be built in DEBUG mode \
+                       device (the Flutter analogue of sniff_page). The app must be built in DEBUG mode \
                        (release builds strip the Dart VM Service). The snapshot is persisted to disk as \
-                       sniffCSS/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns the token-lean \
+                       sniff/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns the token-lean \
                        __sniff handle (path, nodes) — pass return=\"jsonl\" for the full snapshot inline, \
-                       so the same sniffCSS_diff (base_path/head_path) and sniffCSS_check (path) tools work \
+                       so the same sniff_diff (base_path/head_path) and sniff_check (path) tools work \
                        on Flutter snapshots unchanged. Each node carries tag (widget class), selector/path \
                        (widget breadcrumb), rect (render-object size + accumulated offset), styles grouped \
                        by layout/typography/visual/box-model (widget diagnostics properties; Flutter colors \
@@ -628,12 +644,17 @@ impl SniffMcpServer {
                 .serial()
                 .ok_or_else(|| ErrorData::internal_error("emulator reported no serial", None))?
                 .to_string();
+            #[expect(
+                clippy::mem_forget,
+                clippy::disallowed_methods,
+                reason = "o emulador deve viver até o fim do processo"
+            )]
             std::mem::forget(emulator);
             serial
         } else {
             request.device.clone().ok_or_else(|| {
                 ErrorData::invalid_params(
-                    "sniffFlutter_page needs device=<adb serial> or avd=<name>",
+                    "sniff_flutter_page needs device=<adb serial> or avd=<name>",
                     None,
                 )
             })?
@@ -645,7 +666,7 @@ impl SniffMcpServer {
         let viewport_guard = if request.viewport.is_empty() {
             None
         } else {
-            let vp = sniff_core::Viewport::parse_cli(&request.viewport)
+            let vp = Viewport::parse_cli(&request.viewport)
                 .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
             Some(
                 sniff_flutter::ViewportGuard::apply(&device, vp.width, vp.height)
@@ -665,10 +686,8 @@ impl SniffMcpServer {
                     .to_string_lossy()
                     .into_owned()
             });
-            let mut machine =
-                sniff_flutter::FlutterMachine::attach(std::path::Path::new(&project), &device)
-                    .await
-                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let mut machine = sniff_flutter::FlutterMachine::attach(Path::new(&project), &device)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             machine
                 .wait_for_vm_service(std::time::Duration::from_secs(90))
                 .await
@@ -680,13 +699,9 @@ impl SniffMcpServer {
                     .to_string_lossy()
                     .into_owned()
             });
-            let mut machine = sniff_flutter::FlutterMachine::run(
-                std::path::Path::new(&project),
-                &request.target,
-                &device,
-            )
-            .await
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            let mut machine =
+                sniff_flutter::FlutterMachine::run(Path::new(&project), &request.target, &device)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
             machine
                 .wait_for_vm_service(std::time::Duration::from_secs(180))
                 .await
@@ -826,37 +841,44 @@ impl SniffMcpServer {
         if let Some(guard) = &viewport_guard
             && let Err(e) = guard.restore().await
         {
-            eprintln!("warning: restoring device viewport after capture: {e}");
+            sniff_core::diagnostic::write(format_args!(
+                "warning: restoring device viewport after capture: {e}"
+            ));
         }
 
-        match request.return_mode.as_str() {
-            "jsonl" => Ok(jsonl),
-            _ => {
-                let path = rel_path.ok_or_else(|| {
-                    ErrorData::invalid_params("return=reference requires persist:true", None)
-                })?;
-                let mut reference = serde_json::json!({
-                    "__sniff": {
-                        "path": path.display().to_string(),
-                        "url": url,
-                        "selector": selector,
-                        "nodes": outcome.snapshots.len(),
-                    }
-                });
-                if let Some(shot) = &screenshot_path {
-                    reference["__sniff"]["screenshot_path"] =
-                        serde_json::Value::String(shot.display().to_string());
+        if request.return_mode.as_str() == "jsonl" {
+            Ok(jsonl)
+        } else {
+            let path = rel_path.ok_or_else(|| {
+                ErrorData::invalid_params("return=reference requires persist:true", None)
+            })?;
+            let mut reference = serde_json::json!({
+                "__sniff": {
+                    "path": path.display().to_string(),
+                    "url": url,
+                    "selector": selector,
+                    "nodes": outcome.snapshots.len(),
                 }
-                serde_json::to_string(&reference)
-                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+            });
+            if let Some(shot) = &screenshot_path
+                && let Some(sniff) = reference
+                    .get_mut("__sniff")
+                    .and_then(serde_json::Value::as_object_mut)
+            {
+                sniff.insert(
+                    "screenshot_path".into(),
+                    serde_json::Value::String(shot.display().to_string()),
+                );
             }
+            serde_json::to_string(&reference)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))
         }
     }
 
     /// Deterministically diff two JSONL snapshots.
     #[tool(
-        name = "sniffCSS_diff",
-        description = "Deterministically diff two sniffCSS_page snapshots and return only what changed: \
+        name = "sniff_diff",
+        description = "Deterministically diff two sniff_page snapshots and return only what changed: \
                        CHANGED nodes with before/after values per property (styles, pseudo, aria, \
                        contrast, ax, rect, metrics, is_user_noticeable), ADDED/REMOVED nodes with \
                        their full snapshot, plus a final __diff_summary line. When both snapshots carry \
@@ -864,7 +886,7 @@ impl SniffMcpServer {
                        ACTION_CHANGED/ACTION_ADDED/ACTION_REMOVED lines surface interaction regressions \
                        (effect, appeared rect/onscreen/out-of-view, distance from the action point) and \
                        actions_changed counts them in the summary. Snapshots are best \
-                       passed as persisted base_path/head_path (from a sniffCSS_page __sniff reference) \
+                       passed as persisted base_path/head_path (from a sniff_page __sniff reference) \
                        so the full JSONL stays out of the tool call; base_jsonl/head_jsonl inline \
                        strings still work. tolerance ignores subpixel jitter in the same unit; \
                        ignore_props skips volatile props (e.g. transform); ignore_structural \
@@ -921,12 +943,12 @@ impl SniffMcpServer {
 
     /// Run deterministic offline checks over a snapshot.
     #[tool(
-        name = "sniffCSS_check",
-        description = "Deterministic offline UI checks over a sniffCSS_page snapshot: uniformity \
+        name = "sniff_check",
+        description = "Deterministic offline UI checks over a sniff_page snapshot: uniformity \
                        (finds the odd sibling instance against the group norm — the 'odd card \
                        out') and derived rules (measured WCAG contrast, 24x24 target size, visible \
                        focus indicator, hidden focusables, empty alt on large images). Prefer a \
-                       persisted snapshot path (from a sniffCSS_page __sniff reference); inline jsonl \
+                       persisted snapshot path (from a sniff_page __sniff reference); inline jsonl \
                        still works. No LLM involved: use the results as evidence in the eval prompt."
     )]
     pub async fn sniff_css_check(
@@ -953,7 +975,7 @@ impl SniffMcpServer {
             let (pass, warn, fail) = sniff_css_check::rules::summarize(&lines);
             sniff_css_check::rules::write_checks(&mut buf, &lines)
                 .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-            tracing::info!("sniffCSS_check: {pass} pass | {warn} warn | {fail} fail");
+            tracing::info!("sniff_check: {pass} pass | {warn} warn | {fail} fail");
         }
 
         if request.uniform {
@@ -1003,13 +1025,13 @@ impl SniffMcpServer {
         String::from_utf8(buf).map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 
-    /// List persisted snapshots to pick base/head pairs for `sniffCSS_diff`.
+    /// List persisted snapshots to pick base/head pairs for `sniff_diff`.
     #[tool(
-        name = "sniffCSS_snapshots",
-        description = "List snapshots persisted by sniffCSS_page under sniffCSS/ (or \
+        name = "sniff_snapshots",
+        description = "List snapshots persisted by sniff_page under sniff/ (or \
                        SNIFF_SNAPSHOT_DIR), newest first. Each line has domain (host directory), \
                        target ([path]-[selector]), path (usable as base_path/head_path or the \
-                       sniffCSS_check path), created_at (UTC) and size. Filter by domain/target and \
+                       sniff_check path), created_at (UTC) and size. Filter by domain/target and \
                        cap with limit to find the base/head pair to diff."
     )]
     pub async fn sniff_css_snapshots(
@@ -1041,8 +1063,8 @@ impl SniffMcpServer {
 
     /// List available CSS property categories.
     #[tool(
-        name = "sniffCSS_categories",
-        description = "List the CSS property categories accepted by sniffCSS_page."
+        name = "sniff_categories",
+        description = "List the CSS property categories accepted by sniff_page."
     )]
     pub async fn sniff_css_categories(&self) -> Result<String, ErrorData> {
         Ok(CATEGORIES_LIST.to_string())
@@ -1063,15 +1085,15 @@ impl ServerHandler for SniffMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         Ok(ListResourcesResult::with_all_items(vec![
-            Resource::new("sniffCSS://prompts/eval", "Eval prompt")
+            Resource::new("sniff://prompts/eval", "Eval prompt")
                 .with_title("AI evaluation prompt")
-                .with_description("Prompt template to evaluate a sniffCSS-diff delta")
+                .with_description("Prompt template to evaluate a sniff diff delta")
                 .with_mime_type("text/markdown"),
-            Resource::new("sniffCSS://schemas/eval", "Eval response schema")
+            Resource::new("sniff://schemas/eval", "Eval response schema")
                 .with_title("AI evaluation JSON schema")
                 .with_description("Rigid JSON Schema the AI answer must validate against")
                 .with_mime_type("application/json"),
-            Resource::new("sniffCSS://guides/golden", "Golden runbook")
+            Resource::new("sniff://guides/golden", "Golden runbook")
                 .with_title("Padrão ouro de execução")
                 .with_description(
                     "The deterministic capture/diff/check/eval recipe the tools are optimized for",
@@ -1086,15 +1108,9 @@ impl ServerHandler for SniffMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let contents = match request.uri.as_str() {
-            "sniffCSS://prompts/eval" => {
-                ResourceContents::text(EVAL_PROMPT, "sniffCSS://prompts/eval")
-            }
-            "sniffCSS://schemas/eval" => {
-                ResourceContents::text(EVAL_SCHEMA, "sniffCSS://schemas/eval")
-            }
-            "sniffCSS://guides/golden" => {
-                ResourceContents::text(GOLDEN_RUN, "sniffCSS://guides/golden")
-            }
+            "sniff://prompts/eval" => ResourceContents::text(EVAL_PROMPT, "sniff://prompts/eval"),
+            "sniff://schemas/eval" => ResourceContents::text(EVAL_SCHEMA, "sniff://schemas/eval"),
+            "sniff://guides/golden" => ResourceContents::text(GOLDEN_RUN, "sniff://guides/golden"),
             other => {
                 return Err(ErrorData::resource_not_found(
                     format!("unknown resource `{other}`"),
@@ -1110,14 +1126,14 @@ impl ServerHandler for SniffMcpServer {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map `sniffCSS_page` arguments to a full `SniffConfig`, with no server
+/// Map `sniff_page` arguments to a full `SniffConfig`, with no server
 /// defaults (used by tests).
 #[cfg(test)]
 fn build_sniff_config(request: &SniffPageRequest) -> Result<SniffConfig, String> {
     build_sniff_config_with(request, &ServerDefaults::default())
 }
 
-/// Map `sniffCSS_page` arguments to a full `SniffConfig`, merging team-wide
+/// Map `sniff_page` arguments to a full `SniffConfig`, merging team-wide
 /// [`ServerDefaults`]: default headers, default storage state, and `SNIFF_BASE_URL`
 /// prefixing for relative URLs. Explicit per-call values win over defaults.
 fn build_sniff_config_with(
@@ -1741,7 +1757,7 @@ mod tests {
 
     #[test]
     fn load_snapshot_prefers_path_over_inline() {
-        let dir = std::env::temp_dir().join(format!("sniffCSS-mcp-srv-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sniff-mcp-srv-{}", std::process::id()));
         let store = SnapshotStore::new(dir.clone());
         let base =
             "{\"id\":1,\"tag\":\"DIV\",\"selector\":\"div.card\",\"depth\":0,\"children\":[]}\n";
@@ -1769,9 +1785,9 @@ mod tests {
 
     #[test]
     fn resources_embedded_from_docs() {
-        assert!(EVAL_PROMPT.contains("sniffCSS-diff"));
+        assert!(EVAL_PROMPT.contains("sniff diff"));
         assert!(EVAL_SCHEMA.contains("SniffEvalResponse"));
-        assert!(GOLDEN_RUN.contains("sniffCSS"));
+        assert!(GOLDEN_RUN.contains("sniff"));
     }
 
     #[test]

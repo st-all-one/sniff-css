@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Wait-wrapper for the sniffCSS toolchain inside the Docker container.
+# Wait-wrapper for the sniff toolchain inside the Docker container.
 #
 # The real binaries live at /opt/sniffcss/bin/; this wrapper (installed as
-# /usr/local/bin/sniffCSS, sniffCSS-diff, sniffCSS-check, sniffCSS-mcp) waits
+# /usr/local/bin/sniff and /usr/local/bin/sniff-mcp) waits
 # until the in-container GUI Chromium's CDP endpoint is reachable, then execs
 # the real binary. This avoids "browser not ready yet" races right after the
 # container boots.
@@ -11,9 +11,16 @@ set -euo pipefail
 self="$(basename "$0")"
 real="/opt/sniffcss/bin/${self}"
 
-# Only browsers-based tools need the wait. diff/check are pure offline.
+# Only verbs that drive the browser need the wait. `sniff capture` and the MCP
+# server capture pages; diff/check/snapshots/prime/self/help are offline.
 case "$self" in
-  sniffCSS | sniffCSS-mcp) ;;
+  sniff)
+    case "${1:-}" in
+      capture) ;;
+      *) exec "$real" "$@" ;;
+    esac
+    ;;
+  sniff-mcp) ;;
   *) exec "$real" "$@" ;;
 esac
 
@@ -32,7 +39,7 @@ host="${hostport%:*}"; port="${hostport##*:}"
 deadline=$(( $(date +%s) + 60 ))
 until exec 3<>"/dev/tcp/${host}/${port}" 2>/dev/null; do
   if (( $(date +%s) >= deadline )); then
-    echo "[sniffCSS] CDP endpoint ${endpoint} not ready after 60s" >&2
+    echo "[sniff] CDP endpoint ${endpoint} not ready after 60s" >&2
     exec "$real" "$@"
   fi
   sleep 1

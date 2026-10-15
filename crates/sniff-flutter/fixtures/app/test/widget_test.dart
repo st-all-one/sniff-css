@@ -1,4 +1,4 @@
-// Smoke test for the sniffCSS fixture app: the fixed colors/text must be
+// Smoke test for the sniff fixture app: the fixed colors/text must be
 // present, since the integration tests assert against them.
 
 import 'package:flutter/material.dart';
@@ -10,7 +10,7 @@ void main() {
   testWidgets('fixture renders the fixed colors and text', (tester) async {
     await tester.pumpWidget(const SniffFixtureApp());
 
-    expect(find.text('Olá, sniffCSS'), findsOneWidget);
+    expect(find.text('Olá, sniff'), findsOneWidget);
     expect(find.byType(ElevatedButton), findsOneWidget);
     expect(find.text('Button'), findsOneWidget);
 
@@ -25,7 +25,7 @@ void main() {
         .firstWhere((b) => b.color == const Color(0xFF2563EB));
     expect(box.color, const Color(0xFF2563EB));
 
-    final text = tester.widget<Text>(find.text('Olá, sniffCSS'));
+    final text = tester.widget<Text>(find.text('Olá, sniff'));
     expect(text.style?.color, Colors.white);
     expect(text.style?.fontSize, 24);
     expect(text.style?.fontWeight, FontWeight.bold);

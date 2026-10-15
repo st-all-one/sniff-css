@@ -1,4 +1,4 @@
-//! Deterministic UI checks over `sniffCSS` snapshots.
+//! Deterministic UI checks over `sniff` snapshots.
 //!
 //! Two kinds of checks, both offline and LLM-free (the LLM only interprets
 //! the results):
@@ -7,6 +7,8 @@
 //!   selector, finds the "odd one out" against the group norm.
 //! - **Derived rules** ([`rules`]): measured WCAG/UX heuristics (contrast,
 //!   target size, focus indicator, hidden focusables, empty alt).
+
+#![forbid(unsafe_code)]
 
 pub mod error;
 pub mod rules;

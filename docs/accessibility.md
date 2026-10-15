@@ -1,8 +1,8 @@
-# Auditoria de acessibilidade com `sniffCSS`
+# Auditoria de acessibilidade com `sniff`
 
 Workflow validado contra páginas reais (portais de câmara e governo). O contraste
 é **medido** (fundo efetivo resolvido in-page), a perceptibilidade é **graduada**
-(`is_user_noticeable`) e as regras `sniffCSS-check` são **determinísticas** — a IA
+(`is_user_noticeable`) e as regras `sniff check` são **determinísticas** — a IA
 só interpreta evidências, não chuta.
 
 ## Facetas de acessibilidade
@@ -45,22 +45,22 @@ Divide o antigo `is_visible` em dois eixos ortogonais:
 ```bash
 # Visão estrutural: landmarks, headings, links, imagens + contraste + AX.
 # compact/contrast/ax já vêm ON por padrão; --ax-tree é o único opt-in.
-sniffCSS -u "$URL" -s "body" --depth 5 --ax-tree \
+sniff capture -u "$URL" -s "body" --depth 5 --ax-tree \
   > body.jsonl
 
 # Regiões profundas (menu, rodapé, formulários, carrossel) — contraste não
 # depende da profundidade (resolvido in-page), o depth controla só o tamanho.
-sniffCSS -u "$URL" -s "nav"    --depth 4 > nav.jsonl
-sniffCSS -u "$URL" -s "footer" --depth 6 > footer.jsonl
-sniffCSS -u "$URL" -s "main"   --depth 5 > main.jsonl
-sniffCSS -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
+sniff capture -u "$URL" -s "nav"    --depth 4 > nav.jsonl
+sniff capture -u "$URL" -s "footer" --depth 6 > footer.jsonl
+sniff capture -u "$URL" -s "main"   --depth 5 > main.jsonl
+sniff capture -u "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
 ```
 
 ### 2. Regras determinísticas
 
 ```bash
-sniffCSS-check --input main.jsonl  --rules     # contrast-aa/contrast-aaa, target-size, focus-indicator, hidden-focusable, empty-alt-image, aria-hidden-focusable, + erros comuns de UI/UX
-sniffCSS-check --input body.jsonl  --uniform   # o "card estranho" entre irmãos
+sniff check --input main.jsonl  --rules     # contrast-aa/contrast-aaa, target-size, focus-indicator, hidden-focusable, empty-alt-image, aria-hidden-focusable, + erros comuns de UI/UX
+sniff check --input body.jsonl  --uniform   # o "card estranho" entre irmãos
 ```
 
 `--rules` usa o facet `contrast` **medido pela engine** (fundo efetivo
@@ -71,7 +71,7 @@ manual).
 
 ```bash
 # Falhas de contraste AA (só as reais)
-sniffCSS-check --input main.jsonl --rules \
+sniff check --input main.jsonl --rules \
   | jq -r 'select(.check=="contrast-aa" and .status=="fail") | [.tag,.selector,.evidence]|@tsv'
 
 # Interativos sem nome acessível (1.1.1/2.4.4/4.1.2)

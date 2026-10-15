@@ -99,6 +99,17 @@ async fn driver_error_responses_become_errors() {
 
 #[tokio::test]
 async fn extractor_round_trips_over_vm_service() {
+    // Find Text via the nested tree.
+    fn find<'a>(
+        node: &'a sniff_flutter::ElementSnapshot,
+        tag: &str,
+    ) -> Option<&'a sniff_flutter::ElementSnapshot> {
+        if node.tag == tag {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, tag))
+    }
+
     let addr = spawn_mock_vm_service(default_properties()).await;
     let uri = format!("ws://{addr}/token/ws");
 
@@ -116,15 +127,6 @@ async fn extractor_round_trips_over_vm_service() {
     );
 
     // Find Text via the nested tree.
-    fn find<'a>(
-        node: &'a sniff_flutter::ElementSnapshot,
-        tag: &str,
-    ) -> Option<&'a sniff_flutter::ElementSnapshot> {
-        if node.tag == tag {
-            return Some(node);
-        }
-        node.children.iter().find_map(|c| find(c, tag))
-    }
     let text = find(app, "Text").expect("Text node");
     assert_eq!(text.parent_id, Some(4), "Text parent is Center (id 4)");
     assert_eq!(text.depth, 4);

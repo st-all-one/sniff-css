@@ -26,3 +26,7 @@ docker/chromium-config/
 # capture secrets from shell output)
 conversations/
 crates/sniff-cdp/src/bin/
+
+# Generated snapshot store (`--persist`/MCP) and `sniff self setup` recipes
+sniff/
+.sniff/

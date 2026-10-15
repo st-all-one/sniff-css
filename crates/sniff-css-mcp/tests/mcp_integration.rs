@@ -3,6 +3,13 @@
 //!
 //! Chrome-backed tests are skipped when no Chromium binary is available.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    reason = "arquivo de teste: falha (`.unwrap()`/`.expect()`/`panic!`) e skip (`eprintln!`) são o resultado esperado"
+)]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -59,10 +66,13 @@ fn fixture_url(name: &str) -> String {
     format!("file://{}", dir.join(name).display())
 }
 
+/// Recorded progress notifications `(fraction, message)`.
+type ProgressLog = Arc<Mutex<Vec<(f64, String)>>>;
+
 /// Minimal client that records progress notifications.
 #[derive(Clone, Default)]
 struct TestClient {
-    progress: Arc<Mutex<Vec<(f64, String)>>>,
+    progress: ProgressLog,
 }
 
 impl ClientHandler for TestClient {
@@ -87,21 +97,16 @@ struct TempDir {
 
 impl TempDir {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "sniffCSS-mcp-it-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("sniff-mcp-it-{}-{seq}", std::process::id()));
         Self { path }
     }
 }
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        drop(std::fs::remove_dir_all(&self.path));
     }
 }
 
@@ -130,6 +135,10 @@ async fn setup(pool: ChromePool) -> (TestClient, Running, TempDir) {
     (client, running, temp)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "helper de teste: `json!(…)` mantém as chamadas concisas"
+)]
 fn tool_call(name: &str, args: serde_json::Value) -> CallToolRequestParams {
     let mut params = CallToolRequestParams::new(name.to_owned());
     params.arguments = Some(args.as_object().expect("args object").clone());
@@ -164,12 +173,12 @@ async fn list_tools_exposes_sniff_css_page_and_diff() {
 
     let tools = running.list_all_tools().await.unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert!(names.contains(&"sniffCSS_page"));
-    assert!(names.contains(&"sniffCSS_diff"));
-    assert!(names.contains(&"sniffCSS_check"));
-    assert!(names.contains(&"sniffCSS_categories"));
+    assert!(names.contains(&"sniff_page"));
+    assert!(names.contains(&"sniff_diff"));
+    assert!(names.contains(&"sniff_check"));
+    assert!(names.contains(&"sniff_categories"));
 
-    let sniff = tools.iter().find(|t| t.name == "sniffCSS_page").unwrap();
+    let sniff = tools.iter().find(|t| t.name == "sniff_page").unwrap();
     assert!(sniff.description.is_some());
     running.cancel().await.unwrap();
 }
@@ -185,18 +194,18 @@ async fn resources_expose_eval_prompt_and_schema() {
 
     let resources = running.list_all_resources().await.unwrap();
     let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
-    assert!(uris.contains(&"sniffCSS://prompts/eval"));
-    assert!(uris.contains(&"sniffCSS://schemas/eval"));
-    assert!(uris.contains(&"sniffCSS://guides/golden"));
+    assert!(uris.contains(&"sniff://prompts/eval"));
+    assert!(uris.contains(&"sniff://schemas/eval"));
+    assert!(uris.contains(&"sniff://guides/golden"));
 
     let prompt = running
-        .read_resource(ReadResourceRequestParams::new("sniffCSS://prompts/eval"))
+        .read_resource(ReadResourceRequestParams::new("sniff://prompts/eval"))
         .await
         .unwrap();
     assert!(!prompt.contents.is_empty());
 
     let missing = running
-        .read_resource(ReadResourceRequestParams::new("sniffCSS://missing"))
+        .read_resource(ReadResourceRequestParams::new("sniff://missing"))
         .await;
     assert!(missing.is_err(), "unknown resource must error");
     running.cancel().await.unwrap();
@@ -212,7 +221,7 @@ async fn sniff_css_page_streams_progress_and_returns_jsonl() {
     let (client, running, _temp) = setup(pool).await;
 
     let params = tool_call_with_progress(
-        "sniffCSS_page",
+        "sniff_page",
         serde_json::json!({
             "url": fixture_url("page.html"),
             "selector": "[data-testid=\"widget\"]",
@@ -282,7 +291,7 @@ async fn sniff_css_page_with_no_match_returns_tool_error() {
     let (_client, running, _temp) = setup(pool).await;
 
     let params = tool_call(
-        "sniffCSS_page",
+        "sniff_page",
         serde_json::json!({
             "url": fixture_url("page.html"),
             "selector": ".does-not-exist",
@@ -309,7 +318,7 @@ async fn sniff_css_diff_via_persisted_paths_returns_delta_and_summary() {
 
     // A __sniff reference return lets us diff by persisted path.
     let params = tool_call_with_progress(
-        "sniffCSS_page",
+        "sniff_page",
         serde_json::json!({
             "url": fixture_url("page.html"),
             "selector": "[data-testid=\"widget\"]",
@@ -342,7 +351,7 @@ async fn sniff_css_diff_via_persisted_paths_returns_delta_and_summary() {
     // Diff the snapshot against itself via paths -> zero changes, no inline JSONL.
     let diff = running
         .call_tool(tool_call(
-            "sniffCSS_diff",
+            "sniff_diff",
             serde_json::json!({
                 "base_path": path,
                 "head_path": path,
@@ -377,7 +386,7 @@ async fn sniff_css_diff_rejects_traversal_and_bad_files() {
     // A traversal path must be rejected as invalid params.
     let err = running
         .call_tool(tool_call(
-            "sniffCSS_diff",
+            "sniff_diff",
             serde_json::json!({
                 "base_path": "../escape.jsonl",
                 "head_path": "missing.jsonl",
@@ -396,7 +405,7 @@ async fn sniff_css_diff_rejects_traversal_and_bad_files() {
 
     let diff = running
         .call_tool(tool_call(
-            "sniffCSS_diff",
+            "sniff_diff",
             serde_json::json!({
                 "base_path": "base.jsonl",
                 "head_path": "head.jsonl",
@@ -429,7 +438,7 @@ async fn sniff_css_snapshots_enumerates_persisted_targets() {
     let (_client, running, _temp) = setup(pool).await;
 
     let params = tool_call(
-        "sniffCSS_page",
+        "sniff_page",
         serde_json::json!({
             "url": fixture_url("page.html"),
             "selector": "[data-testid=\"widget\"]",
@@ -443,7 +452,7 @@ async fn sniff_css_snapshots_enumerates_persisted_targets() {
 
     let result = running
         .call_tool(tool_call(
-            "sniffCSS_snapshots",
+            "sniff_snapshots",
             serde_json::json!({ "limit": 10 }),
         ))
         .await
@@ -457,7 +466,12 @@ async fn sniff_css_snapshots_enumerates_persisted_targets() {
         .clone();
     let entry: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(entry["domain"], "local");
-    assert!(entry["path"].as_str().unwrap().ends_with(".jsonl"));
+    let entry_path = entry["path"].as_str().unwrap();
+    assert!(
+        std::path::Path::new(entry_path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+    );
     assert!(entry["created_at"].as_str().unwrap().ends_with('Z'));
     running.cancel().await.unwrap();
 }
@@ -480,7 +494,7 @@ async fn sniff_css_check_finds_odd_card_and_contrast_failure() {
 
     let result = running
         .call_tool(tool_call(
-            "sniffCSS_check",
+            "sniff_check",
             serde_json::json!({
                 "jsonl": jsonl,
                 "uniform": true,
@@ -522,7 +536,7 @@ async fn page_supports_include_invisible_screenshot_attrs_and_summary_return() {
     let (client, running, _temp) = setup(pool).await;
 
     let params = tool_call_with_progress(
-        "sniffCSS_page",
+        "sniff_page",
         serde_json::json!({
             "url": fixture_url("page.html"),
             "selector": "[data-testid=\"widget\"]",

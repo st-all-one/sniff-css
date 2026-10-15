@@ -18,16 +18,20 @@ pub use crate::jsonrpc::JsonRpcEvent as CdpEvent;
 /// Outbound command frame.
 #[derive(Debug, Serialize)]
 pub struct Command<'a> {
+    /// Monotonic request id used to match the response.
     pub id: u64,
+    /// CDP method name, e.g. `Page.navigate`.
     pub method: &'a str,
+    /// Method parameters.
     pub params: Value,
+    /// CDP session id for flattened-target multiplexing, if any.
     #[serde(skip_serializing_if = "Option::is_none", rename = "sessionId")]
     pub session_id: Option<&'a str>,
 }
 
 impl<'a> Command<'a> {
     /// Build a command with no params.
-    pub fn no_params(method: &'a str, id: u64, session_id: Option<&'a str>) -> Command<'a> {
+    pub fn no_params(method: &'a str, id: u64, session_id: Option<&'a str>) -> Self {
         Command {
             id,
             method,
@@ -41,6 +45,10 @@ impl<'a> Command<'a> {
 pub type WebSocketUrl = String;
 
 /// Browser-level params used when launching Chromium.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flags independentes de linha de comando do Chromium, não estados mutuamente exclusivos"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     /// Path to the Chrome/Chromium binary. Defaults to an auto-detected one.

@@ -4,10 +4,72 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
-## [Unreleased]
+## [0.5.0] — 2026-10-15
+
+Release de **qualidade e estabilidade**: base **Rust 1.99 / Edition 2024**,
+toolchain de rigor (clippy/rustfmt/deny), CI completo e **determinismo como
+padrão**.
+
+### Changed
+
+- **Nova superfície da CLI (modelo knudge)** — o binário instalado passa de
+  `sniffCSS` para **`sniff`**, com verbos: `capture`, `diff`, `check`,
+  `snapshots`, `prime`, `self` e `help`. `sniffCSS-diff`/`sniffCSS-check` viram
+  `sniff diff`/`sniff check` (os crates seguem como bibliotecas) e
+  `sniffCSS-mcp` vira **`sniff-mcp`**. Sem verbo = help (exit 0); flags globais
+  `--json`/`--log-level`/`--quiet`; envelope de máquina
+  (`{success, command, data?, error{code,message,retryable}, warnings?}`) e
+  códigos de saída (`2` inválido, `3` não encontrado, `5` I/O, `70` interno).
+  O instalador **remove os binários legados** `sniffCSS*`. Contrato em
+  [`docs/cli-surface.md`](docs/cli-surface.md).
+- **Toolchain Rust 1.99 / Edition 2024** — `rust-toolchain.toml` fixa o canal
+  `1.99`; `rust-version` e `clippy.toml::msrv` alinhados; crates em Edition 2024
+  (resolver v3).
+- **Rigor de lints (fase 3)** — `[workspace.lints]` com os grupos
+  `all`/`correctness`/`suspicious`/`style`/`complexity`/`perf`/`pedantic`/
+  `nursery`/`cargo`; restriction curada. Em `deny`: `unwrap_used`,
+  `expect_used`, `panic`, `unreachable`, `disallowed_macros`,
+  `print_stdout`/`print_stderr`, `indexing_slicing`,
+  `arithmetic_side_effects`, `disallowed_methods`, `disallowed_types`,
+  `as_conversions` + `cast_*`, `undocumented_unsafe_blocks`,
+  `allow_attributes(_without_reason)` e `let_underscore_*`.
+- **Determinismo como padrão** — `HashMap`/`HashSet` → `BTreeMap`/`BTreeSet`;
+  ordenações por `f64::total_cmp`/`to_bits` (precisão/ordem totais); fontes
+  não-determinísticas centralizadas e injetáveis. O contrato byte-exato segue
+  em [`docs/golden-run.md`](docs/golden-run.md).
+- **Zero `unsafe`** — `#![forbid(unsafe_code)]` em `sniff-core`,
+  `sniff-css-diff` e `sniff-css-check`; os testes que mutavam o ambiente passam
+  a injetar o diretório.
+- **Dependências** — `cargo update` (50 crates) e `tokio-tungstenite`
+  0.26 → 0.30; dependências não usadas removidas. Ver
+  [`docs/dependencies.md`](docs/dependencies.md).
 
 ### Added
 
+- **`sniff prime`** — protocolo de uso estático, byte-idêntico por versão,
+  compacto por padrão (`--long` para o detalhamento).
+- **`sniff init`** — grava/atualiza um bloco gerenciado por marcadores
+  (`<!-- sniff:start/end -->`) no `AGENTS.md` do projeto, de forma idempotente e
+  preservando o restante do arquivo (mesma segurança do `kd init`); `--force`
+  sobrescreve o arquivo inteiro. O bloco é um protocolo enxuto em inglês com os
+  casos de uso mais comuns (TLS self-signed, auth, sessão, ações, Flutter).
+- **`sniff self`** — `setup <cliente>`, `completions <shell>`, `upgrade`
+  (`--dry-run`) e `version`.
+- **`sniff snapshots`** — lista os snapshots persistidos sob
+  `SNIFF_SNAPSHOT_DIR`/`./sniff`.
+- **MCP** — tools renomeadas para `sniff_page`, `sniff_diff`, `sniff_check`,
+  `sniff_snapshots`, `sniff_categories`, `sniff_flutter_page`; recursos
+  `sniff://…`; store em `sniff/`.
+- **CI** (`.github/workflows/ci.yml`) — `fmt`, `clippy --all-targets -D
+  warnings`, `test`, `cargo deny`, `cargo audit`, `cargo machete`, `typos`,
+  **Miri** (smoke do núcleo) e **fuzz** (JSONL + JSON-RPC).
+- **Benchmarks** com `criterion` (diff, check, color, ax), baseline em
+  [`docs/benchmarks.md`](docs/benchmarks.md).
+- **Verificação dinâmica** — `sniff-core/tests/miri_smoke.rs` e crate `fuzz/`
+  standalone; o decoder JSON-RPC virou a função pura `decode_incoming`.
+- **Docs de qualidade** — [`docs/quality.md`](docs/quality.md),
+  [`docs/phase-3.md`](docs/phase-3.md) e
+  [`docs/dependencies.md`](docs/dependencies.md).
 - **`--ignore-certificate-errors` (e `SNIFF_IGNORE_CERTIFICATE_ERRORS`)** —
   captura páginas atrás de certificado TLS self-signed (dev servers tipo
   `https://app.local:3443`) em vez de fotografar o interstitial "conexão não é
@@ -28,6 +90,10 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   `~/.local/bin` nos rc files, ignorando `INSTALL_DIR`; agora grava o
   diretório efetivo (e mantém `${HOME}/.local/bin` como forma portátil no
   caso default).
+- **Correções guiadas por lint (fase 2/3)** — bools → enums, `drop(...)` no
+  lugar de `let _ =`, `TryFrom`/`From` no lugar de `as`, `saturating_*` na
+  aritmética, `Box::pin` em futures grandes, ramos impossíveis sem `panic!`,
+  e `unwrap`/`expect` eliminados do código de produção.
 
 ## [0.4.1] — 2026-08-15
 
@@ -38,7 +104,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   os bytes de PNG que o engine já havia capturado via CDP; o arquivo era
   criado vazio (ou não era criado) na web. Agora o `SniffOutcome` completo
   (incluindo o screenshot) é repassado ao `emit`.
-- **`contrast-aaa` no `sniffCSS-check`** — bug descoberto na auditoria de
+- **`contrast-aaa` no `sniff check`** — bug descoberto na auditoria de
   regressão: a regra era documentada (`docs/diff-checks.md`, cabeçalho de
   `rules.rs`) mas **nunca era emitida**; só `contrast-aa` saía. A regra
   `contrast-aaa` (WCAG 1.4.6: 7:1 texto normal / 4.5:1 texto grande) agora é
@@ -70,7 +136,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
 
 ### Added
 
-- **Novas regras de UI/UX no `sniffCSS-check`** — 18 heurísticas
+- **Novas regras de UI/UX no `sniff check`** — 18 heurísticas
   determinísticas de erros comuns de CSS, rodam junto do `--rules` (ver
   [`docs/diff-checks.md`](docs/diff-checks.md)):
   - posicionamento: `sticky-in-overflow-hidden`, `fixed-broken-by-transform`,
@@ -87,7 +153,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   - viewport/modal: `horizontal-overflow` e `backdrop-over-modal` (fail).
 - **`__meta.viewport` no snapshot** — a engine grava o viewport emulado no
   `__meta` (`{"viewport":{"width":1366,"height":768}}`) em todos os formatos
-  que emitem `__meta`, e o `DiffDocument` (usado pelo `sniffCSS-check`/MCP) o
+  que emitem `__meta`, e o `DiffDocument` (usado pelo `sniff check`/MCP) o
   expõe aos checks offline — necessário para `horizontal-overflow` e
   `backdrop-over-modal`. Goldens regenerados.
 - **Testes de regressão do screenshot** — guardas automatizados contra o bug
@@ -112,20 +178,20 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
     (`delay`, `network-idle`, `fonts-loaded`, `selector`, `app-flag`), e o
     round-trip em disco de `--storage-state`/`--save-storage-state`
     (`write_file`/`from_file`, incluindo erros de leitura/JSON inválido);
-  - `sniffCSS` CLI: wiring de `--attrs`, `--viewport`, `--pretty`,
+  - `sniff` CLI: wiring de `--attrs`, `--viewport`, `--pretty`,
     `--no-rect`/`--no-path`/`--no-metrics`/`--no-normalize-colors`/`--no-group`,
     filtros `--no-visible`/`--min-width`/`--min-height`/`--exclude`, waits via
     CLI, `--depth`/`--categories`/`--props`/`--pseudo`, merge de headers
     (`SNIFF_DEFAULT_HEADERS` + `--header` com precedência explícita) e
     `--chrome`/`--connect`;
-  - `sniffCSS` CLI: `--persist` (layout `sniffCSS/[domain]/...`, `.gitignore`,
+  - `sniff` CLI: `--persist` (layout `sniff/[domain]/...`, `.gitignore`,
     extensão por formato, `SNIFF_SNAPSHOT_DIR`);
-  - `sniffCSS-diff`: branch `ACTION_REMOVED` de `__actions`, diff de
+  - `sniff diff`: branch `ACTION_REMOVED` de `__actions`, diff de
     pseudo-elementos e `delta_to_string` (unit), e flags `--tolerance`,
     `--ignore-props`, `--no-structural`, `--no-actions` no binário;
-  - `sniffCSS-check`: o binário end-to-end (`--input`/`--rules`/`--uniform`/
+  - `sniff check`: o binário end-to-end (`--input`/`--rules`/`--uniform`/
     `--tolerance` e o gating `--rules`-só);
-  - `sniffCSS-mcp`: o catálogo `sniffCSS_categories` alinhado às categorias do
+  - `sniff-mcp`: o catálogo `sniff_categories` alinhado às categorias do
     engine.
 
 ## [0.4.0] — 2026-08-14
@@ -140,7 +206,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   estabilização por `timeDilation` e screenshot via `adb exec-out screencap`.
   O snapshot sai no **mesmo modelo JSONL** do web (cores Flutter normalizadas
   para `#rrggbb`, chaves mapeadas para o padrão CSS), então os mesmos
-  `sniffCSS-diff`/`sniffCSS-check` funcionam por path. CLI `--backend flutter`
+  `sniff diff`/`sniff check` funcionam por path. CLI `--backend flutter`
   (`--device`/`--avd`/`--project`/`--target`/`--attach`) e tool MCP
   `sniffFlutter_page`.
 - **`JsonRpcClient` genérico** (`sniff-cdp::jsonrpc`) — o roteamento
@@ -148,7 +214,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   tanto CDP quanto o Dart VM Service; `CdpClient` virou um wrapper (API e
   output web intactos).
 - **Backend auto-inferido do URL** — `--backend` agora tem o default `auto`:
-  `sniffCSS -u flutter://emulator-5554 --project DIR --depth N` captura um app
+  `sniff -u flutter://emulator-5554 --project DIR --depth N` captura um app
   Flutter sem `--backend`/`--device`/`-s` (o serial sai do host do URL e o
   `-s` vira `root`). Flags explícitas (`--backend`, `--device`, `--avd`)
   sempre vencem a inferência; o backend web continua exigindo `--selector`.
@@ -182,7 +248,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   ações e diff, e tabela de erros comuns (incluindo a pegadinha das aspas no
   selector e o emulador headless).
 - **Schema de avaliação IA alinhado ao modelo real** —
-  [`docs/sniffCSS-eval.schema.json`](docs/sniffCSS-eval.schema.json) reescrito:
+  [`docs/sniff-eval.schema.json`](docs/sniff-eval.schema.json) reescrito:
   o bloco `measured` agora espelha os facets que a ferramenta emite
   (`contrast` ratio/aa/aaa/large, `aria`/`ax`, `is_user_noticeable`
   display_visible/accessibility_grade, `geometry` rect, `uniformity`
@@ -194,7 +260,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   [`docs/eval-prompt.md`](docs/eval-prompt.md) e o exemplo do
   [`docs/ai-usage.md`](docs/ai-usage.md) foram alinhados (pilar de
   interações, nomes de campo da ferramenta, backend Flutter).
-- **Regra `occluded` no `sniffCSS-check`** — detecta elemento **visualmente
+- **Regra `occluded` no `sniff check`** — detecta elemento **visualmente
   atrás** de outro que o cobre: sobreposição de `rect` entre nós não-ancestrais/
   não-descendentes dentro da árvore capturada, com quem pinta por cima decidido
   por heurística determinística (`z-index` numérico de `metrics`, senão ordem no
@@ -309,7 +375,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   cada atributo por nó, emitidos sob `attrs` (ex.:
   `"attrs":{"name":"parameters[items][0][title]"}`). Valida reindexação de
   forms sem `curl`/scraping do HTML. O diff passa a comparar `attrs` por chave.
-- **MCP: filtros de visibilidade e geometria** — `sniffCSS_page` ganhou
+- **MCP: filtros de visibilidade e geometria** — `sniff_page` ganhou
   `include_invisible` (equivalente ao CLI `--no-visible`), `exclude`,
   `min_width` e `min_height`, fechando a lacuna de paridade com o CLI que
   obrigava a sair do MCP para capturar conteúdo oculto por animação (WOW.js).
@@ -318,12 +384,12 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   externas (websocket-client, Playwright/Puppeteer anexando via CDP) conseguem
   usar o mesmo browser de `--connect` e do companion GUI do docker.
 - **Persistência no CLI (`--persist`) e pasta auto-ignorada pelo git** — o
-  `sniffCSS` agora aceita `--persist`, que grava o snapshot no mesmo layout do
-  store MCP (`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no CWD ou em
+  `sniff` agora aceita `--persist`, que grava o snapshot no mesmo layout do
+  store MCP (`sniff/[domain]/[UTC]-[path]-[selector].<ext>` no CWD ou em
   `SNIFF_SNAPSHOT_DIR`, no formato de `--output` selecionado). A lógica de
   nomeação/raiz foi unificada em `sniff_core::snapshot`, compartilhada entre
   CLI e MCP. Tanto o store do MCP quanto o `--persist` criam um `.gitignore`
-  com `*` na raiz `sniffCSS/`, então a árvore gerada **nunca é rastreada pelo
+  com `*` na raiz `sniff/`, então a árvore gerada **nunca é rastreada pelo
   git** — a pasta de snapshots fica fora do versionamento por padrão.
 - **Summary virou o digest intermediário (`--summary`/`--output slim`)** — em
   vez de só o esqueleto estrutural (`tag/selector/path/depth/rect/visible`),
@@ -334,17 +400,17 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   `__meta.style_defaults` inicial. ~5-10x menor que o full, mas responde
   "qual a cor/fonte/contraste/role?" sem o JSONL completo.
 - **Summary é o formato padrão (`--summary`) e `--no-summary` extrai o full** —
-  `sniffCSS` agora emite o digest summary por padrão (`--output summary`);
+  `sniff` agora emite o digest summary por padrão (`--output summary`);
   `--no-summary` (ou `--output jsonl`) retorna o snapshot completo
-  não-sumarizado. No MCP, `sniffCSS_page` responde o summary por padrão
+  não-sumarizado. No MCP, `sniff_page` responde o summary por padrão
   (`return:"summary"`); `return:"reference"` dá só o handle `__sniff` e
   `return:"jsonl"` o JSONL completo inline. O CLI é documentado como a
   interface preferida (o MCP é o wrapper para clientes que exigem tools).
 - **Dedup de props constantes no compact (`__meta.style_defaults`)** — props
   com o mesmo valor em todos os nós capturados são hoisted uma única vez para
   o `__meta` e omitidas dos `styles` de cada nó. Medido no site real: **~50-80%
-  menos JSONL (80% dos bytes de estilos)**. `sniffCSS-diff`/`sniffCSS-check`
-  (e MCP `sniffCSS_diff`/`sniffCSS_check`) mesclam os defaults de volta, então
+  menos JSONL (80% dos bytes de estilos)**. `sniff diff`/`sniff check`
+  (e MCP `sniff_diff`/`sniff_check`) mesclam os defaults de volta, então
   mudanças de página inteira (ex.: `font-family`) continuam sendo detectadas;
   o `computed_style_hash` sempre cobre os estilos efetivos completos.
 
@@ -356,7 +422,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
   `[path]-[selector]-[UTC].jsonl` para `[UTC]-[path]-[selector].jsonl`. O
   timestamp UTC agora vem na frente do nome, então as execuções de um mesmo
   alvo ficam **ordenadas cronologicamente** no diretório
-  `sniffCSS/[domain]/` (a execução mais recente é o último arquivo, e a busca
+  `sniff/[domain]/` (a execução mais recente é o último arquivo, e a busca
   pelo snapshot mais novo de um target fica trivial). A escrita continua
   atômica e `list_snapshots`/diff/check seguem operando por caminho; snapshots
   antigos (sufixo de UTC) deixam de aparecer em `list_snapshots`.
@@ -382,7 +448,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
     `Runtime.evaluate` + diff determinístico em Rust), `SniffConfig.effects`/
     `effects_limit`, `--effects`/`--no-effects`/`--effects-limit N`, MCP
     `effects`/`effects_limit`.
-- **Regressão de UI no diff** — `sniffCSS-diff`/`sniffCSS_diff` comparam os
+- **Regressão de UI no diff** — `sniff diff`/`sniff_diff` comparam os
   blocos `__actions` quando ambos os lados os carregam: deltas
   `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` (ex.: `appeared[0].rect.y:
   8 → 900`, `onscreen: true → false`, `effect: revealed → no_effect`) e
@@ -405,7 +471,7 @@ arquitetura, o instalador e a imagem Docker são publicados a partir da mesma ta
     pipeline de waits roda depois das ações contra o DOM pós-interação e o
     `--stabilize` é reaplicado para snapshots determinísticos.
   - MCP: parâmetro `actions` (`[{type, selector, text?, timeout_ms?,
-    settle_ms?}]`, ordenado) no `sniffCSS_page`.
+    settle_ms?}]`, ordenado) no `sniff_page`.
   - `SniffConfig.actions`, `Action` e `parse_action` em `sniff-core`; helpers
     `input_click`/`input_hover`/`input_insert_text` em `sniff-cdp`; módulo
     `sniff_engine::action` (split `prepare`/`perform`) e novo

@@ -1,0 +1,29 @@
+[package]
+name = "sniff-css-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sniff-cdp = { path = "../crates/sniff-cdp" }
+sniff-css-diff = { path = "../crates/sniff-css-diff" }
+
+# Alvo: parser JSONL de snapshots (`sniff-diff`).
+[[bin]]
+name = "jsonl_decode"
+path = "fuzz_targets/jsonl_decode.rs"
+test = false
+doc = false
+bench = false
+
+# Alvo: decodificador de frames JSON-RPC (`sniff-cdp`).
+[[bin]]
+name = "jsonrpc_decode"
+path = "fuzz_targets/jsonrpc_decode.rs"
+test = false
+doc = false
+bench = false

@@ -1,4 +1,4 @@
-# sniffCSS + linuxserver/chromium — Docker container
+# sniff + linuxserver/chromium — Docker container
 #
 # Por padrão os binários PRÉ-COMPILADOS são baixados do GitHub Release que
 # corresponde a $VERSION (ARG), um por arquitetura (linux/amd64 ou linux/arm64,
@@ -9,26 +9,25 @@
 # o que compila do fonte no stage `builder` (com a toolchain Rust embarcada).
 #
 # Variáveis:
-#   ARG VERSION           tag do release (ex.: v0.4.0) — default latest
+#   ARG VERSION           tag do release (ex.: v0.5.0) — default latest
 #   ARG TARGETARCH        definido pelo buildx (amd64/arm64)
 #   ARG BUILD_FROM_SOURCE 0 (download do Release) ou 1 (build do fonte)
 
 # ── Stage 1a: build do fonte (usado só quando BUILD_FROM_SOURCE=1) ──────────
-FROM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS builder
+FROM rust:1.99-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS builder
 
 ARG BUILD_FROM_SOURCE=0
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # sniff-css-mcp embeds docs/eval-prompt.md, docs/golden-run.md e
-# docs/sniffCSS-eval.schema.json em tempo de compilação.
+# docs/sniff-eval.schema.json em tempo de compilação.
 COPY docs ./docs
 
 RUN if [ "${BUILD_FROM_SOURCE}" = "1" ]; then \
         cargo build --release --workspace --bins \
         && mkdir -p /out \
-        && cp target/release/sniffCSS target/release/sniffCSS-diff \
-           target/release/sniffCSS-check target/release/sniffCSS-mcp /out/; \
+        && cp target/release/sniff target/release/sniff-mcp /out/; \
     else \
         mkdir -p /out; \
     fi
@@ -80,14 +79,12 @@ RUN if [ "${BUILD_FROM_SOURCE}" = "1" ]; then \
 FROM lscr.io/linuxserver/chromium:version-e8713bf7@sha256:348379fe0ff2a8d96d1085c568936730f7ae60b8d354fc728848164298fe18c8
 
 # Binários reais fora do caminho; /usr/local/bin tem os wait-wrappers.
-COPY --from=downloader /out/sniffCSS        /opt/sniffcss/bin/sniffCSS
-COPY --from=downloader /out/sniffCSS-diff   /opt/sniffcss/bin/sniffCSS-diff
-COPY --from=downloader /out/sniffCSS-check  /opt/sniffcss/bin/sniffCSS-check
-COPY --from=downloader /out/sniffCSS-mcp    /opt/sniffcss/bin/sniffCSS-mcp
+COPY --from=downloader /out/sniff     /opt/sniffcss/bin/sniff
+COPY --from=downloader /out/sniff-mcp /opt/sniffcss/bin/sniff-mcp
 
-COPY docker/sniffcss-wrapper.sh /opt/sniffcss/wrapper.sh
+COPY docker/sniff-wrapper.sh /opt/sniffcss/wrapper.sh
 RUN chmod +x /opt/sniffcss/bin/* /opt/sniffcss/wrapper.sh \
- && for b in sniffCSS sniffCSS-diff sniffCSS-check sniffCSS-mcp; do \
+ && for b in sniff sniff-mcp; do \
       ln -sf /opt/sniffcss/wrapper.sh /usr/local/bin/"$b"; \
     done
 
@@ -95,16 +92,16 @@ RUN chmod +x /opt/sniffcss/bin/* /opt/sniffcss/wrapper.sh \
 # Fidelity: FullColor 4:4:4 encoding so the GUI shows true 8-bit color.
 ENV SELKIES_H264_FULLCOLOR=true
 
-# Expose the GUI Chromium's DevTools port so sniffCSS can attach to it. The
-# address stays on loopback: sniffCSS runs inside the container (docker exec),
+# Expose the GUI Chromium's DevTools port so sniff can attach to it. The
+# address stays on loopback: sniff runs inside the container (docker exec),
 # so the CDP endpoint is never exposed to the host.
 ENV CHROME_CLI="--remote-debugging-port=9222 --remote-allow-origins=*"
 
-# Default target for sniffCSS and sniffCSS-mcp: the in-container GUI browser.
+# Default target for sniff and sniff-mcp: the in-container GUI browser.
 ENV SNIFF_CONNECT="http://127.0.0.1:9222"
 
 # Persist snapshots under /config (the linuxserver config volume).
-ENV SNIFF_SNAPSHOT_DIR="/config/sniffCSS"
+ENV SNIFF_SNAPSHOT_DIR="/config/sniff"
 
 # linuxserver defaults.
 ENV PUID=1000 \

@@ -16,10 +16,13 @@ pub type Result<T> = std::result::Result<T, VmError>;
 /// Errors from VM Service interactions.
 #[derive(Debug, thiserror::Error)]
 pub enum VmError {
+    /// Transport failed (WebSocket or JSON-RPC).
     #[error("vm service websocket: {0}")]
     Transport(#[from] JsonRpcError),
+    /// A VM Service call returned an error.
     #[error("vm service call `{0}` failed: {1}")]
     Call(String, String),
+    /// Catch-all for other VM Service errors.
     #[error("{0}")]
     Other(String),
 }
@@ -59,7 +62,7 @@ impl VmService {
     }
 
     /// Call any VM Service method (e.g. `getVM`, `ext.flutter.inspector.*`).
-    pub async fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
         let raw = self
             .client
             .call(method, params, None)
@@ -69,7 +72,7 @@ impl VmService {
     }
 
     /// Call a VM Service method with no params.
-    pub async fn call_no_params(&self, method: &str) -> Result<serde_json::Value> {
+    pub async fn call_no_params(&self, method: &str) -> Result<Value> {
         self.client
             .call_no_params(method, None)
             .await
@@ -77,7 +80,7 @@ impl VmService {
     }
 
     /// Basic liveness probe: `getVM` returns the isolate list.
-    pub async fn get_vm(&self) -> Result<serde_json::Value> {
+    pub async fn get_vm(&self) -> Result<Value> {
         self.call_no_params("getVM").await
     }
 
@@ -96,7 +99,7 @@ impl VmService {
 /// The shared client already unwraps the outer `result`; this removes the
 /// `_extensionType` layer so callers see the payload directly (the same shape
 /// `getVM` and friends return). Non-extension methods are returned unchanged.
-fn unwrap_extension_result(method: &str, raw: serde_json::Value) -> serde_json::Value {
+fn unwrap_extension_result(method: &str, raw: Value) -> Value {
     let Value::Object(obj) = &raw else {
         return raw;
     };

@@ -1,5 +1,6 @@
 [workspace]
-resolver = "2"
+# Edition 2024 usa o resolver v3 por padrão (MSRV-aware); declarado para ficar explícito.
+resolver = "3"
 members = [
     "crates/sniff-core",
     "crates/sniff-cdp",
@@ -10,16 +11,21 @@ members = [
     "crates/sniff-css-check",
     "crates/sniff-css-mcp",
 ]
+# O crate de fuzz é standalone (nightly + libfuzzer); não faz parte do workspace.
+exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "CC0-1.0"
+publish = false
+repository = "https://github.com/st-all-one/sniff-css"
+homepage = "https://github.com/st-all-one/sniff-css"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "net"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -28,10 +34,143 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+# ---------------------------------------------------------------------------
+# Níveis de lint (R44). Valores em clippy.toml.
+#
+# Adoção em fases (ver docs/quality.md): as regras já zeradas estão em `deny`;
+# o débito legado que exige refatoração ampla está em `allow` com TODO e será
+# promovido a `deny` conforme for pago. Toda exceção `#[allow]` exige `reason`.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+# Fase 2 (aplicado): documentação e qualificação.
+unsafe_code = "deny"
+missing_docs = "warn"
+unused_qualifications = "deny"
+unused_lifetimes = "deny"
+elided_lifetimes_in_paths = "deny"
+single_use_lifetimes = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+let_underscore_drop = "deny"
+macro_use_extern_crate = "deny"
+meta_variable_misuse = "deny"
+non_ascii_idents = "deny"
+noop_method_call = "deny"
+unused_import_braces = "deny"
+variant_size_differences = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+unused_footnote_definition = "deny"  # novo no rustdoc 1.99 (nota de rodapé sem referência)
+
+[workspace.lints.clippy]
+# Grupos (priority = -1 para permitir overrides pontuais)
+all = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+# TODO(fase 3, A3): triagem em andamento — grupos ligados em `warn`; a
+# allowlist de ruído de domínio fica logo abaixo.
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Restriction curada (fase 2 aplicada).
+multiple_unsafe_ops_per_block = "deny"
+let_underscore_must_use = "deny"
+wildcard_imports = "deny"
+fn_params_excessive_bools = "deny"
+struct_excessive_bools = "deny"
+disallowed_fields = "deny"
+disallowed_macros = "deny"
+disallowed_methods = "deny"
+disallowed_names = "deny"
+disallowed_types = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
+# Tamanho / perf
+large_enum_variant = "deny"
+large_stack_arrays = "deny"
+result_large_err = "warn"
+large_types_passed_by_value = "warn"
+large_stack_frames = "warn"
+large_futures = "warn"
+
+# TODO(fase 3): débito legado — refatorar e promover a `deny`.
+# Plano detalhado por eixo (consistência/estabilidade/segurança/performance)
+# em docs/phase-3.md, ancorado em .agents/skills/rust/.
+# `panic`/`unreachable`/`print_*`/`disallowed_macros` adotados na fase 3
+# (workstream B6): stdout é dado, stderr é log; stderr centralizado em
+# `sniff_core::diagnostic`.
+# Casts (`as_conversions`/`cast_*`) adotados: conversões auditadas em
+# `sniff_core::numeric`; o resto usa `From`/`TryFrom`.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+exit = "allow"
+mem_forget = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+cast_precision_loss = "deny"
+undocumented_unsafe_blocks = "deny"
+type_complexity = "deny"
+let_underscore_untyped = "deny"
+# Estilo não adotado (ruído de domínio, ver docs/phase-3.md §7):
+# nomes curtos geométricos e closures, aninhamento de parser/UI, caminhos
+# absolutos e docs de itens privados (as públicas já são `warn`).
+absolute_paths = "allow"
+min_ident_chars = "allow"
+excessive_nesting = "allow"
+missing_docs_in_private_items = "allow"
+
+# A3 (triagem pedantic/nursery): custo de manutenção > valor, com reason.
+too_many_lines = "allow"                  # parser/UI/captura coesos > 60 linhas
+too_long_first_doc_paragraph = "allow"    # 1º parágrafo detalhado é intencional
+similar_names = "allow"                   # abreviações de domínio (aa/aaa, cover/coverer)
+unused_async_trait_impl = "allow"         # `async` imposto pela trait (rmcp/async-trait)
+redundant_pub_crate = "allow"             # conflita com `unreachable_pub` em crate binário
+
+# Ruidosas: abrimos mão (documentado em docs/quality.md).
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+implicit_hasher = "allow"
+multiple_crate_versions = "allow"
+many_single_char_names = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+option_if_let_else = "allow"
+significant_drop_tightening = "allow"
+missing_const_for_fn = "allow"
+assert_is_empty = "allow"
+missing_safety_doc = "warn"
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+overflow-checks = true
 panic = "abort"
+
+[profile.dev]
+debug-assertions = true
+overflow-checks = true

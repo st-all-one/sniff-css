@@ -7,4 +7,6 @@ ai-guides
 llms.txt
 SKILL.md
 README.md
+sniff
+.sniff
 **/*.rs.bk

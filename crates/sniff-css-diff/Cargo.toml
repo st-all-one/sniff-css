@@ -1,18 +1,23 @@
 [package]
 name = "sniff-css-diff"
-description = "Deterministic tree diff over sniffCSS JSONL snapshots"
+description = "Deterministic tree diff over sniff JSONL snapshots"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-
-[[bin]]
-name = "sniffCSS-diff"
-path = "src/main.rs"
+publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-clap = { workspace = true }
-anyhow = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "diff"
+harness = false
+
+[lints]
+workspace = true

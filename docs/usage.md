@@ -1,6 +1,8 @@
-# Uso da CLI (`sniffCSS`)
+# Uso da CLI — `sniff capture`
 
-Referência completa de captura. Para o pipeline de diff/checks e auditoria de
+Referência completa das flags de **captura** (`sniff capture`). A superfície de
+verbos (`capture`, `diff`, `check`, `snapshots`, `prime`, `self`) está em
+[`cli-surface.md`](cli-surface.md). Para o pipeline de diff/checks e auditoria de
 acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
 [`accessibility.md`](accessibility.md). Para uso orientado a IA,
 [`ai-usage.md`](ai-usage.md).
@@ -10,40 +12,40 @@ acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
 ```bash
 # Computed styles do botão — o default já é otimizado para IA:
 # compact + custom-props + stabilize + contrast + ax ligados.
-sniffCSS --url http://localhost:3000 --selector ".btn-primary"
+sniff capture --url http://localhost:3000 --selector ".btn-primary"
 
 # Full-fidelity (todas as ~400 props do navegador, sem dedup, sem facets
 # medidos) — comportamento antigo:
-sniffCSS --url http://localhost:3000 --selector ".btn-primary" --full
+sniff capture --url http://localhost:3000 --selector ".btn-primary" --full
 
 # Apenas box-model + tipografia, com 1 nível de filhos (flags continuam
 # funcionando e sobrepõem os defaults):
-sniffCSS --url http://localhost:3000 --selector ".card" \
+sniff capture --url http://localhost:3000 --selector ".card" \
   --depth 1 --categories box-model,typography
 
 # Espera o app carregar (flag JS), captura pseudo-elemento e normaliza cores
-sniffCSS --url http://localhost:3000 --selector ".modal" \
+sniff capture --url http://localhost:3000 --selector ".modal" \
   --wait app-flag:__APP_READY__:15000 --pseudo ::before
 
 # Conectar num browser já aberto (Chrome com --remote-debugging-port=9222).
 # Aceita ws:// direto OU um origin http:// que resolve via /json/version.
-sniffCSS --url http://localhost:3000 --selector "header" \
+sniff capture --url http://localhost:3000 --selector "header" \
   --connect http://127.0.0.1:9222
 
 # A mesma coisa usando a variável de ambiente (padrão do container Docker).
-SNIFF_CONNECT=http://127.0.0.1:9222 sniffCSS --url http://localhost:3000 \
+SNIFF_CONNECT=http://127.0.0.1:9222 sniff capture --url http://localhost:3000 \
   --selector "header"
 
 # Dev server com certificado self-signed (ex.: https://app.local:3443): ignora
 # o erro de TLS em vez de capturar o interstitial "conexão não é particular".
-sniffCSS --url https://app.local:3443/home --selector "body" \
+sniff capture --url https://app.local:3443/home --selector "body" \
   --ignore-certificate-errors
 
 # Revelar elementos que só existem após uma interação (modal, dropdown, menu):
 # a ação roda antes da captura; o pipeline de waits roda depois do clique.
-sniffCSS --url http://localhost:3000 --selector ".modal" \
+sniff capture --url http://localhost:3000 --selector ".modal" \
   --click "#open-modal"
-sniffCSS --url http://localhost:3000 --selector ".search-results" \
+sniff capture --url http://localhost:3000 --selector ".search-results" \
   --type "#q:shoes" --wait "network-idle:800:30000"
 ```
 
@@ -82,7 +84,7 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 | `--no-summary` | Emitir o snapshot completo não-sumarizado (`--output jsonl`) em vez do digest padrão | `off` |
 | `--screenshot PATH` | Salvar PNG da página no estado final (pós-stabilize, pós-interação) | — |
 | `--fullpage-screenshot` | Com `--screenshot`: capturar o documento inteiro em vez da viewport | `off` |
-| `--persist` | Espelha o store do MCP: grava o snapshot em `sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no CWD (ou `SNIFF_SNAPSHOT_DIR`), no formato de `--output` selecionado; a pasta ganha um `.gitignore` com `*` e nunca é rastreada pelo git. A saída continua indo para o stdout. | `off` |
+| `--persist` | Espelha o store do MCP: grava o snapshot em `sniff/[domain]/[UTC]-[path]-[selector].<ext>` no CWD (ou `SNIFF_SNAPSHOT_DIR`), no formato de `--output` selecionado; a pasta ganha um `.gitignore` com `*` e nunca é rastreada pelo git. A saída continua indo para o stdout. | `off` |
 | `--attrs a,b` | Capturar atributos DOM verbatim por nó (`getAttribute`), repetível ou comma-separated; emitidos sob `attrs` (ex.: validar `name` de forms) | — |
 | `--compact` | Modo compacto (ver abaixo) | **`on`** (use `--no-compact`) |
 | `--custom-props` | Capturar todas as variáveis CSS (`--*`) | **`on`** (use `--no-custom-props`) |
@@ -109,29 +111,29 @@ sniffCSS --url http://localhost:3000 --selector ".search-results" \
 Captura a árvore de widgets de um app Flutter/Dart nativo em emulador/device
 (análogo do sniff web, mas sobre o **Dart VM Service** em vez de CDP). O app
 precisa estar em build **debug** (release não expõe o VM Service). O snapshot
-sai no **mesmo modelo JSONL** e os mesmos `sniffCSS-diff`/`sniffCSS-check`
+sai no **mesmo modelo JSONL** e os mesmos `sniff diff`/`sniff check`
 funcionam por path.
 
 ```bash
 # Forma enxuta: o URL `flutter://<serial>` infere o backend e o device
 # (`-s` vira `root` se omitido):
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --depth 2
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 2
 
 # Equivalente explícito:
-sniffCSS --backend flutter --device emulator-5554 --project ~/projetos/app \
+sniff capture --backend flutter --device emulator-5554 --project ~/projetos/app \
   --target lib/main.dart --depth 2 -s root
 
 # Anexar a um device/emulador já rodando um app debug (flutter attach):
-sniffCSS -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 2
+sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 2
 
 # Lançar um AVD, rodar o app (flutter run --machine) e capturar:
-sniffCSS -u flutter://pixel --avd pixel --project ~/projetos/app --depth 2
+sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 2
 
 # Screenshot do device junto com a captura:
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
 
 # Viewport do app (media queries/layout do Flutter) em runtime:
-sniffCSS -u flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
+sniff capture -u flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
 ```
 
 > O `--backend` padrão é `auto`: um `--url flutter://<serial>` (ou
@@ -219,7 +221,7 @@ Para um CMS com middleware stateless de IA, o token vai por header — o request
 já nasce autenticado, sem token em URL, `.env` ou proxy:
 
 ```bash
-sniffCSS -u http://localhost:10011/cms -s "main" \
+sniff capture -u http://localhost:10011/cms -s "main" \
   --header "X-CMS-AI-Token: <token>"
 # configure uma vez no shell e nunca repita:
 export SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'
@@ -230,11 +232,11 @@ sobrevivem a restarts do browser):
 
 ```bash
 # 1. faça login via ações e exporte o estado
-sniffCSS -u "$URL/login" -s ".dashboard" \
+sniff capture -u "$URL/login" -s ".dashboard" \
   --type "#email:user@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/state.json
 # 2. nas capturas seguintes, restaure antes da navegação
-sniffCSS -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
+sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
 ```
 
 O mesmo se aplica ao MCP via `headers`/`storage_state`/`save_storage_state`, com
@@ -253,14 +255,14 @@ Um dev server em `https://` com certificado self-signed (ex.:
 `--ignore-certificate-errors` (ou a env `SNIFF_IGNORE_CERTIFICATE_ERRORS`):
 
 ```bash
-sniffCSS -u https://app.local:3443/ouvidoria -s "body" \
+sniff capture -u https://app.local:3443/ouvidoria -s "body" \
   --ignore-certificate-errors
 
 # equivalente via variável de ambiente
-SNIFF_IGNORE_CERTIFICATE_ERRORS=1 sniffCSS -u https://app.local:3443/ -s body
+SNIFF_IGNORE_CERTIFICATE_ERRORS=1 sniff capture -u https://app.local:3443/ -s body
 
 # conectando num browser já aberto (sem reabrir o Chromium com flag)
-sniffCSS -u https://app.local:3443/ouvidoria -s body \
+sniff capture -u https://app.local:3443/ouvidoria -s body \
   --ignore-certificate-errors --connect http://127.0.0.1:9222
 ```
 
@@ -268,7 +270,7 @@ Como funciona: no **launch** a flag `--ignore-certificate-errors` é repassada a
 Chromium; com **`--connect`** o ajuste é aplicado via CDP
 (`Security.setIgnoreCertificateErrors`) antes da navegação. A env
 `SNIFF_IGNORE_CERTIFICATE_ERRORS` aceita `1`, `true`, `yes`, `on` (case-insensitive)
-e é lida tanto pela CLI quanto pelo servidor MCP (`sniffCSS-mcp`).
+e é lida tanto pela CLI quanto pelo servidor MCP (`sniff-mcp`).
 
 ### Mapa de efeito de UI (`__actions`)
 
@@ -299,11 +301,11 @@ snapshot de página inteira antes/depois da ação e responde **o que** mudou e
 Exemplo:
 
 ```bash
-sniffCSS --url "$URL" --selector ".modal" --click "#open" \
+sniff capture --url "$URL" --selector ".modal" --click "#open" \
   | jq 'select(has("__actions")) | .__actions[0] | {effect, summary}'
 ```
 
-O `sniffCSS-diff` compara os blocos `__actions` entre base/head quando ambos
+O `sniff diff` compara os blocos `__actions` entre base/head quando ambos
 existem, emitindo `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` (regressão
 de UI) e somando em `actions_changed`.
 
@@ -395,7 +397,7 @@ pré-AI-default. Útil quando você precisa do conjunto **completo** de
 propriedades do navegador e das cores como o Chrome reporta:
 
 ```bash
-sniffCSS --url http://localhost:3000 --selector ".card" --full
+sniff capture --url http://localhost:3000 --selector ".card" --full
 ```
 
 A mesma saída também pode ser obtida flag a flag:
@@ -417,7 +419,7 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
   dedup do compact) e ficam omitidas por nó. ~5-10x menor que o snapshot
   completo.
 - `--output jsonl` (ou `--no-summary`): o snapshot completo não-sumarizado —
-  usado como entrada de `sniffCSS-diff`/`sniffCSS-check`/jq.
+  usado como entrada de `sniff diff`/`sniff check`/jq.
 - Com `--stable-key data-testid`, os seletores saem como `button[data-testid="submit"]`
   em vez de dependerem de `id` gerados (`react-aria-123`), mantendo o output
   **matchável entre deploys**.
@@ -428,7 +430,7 @@ No modo compact (padrão), props cujo valor é idêntico em **todos** os nós
 capturados são hoisted uma única vez para a linha `__meta.style_defaults`
 (`{categoria: {prop: value}}`) e omitidas dos `styles` de cada nó. Em páginas
 típicas isso corta 50-80% do JSONL (80% dos bytes de estilos) **sem perder
-fidelidade**: `sniffCSS-diff` e `sniffCSS-check` (e o MCP) mesclam os defaults
+fidelidade**: `sniff diff` e `sniff check` (e o MCP) mesclam os defaults
 de volta, então uma mudança de página inteira (ex.: troca de `font-family`) é
 detectada normalmente. O `computed_style_hash` de cada nó sempre cobre os
 estilos efetivos completos.
@@ -456,8 +458,8 @@ Complementa o snapshot calculado com o "como a página realmente está" no estad
 final do pipeline (pós-stabilize, pós-interações):
 
 ```bash
-sniffCSS -u "$URL" -s ".modal" --click "#open" --screenshot modal.png
-sniffCSS -u "$URL" -s "main" --depth 5 --screenshot page.png --fullpage-screenshot
+sniff capture -u "$URL" -s ".modal" --click "#open" --screenshot modal.png
+sniff capture -u "$URL" -s "main" --depth 5 --screenshot page.png --fullpage-screenshot
 ```
 
 O PNG é um artefato para olho humano; o JSONL continua sendo a fonte de verdade
@@ -471,26 +473,26 @@ reindexação de um form), peça-o explicitamente — ele entra verbatim no mapa
 `attrs` de cada nó e é comparado por chave pelo diff:
 
 ```bash
-sniffCSS -u "$URL" -s "form#sucesu" --depth 3 --attrs name,value
+sniff capture -u "$URL" -s "form#sucesu" --depth 3 --attrs name,value
 # ... "attrs": {"name": "parameters[items][0][title]", "value": "Primeiro"} ...
 ```
 
 ## Persistência em disco (`--persist`)
 
 Espelha o layout do store do MCP sem precisar de um cliente MCP: cria
-`sniffCSS/[domain]/[UTC]-[path]-[selector].<ext>` no diretório de execução
+`sniff/[domain]/[UTC]-[path]-[selector].<ext>` no diretório de execução
 (ou em `SNIFF_SNAPSHOT_DIR` quando definida), no formato de `--output`
 selecionado (`.jsonl` para `jsonl`/`jsonl-flat`/`summary`, `.json` para
-`json`). A raiz `sniffCSS/` ganha um `.gitignore` com `*`, então toda a árvore
+`json`). A raiz `sniff/` ganha um `.gitignore` com `*`, então toda a árvore
 gerada é **ignorada pelo git** automaticamente. O snapshot continua saindo no
 stdout; o caminho salvo é reportado no stderr.
 
 ```bash
-sniffCSS -u "$URL" -s "main" --depth 5 --persist
-# criou sniffCSS/localhost_3000/20260812T101530Z-index-main.jsonl
+sniff capture -u "$URL" -s "main" --depth 5 --persist
+# criou sniff/localhost_3000/20260812T101530Z-index-main.jsonl
 # (como o summary é o formato padrão, o arquivo guarda o digest; para persistir
 #  o snapshot completo — necessário como entrada de diff/check — use junto o
-#  --no-summary, ex.: sniffCSS -u "$URL" -s "main" --depth 5 --no-summary --persist)
+#  --no-summary, ex.: sniff capture -u "$URL" -s "main" --depth 5 --no-summary --persist)
 ```
 
 ## Docker
@@ -511,7 +513,7 @@ ambiente: veja [`docker.md`](docker.md).
   # versão específica:
   curl --proto '=https' --tlsv1.2 -sSf \
     https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
-    | VERSION=v0.4.1 sh
+    | VERSION=v0.5.0 sh
   ```
 
 - **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em

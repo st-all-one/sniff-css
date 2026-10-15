@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://sniff.dev/schemas/sniffCSS-eval.schema.json",
+  "$id": "https://sniff.dev/schemas/sniff-eval.schema.json",
   "title": "SniffEvalResponse",
-  "description": "Structured answer the LLM must return when evaluating a sniffCSS-diff delta (+ optional sniffCSS-check evidence) for a web page or a Flutter/Dart app. Rigid schema: every field is bounded and `measured` mirrors only the values the tool actually emits, so the pipeline can filter critical regressions automatically without trusting invented numbers.",
+  "description": "Structured answer the LLM must return when evaluating a sniff diff delta (+ optional sniff check evidence) for a web page or a Flutter/Dart app. Rigid schema: every field is bounded and `measured` mirrors only the values the tool actually emits, so the pipeline can filter critical regressions automatically without trusting invented numbers.",
   "type": "object",
   "required": ["page_url", "status", "score_change", "summary", "changes_evaluated"],
   "additionalProperties": false,
@@ -52,7 +52,7 @@
         "properties": {
           "node_selector": {
             "type": "string",
-            "description": "Identity of the changed node exactly as sniffCSS-diff emits it: a web selector/path (e.g. `button[data-testid=\"submit\"]`), a Flutter widget identity (e.g. `FilledButton-[<'counter'>][0]`, widget class as tag), or an interaction-effect delta line (`__actions[N]` for ACTION_CHANGED/ADDED/REMOVED)."
+            "description": "Identity of the changed node exactly as sniff diff emits it: a web selector/path (e.g. `button[data-testid=\"submit\"]`), a Flutter widget identity (e.g. `FilledButton-[<'counter'>][0]`, widget class as tag), or an interaction-effect delta line (`__actions[N]` for ACTION_CHANGED/ADDED/REMOVED)."
           },
           "impact": {
             "type": "string",
@@ -141,7 +141,7 @@
               },
               "uniformity": {
                 "type": "object",
-                "description": "A uniformity outlier (odd instance vs group norm) from sniffCSS-check.",
+                "description": "A uniformity outlier (odd instance vs group norm) from sniff check.",
                 "additionalProperties": false,
                 "properties": {
                   "property": { "type": "string" },
@@ -151,7 +151,7 @@
               },
               "rule": {
                 "type": "object",
-                "description": "A derived-rule result from sniffCSS-check.",
+                "description": "A derived-rule result from sniff check.",
                 "additionalProperties": false,
                 "properties": {
                   "check": {

@@ -19,7 +19,6 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use thiserror::Error;
@@ -31,16 +30,27 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 /// Error type for the JSON-RPC transport layer.
 #[derive(Debug, Error)]
 pub enum JsonRpcError {
+    /// Failed to open the WebSocket connection.
     #[error("websocket connect failed: {0}")]
     Connect(String),
+    /// Transport failure after the connection was established.
     #[error("websocket transport: {0}")]
     Transport(String),
+    /// The peer returned a protocol-level error for the method.
     #[error("protocol returned error for `{method}`: {message}")]
-    Protocol { method: String, message: String },
+    Protocol {
+        /// JSON-RPC method that failed.
+        method: String,
+        /// Error message returned by the peer.
+        message: String,
+    },
+    /// Timed out waiting for a response.
     #[error("timed out waiting for `{0}`")]
     Timeout(String),
+    /// The connection was closed by the peer.
     #[error("connection closed")]
     Closed,
+    /// Underlying I/O error.
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
@@ -50,11 +60,59 @@ pub type Result<T> = std::result::Result<T, JsonRpcError>;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = SplitSink<WsStream, WsMessage>;
+/// `id -> oneshot` routing table for in-flight requests.
+type PendingMap = std::collections::BTreeMap<u64, oneshot::Sender<Value>>;
+
+/// A decoded inbound JSON-RPC frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Incoming {
+    /// A response to a request we sent (`id`), carrying the raw envelope.
+    Response {
+        /// The request id this response answers.
+        id: u64,
+        /// The full JSON envelope (result or error).
+        value: Value,
+    },
+    /// An unsolicited event (`method`).
+    Event(JsonRpcEvent),
+}
+
+/// Decodes one inbound frame; `None` for malformed frames.
+///
+/// Pure and total: any UTF-8 input yields `Some`/`None`, never a panic — the
+/// property the `jsonrpc_decode` fuzz target checks.
+#[must_use]
+pub fn decode_incoming(text: &str) -> Option<Incoming> {
+    decode_value(serde_json::from_str::<Value>(text).ok()?)
+}
+
+fn decode_value(value: Value) -> Option<Incoming> {
+    if let Some(id) = value.get("id").and_then(Value::as_u64) {
+        return Some(Incoming::Response { id, value });
+    }
+    let method = value.get("method").and_then(Value::as_str)?;
+    let session_id = value
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let params = value
+        .get("params")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    Some(Incoming::Event(JsonRpcEvent {
+        method: method.to_string(),
+        params,
+        session_id,
+    }))
+}
 
 /// An inbound unsolicited event delivered to subscribers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonRpcEvent {
+    /// Event method name, e.g. `Network.loadingFinished`.
     pub method: String,
+    /// Event parameters.
     pub params: Map<String, Value>,
     /// Passthrough of the `sessionId` frame field (CDP only; `None` for the
     /// Dart VM Service).
@@ -76,9 +134,13 @@ impl JsonRpcEvent {
 /// Outbound request frame.
 #[derive(Debug, Serialize)]
 pub struct Request<'a> {
+    /// Monotonic request id used to match the response.
     pub id: u64,
+    /// JSON-RPC method name, e.g. `Page.navigate`.
     pub method: &'a str,
+    /// Method parameters.
     pub params: Value,
+    /// `sessionId` for flattened-target multiplexing (CDP only).
     #[serde(skip_serializing_if = "Option::is_none", rename = "sessionId")]
     pub session_id: Option<&'a str>,
 }
@@ -91,7 +153,7 @@ pub struct Request<'a> {
 #[derive(Clone)]
 pub struct JsonRpcClient {
     next_id: Arc<AtomicU64>,
-    pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    pending: Arc<StdMutex<PendingMap>>,
     events: tokio::sync::broadcast::Sender<JsonRpcEvent>,
     sink: Arc<tokio::sync::Mutex<WsSink>>,
     _reader: Arc<tokio::task::JoinHandle<()>>,
@@ -101,7 +163,7 @@ impl std::fmt::Debug for JsonRpcClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JsonRpcClient")
             .field("next_id", &self.next_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -114,7 +176,7 @@ impl JsonRpcClient {
         let (sink, mut stream) = ws.split();
 
         let next_id = Arc::new(AtomicU64::new(1));
-        let pending = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let pending = Arc::new(std::sync::Mutex::new(PendingMap::new()));
         let (events_tx, _) = tokio::sync::broadcast::channel(256);
 
         let pending_reader = pending.clone();
@@ -123,8 +185,8 @@ impl JsonRpcClient {
             while let Some(msg) = stream.next().await {
                 match msg {
                     Ok(WsMessage::Text(text)) => {
-                        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                            Self::dispatch(value, &pending_reader, &events_reader);
+                        if let Some(incoming) = decode_incoming(&text) {
+                            Self::dispatch(incoming, &pending_reader, &events_reader);
                         }
                     }
                     Ok(WsMessage::Close(_)) | Err(_) => break,
@@ -144,32 +206,17 @@ impl JsonRpcClient {
 
     /// Route a decoded message to the pending map or the event bus.
     fn dispatch(
-        value: Value,
-        pending: &StdMutex<HashMap<u64, oneshot::Sender<Value>>>,
+        incoming: Incoming,
+        pending: &StdMutex<PendingMap>,
         events: &tokio::sync::broadcast::Sender<JsonRpcEvent>,
     ) {
-        if let Some(id) = value.get("id").and_then(Value::as_u64) {
-            if let Some(tx) = pending.lock().ok().and_then(|mut m| m.remove(&id)) {
-                let _ = tx.send(value);
+        match incoming {
+            Incoming::Response { id, value } => {
+                if let Some(tx) = pending.lock().ok().and_then(|mut m| m.remove(&id)) {
+                    drop(tx.send(value));
+                }
             }
-            return;
-        }
-        if let Some(method) = value.get("method").and_then(Value::as_str) {
-            let session_id = value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(String::from);
-            let params = value
-                .get("params")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            let event = JsonRpcEvent {
-                method: method.to_string(),
-                params,
-                session_id,
-            };
-            let _ = events.send(event);
+            Incoming::Event(event) => drop(events.send(event)),
         }
     }
 
@@ -244,7 +291,7 @@ impl JsonRpcClient {
 
     /// Close the underlying connection.
     pub async fn close(&self) {
-        let _ = self.sink.lock().await.send(WsMessage::Close(None)).await;
+        drop(self.sink.lock().await.send(WsMessage::Close(None)).await);
     }
 
     /// Build a request frame (exposed for tests).
@@ -265,30 +312,30 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    type TestPending = std::sync::Mutex<HashMap<u64, oneshot::Sender<Value>>>;
+    type TestPending = std::sync::Mutex<PendingMap>;
 
     #[test]
     fn dispatch_routes_response_by_id() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(PendingMap::new()));
         let (events_tx, _) = tokio::sync::broadcast::channel(16);
         let (tx, mut rx) = oneshot::channel();
         pending.lock().unwrap().insert(7, tx);
         let msg: Value = serde_json::json!({"id": 7, "result": {"ok": true}});
-        JsonRpcClient::dispatch(msg, &pending, &events_tx);
+        JsonRpcClient::dispatch(decode_value(msg).expect("response"), &pending, &events_tx);
         assert!(pending.lock().unwrap().get(&7).is_none());
         assert!(rx.try_recv().is_ok());
     }
 
     #[test]
     fn dispatch_routes_event_with_session() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(PendingMap::new()));
         let (events_tx, mut rx) = tokio::sync::broadcast::channel(16);
         let msg: Value = serde_json::json!({
             "method": "Network.loadingFinished",
             "params": {"requestId": "r1"},
             "sessionId": "s1"
         });
-        JsonRpcClient::dispatch(msg, &pending, &events_tx);
+        JsonRpcClient::dispatch(decode_value(msg).expect("event"), &pending, &events_tx);
         let event = rx.try_recv().expect("event must be broadcast");
         assert_eq!(event.method, "Network.loadingFinished");
         assert_eq!(event.session_id.as_deref(), Some("s1"));
@@ -296,10 +343,8 @@ mod tests {
 
     #[test]
     fn dispatch_ignores_unknown_frames() {
-        let pending: Arc<TestPending> = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (events_tx, _) = tokio::sync::broadcast::channel(16);
-        JsonRpcClient::dispatch(Value::Null, &pending, &events_tx);
-        assert!(pending.lock().unwrap().is_empty());
+        assert!(decode_value(Value::Null).is_none());
+        assert!(decode_value(serde_json::json!({"result": {}})).is_none());
     }
 
     #[test]

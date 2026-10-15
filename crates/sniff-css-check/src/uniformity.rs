@@ -30,6 +30,7 @@ pub struct Deviation {
 pub struct Outlier {
     /// Selector of the deviating instance.
     pub selector: String,
+    /// Per-property deviations found in this instance.
     pub deviations: Vec<Deviation>,
 }
 
@@ -47,7 +48,7 @@ type Instance<'a> = (&'a DiffNode, Vec<(String, Option<String>)>);
 
 /// Run the uniformity check over a snapshot forest.
 ///
-/// `tolerance` mirrors `sniffCSS-diff`: numeric differences below it (in the
+/// `tolerance` mirrors `sniff diff`: numeric differences below it (in the
 /// same unit) are considered equal. With fewer than 2 instances the check
 /// reports zero outliers (`instances <= 1`).
 pub fn check_uniformity(nodes: &[DiffNode], tolerance: f64) -> UniformityReport {
@@ -90,18 +91,24 @@ pub fn check_uniformity(nodes: &[DiffNode], tolerance: f64) -> UniformityReport 
 
         // Instance(s) missing the property deviate from those that have it.
         if per_instance.len() != present.len() {
+            let Some(norm) = present.first() else {
+                continue;
+            };
             for (i, (node, _)) in instances.iter().enumerate() {
-                if per_instance[i].is_some() {
+                if per_instance.get(i).copied().flatten().is_some() {
                     continue;
                 }
-                push_deviation(&mut outliers, node, key, present[0], "(missing)", None);
+                push_deviation(&mut outliers, node, key, norm.as_str(), "(missing)", None);
             }
             continue;
         }
 
         if let Some((norm_value, numeric)) = group_norm(&present) {
             for (i, (node, _)) in instances.iter().enumerate() {
-                let mine = per_instance[i].expect("present").as_str();
+                let Some(mine) = per_instance.get(i).copied().flatten() else {
+                    continue;
+                };
+                let mine = mine.as_str();
                 let magnitude = if numeric {
                     match (strip_number(&norm_value), strip_number(mine)) {
                         (Some((nn, nu)), Some((mn, mu))) if nu == mu => Some((mn - nn).abs()),
@@ -128,6 +135,10 @@ pub fn check_uniformity(nodes: &[DiffNode], tolerance: f64) -> UniformityReport 
 }
 
 /// Append (or extend) an outlier for `node` with a single deviation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "acumula o desvio no outlier; struct seria ruído"
+)]
 fn push_deviation(
     outliers: &mut Vec<Outlier>,
     node: &DiffNode,
@@ -196,13 +207,14 @@ fn flat_props(node: &DiffNode) -> Vec<(String, Option<String>)> {
 /// Numeric values (same unit) use the median as the norm; categorical
 /// values use the mode.
 fn group_norm(values: &[&String]) -> Option<(String, bool)> {
-    if values.iter().all(|v| v == &values[0]) {
+    let first = values.first()?;
+    if values.iter().all(|v| v == first) {
         return None;
     }
     // Try numeric: all values parse as a number with the same unit.
     let nums: Vec<(f64, &str)> = values.iter().filter_map(|v| strip_number(v)).collect();
     if nums.len() == values.len() {
-        let unit = nums[0].1;
+        let unit = nums.first()?.1;
         if nums.iter().all(|(_, u)| *u == unit) {
             let mut sorted: Vec<f64> = nums.iter().map(|(n, _)| *n).collect();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -211,24 +223,27 @@ fn group_norm(values: &[&String]) -> Option<(String, bool)> {
         }
     }
     // Categorical: modal value.
-    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for v in values {
-        *counts.entry(v.as_str()).or_insert(0) += 1;
+        let entry = counts.entry(v.as_str()).or_insert(0);
+        *entry = entry.saturating_add(1);
     }
     let mode = counts
         .iter()
         .max_by_key(|(_, c)| *c)
-        .map(|(k, _)| *k)
-        .unwrap_or(values[0]);
+        .map_or_else(|| first.as_str(), |(k, _)| *k);
     Some((mode.to_string(), false))
 }
 
 fn median(sorted: &[f64]) -> f64 {
     let n = sorted.len();
-    if n % 2 == 1 {
-        sorted[n / 2]
+    let mid = n >> 1; // `n / 2`, exact for a length
+    if n.is_multiple_of(2) {
+        let lo = sorted.get(mid.saturating_sub(1)).copied().unwrap_or(0.0);
+        let hi = sorted.get(mid).copied().unwrap_or(0.0);
+        f64::midpoint(lo, hi)
     } else {
-        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        sorted.get(mid).copied().unwrap_or(0.0)
     }
 }
 
@@ -341,7 +356,7 @@ mod tests {
             node("div.b", "300px", "120px"),
             node("div.c", "300px", "120px"),
         ];
-        let mut custom = nodes.clone();
+        let mut custom = nodes;
         custom[2].styles = Some(
             serde_json::json!({"box_model": {"width": "300px"}})
                 .as_object()

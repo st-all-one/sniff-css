@@ -31,7 +31,7 @@ impl std::fmt::Debug for FlutterInspector {
         f.debug_struct("FlutterInspector")
             .field("isolate", &self.isolate_id)
             .field("group", &self.group)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -70,7 +70,12 @@ impl FlutterInspector {
 
     /// Expand a node's children on demand (`valueId` → array of nodes).
     pub async fn children_summary_tree(&self, value_id: &str) -> Result<Vec<Value>> {
-        let params = self.params(json!({ "arg": value_id }).as_object().cloned().unwrap());
+        let params = self.params(
+            json!({ "arg": value_id })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
         let raw = self
             .vm
             .call("ext.flutter.inspector.getChildrenSummaryTree", params)
@@ -80,7 +85,12 @@ impl FlutterInspector {
 
     /// Fetch a node's diagnostics properties (`valueId` → array).
     pub async fn properties(&self, value_id: &str) -> Result<Vec<Value>> {
-        let params = self.params(json!({ "arg": value_id }).as_object().cloned().unwrap());
+        let params = self.params(
+            json!({ "arg": value_id })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        );
         let raw = self
             .vm
             .call("ext.flutter.inspector.getProperties", params)
@@ -98,7 +108,7 @@ impl FlutterInspector {
             })
             .as_object()
             .cloned()
-            .unwrap(),
+            .unwrap_or_default(),
         );
         self.vm
             .call("ext.flutter.inspector.getLayoutExplorerNode", params)
@@ -121,7 +131,7 @@ impl FlutterInspector {
             json!({ "timeDilation": dilation.to_string() })
                 .as_object()
                 .cloned()
-                .unwrap(),
+                .unwrap_or_default(),
         );
         self.vm.call("ext.flutter.timeDilation", params).await?;
         Ok(())
@@ -186,8 +196,7 @@ fn result_array(raw: Value) -> Result<Vec<Value>> {
         Value::Array(items) => Ok(items),
         Value::Null => Ok(Vec::new()),
         other => Err(VmError::Other(format!(
-            "expected array result, got {}",
-            other
+            "expected array result, got {other}"
         ))),
     }
 }
@@ -216,7 +225,11 @@ mod tests {
         assert_eq!(params["objectGroup"], "g-1");
 
         let extra = json!({"id": "inspector-3", "subtreeDepth": "0"});
-        let params = build_params("iso-1", "g-1", extra.as_object().cloned().unwrap());
+        let params = build_params(
+            "iso-1",
+            "g-1",
+            extra.as_object().cloned().unwrap_or_default(),
+        );
         assert_eq!(params["id"], "inspector-3");
         assert_eq!(params["subtreeDepth"], "0");
     }
