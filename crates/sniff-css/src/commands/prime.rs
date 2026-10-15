@@ -26,13 +26,15 @@ WHEN (use / don't):
   sniff prime     this protocol (static, cacheable). help = human surface.
 
 ESSENTIAL:
-  sniff capture -u <URL> -s <CSS> [--depth N] [--action click:<SEL>] [--output jsonl|summary|json]
-  sniff check -i snap.jsonl [--rules] [--uniform]
-  sniff diff base.jsonl head.jsonl [--tolerance 0.5] [--stats-only]
-  sniff init [--force]
+  sniff capture <URL> -s <CSS> [--depth N] [--action click:<SEL>] [--output jsonl|summary|json]
+  sniff check <SNAP> [--rules] [--uniform]
+  sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]
+  sniff init [DIR] [--force]
+  INPUT: positional operand, OR --params '<json>' (one op), OR --batch file.jsonl (- = stdin).
+  stdin: `-` in any input; `sniff capture … --no-summary | sniff check -`.
   TLS: --ignore-certificate-errors (self-signed dev servers).
   AUTH: --header 'Name: Value'; keep a login with --storage-state FILE.
-  flutter://<device> in --url switches to the Flutter backend (selector defaults to `root`).
+  flutter://<device> in the URL switches to the Flutter backend (selector defaults to `root`).
 
 OUTPUT: stdout = data (JSONL), stderr = logs. --json = machine envelope
         {success, command, data?, error{code,message,retryable}, warnings?}.
@@ -51,23 +53,28 @@ CYCLE: sniff capture (source of truth) → sniff check (heuristics) → sniff di
   Capture once, then analyze offline — check/diff never touch a browser.
 
 VERBS:
-  sniff capture -u <URL> -s <CSS> [--depth N] [--categories LIST] [--props P] [--pseudo E]
+  sniff capture <URL> -s <CSS> [--depth N] [--categories LIST] [--props P] [--pseudo E]
      [--wait SPEC] [--action SPEC] [--click SEL] [--hover SEL] [--type SEL:TXT]
      [--upload SEL:FILE] [--header 'Name: Value'] [--viewport WxH]
      [--backend web|flutter|auto] [--device SERIAL] [--avd NAME] [--connect ENDPOINT]
      [--ignore-certificate-errors] [--storage-state FILE] [--save-storage-state FILE]
-     [--screenshot PATH] [--fullpage-screenshot] [--persist]
+     [--screenshot PATH] [--fullpage-screenshot] [--persist [PATH]]
      [--output summary|jsonl|jsonl-flat|json] [--pretty] [--full]
      [--no-visible --no-aria --no-contrast --no-ax ...].
-  sniff check -i <JSONL> [--rules] [--uniform] [--tolerance 0.5]
+  sniff check <JSONL> [--rules] [--uniform] [--tolerance 0.5]
      rules = contrast/target-size/focus/alt; uniform = odd one out among siblings.
   sniff diff <BASE> <HEAD> [--tolerance 0.5] [--ignore-props a,b] [--no-structural]
      [--stats-only] [--no-actions].
   sniff snapshots [--root DIR]   # default: SNIFF_SNAPSHOT_DIR or ./sniff
-  sniff init [--force] [--dir DIR]   # AGENTS.md managed block; --force overwrites
+  sniff init [DIR] [--force]   # AGENTS.md managed block; --force overwrites
   sniff prime [--long]
   sniff self setup <claude|cursor|codex|pi> | completions <bash|zsh|fish> |
              upgrade [--dry-run] [--version TAG] [--script PATH] | version
+
+INPUT: positional operand, OR --params '<json>' (one operation), OR --batch file.jsonl
+       (one op per line; - = stdin). `-` in any input reads stdin; a required operand
+       absent + piped stdin is filled from stdin. --params is a batch of one.
+       Over sniff.batch_max=100 items, or duplicate sources, exit 2. --dry-run validates.
 
 ACTIONS: click:<selector>[:timeout[:settle]] | hover:<selector> | type:<selector>:<text> |
          upload:<selector>:<file1,file2>. Repeatable and ORDERED; reveals post-action DOM.

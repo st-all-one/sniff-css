@@ -126,6 +126,16 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
+impl From<sniff_core::SniffError> for AppError {
+    fn from(error: sniff_core::SniffError) -> Self {
+        match error {
+            sniff_core::SniffError::Io(message) => Self::io(message),
+            sniff_core::SniffError::NoMatch { .. } => Self::not_found(error.to_string()),
+            other => Self::invalid(other.to_string()),
+        }
+    }
+}
+
 impl From<io::Error> for AppError {
     fn from(error: io::Error) -> Self {
         Self::io(error.to_string())

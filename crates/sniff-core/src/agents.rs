@@ -50,10 +50,12 @@ pub fn protocol_block() -> String {
          `sniff capture` is the source of truth for layout/style — never guess CSS, capture it.\n\
          Cycle: `sniff capture` → `sniff check` → `sniff diff`; the AI reads only the delta.\n\
          \n\
-         - Capture: `sniff capture -u <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`\n\
+         - Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`\n\
            (default `summary`, token-lean). Diff/check need `--no-summary` JSONL snapshots.\n\
          - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]` (deterministic, offline).\n\
-         - Checks: `sniff check -i <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).\n\
+         - Checks: `sniff check <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).\n\
+         - Batch/params: `--params '<json>'` (one op) or `--batch file.jsonl` (one op per line);\n\
+           `-` reads stdin, so `sniff capture … --no-summary | sniff check -` works.\n\
          - Protocol: `sniff prime` (`--long` = full); `sniff self` = setup/completions/upgrade.\n\
          \n\
          Common cases:\n\
@@ -61,8 +63,9 @@ pub fn protocol_block() -> String {
          - Auth: `--header \"Name: Value\"` on every request; persist a login with `--storage-state FILE`\n\
            (write it once with `--save-storage-state FILE`).\n\
          - Action-only UI (modal/dropdown): `--click SEL`, or ordered `--action \"click:SEL:5000\"`.\n\
-         - Flutter/Dart app: `-u flutter://<device> --project DIR --depth N` (debug build only).\n\
-         - Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.\n\
+         - Flutter/Dart app: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).\n\
+         - Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`
+(or `--persist PATH` for an explicit file).\n\
          \n\
          Contract: stdout = data (JSONL), stderr = logs; `--json` = \
          {{success, command, data?, error{{code,message,retryable}}, warnings?}}.\n\

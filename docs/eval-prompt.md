@@ -64,14 +64,14 @@ Delta JSONL:
 <cole o output de `sniff diff base.jsonl head.jsonl` aqui>
 
 Evidências de checks (se disponíveis):
-<cole o output de `sniff check --input head.jsonl --uniform --rules` aqui>
+<cole o output de `sniff check head.jsonl --uniform --rules` aqui>
 ```
 
 ## Uso em escala
 
-1. Extração (determinística): `sniff capture --stable-key data-testid ...` (default otimizado: compact, stabilize, contrast e ax já ON); no Flutter `sniff capture -u flutter://<serial> --project DIR --depth N`.
+1. Extração (determinística): `sniff capture --stable-key data-testid ...` (default otimizado: compact, stabilize, contrast e ax já ON); no Flutter `sniff capture flutter://<serial> --project DIR --depth N`.
 2. Diff (determinística): `sniff diff base.jsonl head.jsonl --ignore-props ... --no-structural ... > delta.jsonl`
-3. Descoberta (determinística): `sniff check --input head.jsonl --uniform --rules > checks.jsonl`
+3. Descoberta (determinística): `sniff check head.jsonl --uniform --rules > checks.jsonl`
 4. Avaliação (IA): envie `delta.jsonl` + `checks.jsonl` + este prompt; valide a
    resposta com `jq -e 'has("status") and has("score_change")'`.
 

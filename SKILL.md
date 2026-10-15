@@ -62,7 +62,7 @@ deterministic and cost ~0 tokens.
   the AI interprets only the delta/evidence.
 - **Flutter/Dart backend** — the default backend is `auto`: a
   `flutter://<device>` URL selects Flutter and that device
-  (`sniff capture -u flutter://emulator-5554 --project DIR --depth N`); MCP
+  (`sniff capture flutter://emulator-5554 --project DIR --depth N`); MCP
   `sniff_flutter_page` is the tool form. Captures the widget tree of a
   **debug-mode** Flutter app on an Android emulator/device over the Dart VM
   Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`). Same
@@ -80,24 +80,28 @@ deterministic and cost ~0 tokens.
 
 | Action | Command |
 |--------|---------|
-| Capture (summary digest is the default) | `sniff capture -u URL -s SEL --depth N` |
-| Full non-summarized snapshot (diff/check input) | `sniff capture -u URL -s SEL --depth N --no-summary` |
-| Full-fidelity capture | `sniff capture -u URL -s SEL --depth N --no-summary --full` |
-| Accessibility capture | `sniff capture -u URL -s SEL --depth N --no-summary --ax-tree` |
-| Reveal action-only elements | `sniff capture -u URL -s ".modal" --click "#open"` |
-| Ordered mixed-flow interactions | `sniff capture -u URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
-| Real file upload (hidden inputs ok) | `sniff capture -u URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
-| Authenticated capture (header on every request) | `sniff capture -u URL -s "main" --header "X-CMS-AI-Token: <token>"` |
-| TLS / self-signed dev server | `sniff capture -u https://app.local:3443 -s "body" --ignore-certificate-errors` |
+| Capture (summary digest is the default) | `sniff capture URL -s SEL --depth N` |
+| Full non-summarized snapshot (diff/check input) | `sniff capture URL -s SEL --depth N --no-summary` |
+| Full-fidelity capture | `sniff capture URL -s SEL --depth N --no-summary --full` |
+| Accessibility capture | `sniff capture URL -s SEL --depth N --no-summary --ax-tree` |
+| Reveal action-only elements | `sniff capture URL -s ".modal" --click "#open"` |
+| Ordered mixed-flow interactions | `sniff capture URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
+| Real file upload (hidden inputs ok) | `sniff capture URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
+| Authenticated capture (header on every request) | `sniff capture URL -s "main" --header "X-CMS-AI-Token: <token>"` |
+| TLS / self-signed dev server | `sniff capture https://app.local:3443 -s "body" --ignore-certificate-errors` |
 | Diff two snapshots | `sniff diff base.jsonl head.jsonl --tolerance 0.5` |
 | Diff summary (CI) | `sniff diff base.jsonl head.jsonl --stats-only` |
-| Offline checks | `sniff check --input snap.jsonl --uniform --rules` |
-| Visual evidence | `sniff capture -u URL -s SEL --screenshot out.png` |
-| Verbatim DOM attrs | `sniff capture -u URL -s SEL --attrs name,value` |
-| Flutter app (attach) | `sniff capture -u flutter://emulator-5554 --attach --project DIR --depth N` |
-| Flutter app (run AVD) | `sniff capture -u flutter://pixel --avd pixel --project DIR --depth N` |
+| Offline checks | `sniff check snap.jsonl --uniform --rules` |
+| Visual evidence | `sniff capture URL -s SEL --screenshot out.png` |
+| Verbatim DOM attrs | `sniff capture URL -s SEL --attrs name,value` |
+| Flutter app (attach) | `sniff capture flutter://emulator-5554 --attach --project DIR --depth N` |
+| Flutter app (run AVD) | `sniff capture flutter://pixel --avd pixel --project DIR --depth N` |
 | AI protocol (static, byte-identical) | `sniff prime` (`--long` for full detail) |
-| Write/update AGENTS.md block | `sniff init` (`--force` overwrites the file) |
+| One structured call | `sniff capture --params '{"url":"…","selector":".btn"}'` |
+| Batch (N calls, JSONL) | `sniff capture --batch pages.jsonl` (`-` = stdin) |
+| stdin/heredoc | `… --no-summary \| sniff check -` · `sniff check - <<'EOF'` |
+| Register the JSONL | `sniff capture <URL> -s SEL --persist [PATH]` |
+| Write/update AGENTS.md block | `sniff init [DIR]` (`--force` overwrites the file) |
 | List persisted snapshots | `sniff snapshots` |
 | Binary utilities | `sniff self completions bash` · `sniff self setup pi` · `sniff self upgrade --dry-run` |
 
@@ -170,11 +174,11 @@ Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
 ### Accessibility audit
 
 ```bash
-sniff capture -u "$URL" -s "body" --depth 5 --no-summary --ax-tree > body.jsonl
-sniff capture -u "$URL" -s "nav"    --depth 4 --no-summary > nav.jsonl
-sniff capture -u "$URL" -s "main"   --depth 5 --no-summary > main.jsonl
-sniff capture -u "$URL" -s "footer" --depth 6 --no-summary > footer.jsonl
-sniff check --input main.jsonl --rules
+sniff capture "$URL" -s "body" --depth 5 --no-summary --ax-tree > body.jsonl
+sniff capture "$URL" -s "nav"    --depth 4 --no-summary > nav.jsonl
+sniff capture "$URL" -s "main"   --depth 5 --no-summary > main.jsonl
+sniff capture "$URL" -s "footer" --depth 6 --no-summary > footer.jsonl
+sniff check main.jsonl --rules
 ```
 
 Complete recipe (facets, jq queries, judgment checklist):
@@ -183,9 +187,9 @@ Complete recipe (facets, jq queries, judgment checklist):
 ### Regression monitoring (CI)
 
 ```bash
-sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > base.jsonl
+sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid > base.jsonl
 # ... deploy ...
-sniff capture -u "$URL" -s "$SEL" --no-summary --stable-key data-testid > head.jsonl
+sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid > head.jsonl
 sniff diff base.jsonl head.jsonl --stats-only   # fail job if changed/added/removed > threshold
 sniff diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structural > delta.jsonl
 ```
@@ -193,14 +197,14 @@ sniff diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structura
 ### Reveal elements that only exist after an interaction
 
 ```bash
-sniff capture -u "$URL" -s ".modal" --click "#open-modal"        # click to reveal
-sniff capture -u "$URL" -s ".menu-panel" --hover "#user-menu"    # hover to reveal
-sniff capture -u "$URL" -s ".search-results" --type "#q:shoes"   # type to reveal
-sniff capture -u "$URL" -s ".result" --action "click:#open:5000" \
+sniff capture "$URL" -s ".modal" --click "#open-modal"        # click to reveal
+sniff capture "$URL" -s ".menu-panel" --hover "#user-menu"    # hover to reveal
+sniff capture "$URL" -s ".search-results" --type "#q:shoes"   # type to reveal
+sniff capture "$URL" -s ".result" --action "click:#open:5000" \
   --action "type:#q:shoes" --action "click:.result-item"    # ordered mixed flow
-sniff capture -u "$URL" -s "#cropper-wrapper" \
+sniff capture "$URL" -s "#cropper-wrapper" \
   --action "upload:#media-input:/tmp/pixel.png"             # real file upload
-sniff capture -u "$URL" -s ".dropdown-menu" --click \
+sniff capture "$URL" -s ".dropdown-menu" --click \
   ".btn-group:nth-child(2) .dropdown-toggle:3000"           # `:` in selector is OK
 ```
 
@@ -218,13 +222,13 @@ colon.
 ### Authenticated / restricted captures
 
 ```bash
-sniff capture -u "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
-sniff capture -u "https://app.local:3443/home" -s "body" \
+sniff capture "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
+sniff capture "https://app.local:3443/home" -s "body" \
   --ignore-certificate-errors                                     # self-signed TLS
-sniff capture -u "$URL/login" -s ".dashboard" \
+sniff capture "$URL/login" -s ".dashboard" \
   --type "#email:admin@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/cms-state.json
-sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
+sniff capture "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
 ```
 
 Server-side team defaults (`SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
@@ -249,7 +253,7 @@ curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
 # pinned version:
 curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.0 sh
+  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.1 sh
 ```
 
 Binaries: Linux glibc + musl (x86_64/aarch64), macOS, Windows — per GitHub

@@ -49,6 +49,13 @@ Globais: `--json` (envelope `{success, command, data?, error{code,message,retrya
 `--log-level` (fechado), `--quiet`. Sem verbo = help (exit 0). Exit codes:
 `2` inválido · `3` não encontrado · `5` I/O · `70` interno.
 
+- **Operando = posicional** (`capture <URL>`, `diff <BASE> <HEAD>`, `check <SNAP>`,
+  `init [DIR]`); nunca há flag equivalente.
+- **Entrada estruturada**: `--params '<json>'` (uma operação), `--batch file.jsonl`
+  (N; `-` = stdin), stdin/heredoc universal, `--dry-run`. `--params` ≡ lote de 1.
+- **Saída/registro**: `--output summary|jsonl|...`, `--persist [PATH]`.
+  Contrato completo em [`docs/cli-surface.md`](docs/cli-surface.md) §5–6.
+
 - `capture` emite **stdout = dados** (JSONL), **stderr = logs**; `--json` força
   `--output json`. `prime` é inglês token-optimized; help é pt-BR.
 - Fontes não-determinísticas só via pontos centralizados (`sniff-core::env`,
@@ -128,10 +135,12 @@ Antes de fechar um ciclo de documentação ou release, **revise as dependências
 `sniff capture` is the source of truth for layout/style — never guess CSS, capture it.
 Cycle: `sniff capture` → `sniff check` → `sniff diff`; the AI reads only the delta.
 
-- Capture: `sniff capture -u <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`
+- Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`
 (default `summary`, token-lean). Diff/check need `--no-summary` JSONL snapshots.
 - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]` (deterministic, offline).
-- Checks: `sniff check -i <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).
+- Checks: `sniff check <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).
+- Batch/params: `--params '<json>'` (one op) or `--batch file.jsonl` (one op per line);
+`-` reads stdin, so `sniff capture … --no-summary | sniff check -` works.
 - Protocol: `sniff prime` (`--long` = full); `sniff self` = setup/completions/upgrade.
 
 Common cases:
@@ -139,8 +148,9 @@ Common cases:
 - Auth: `--header "Name: Value"` on every request; persist a login with `--storage-state FILE`
 (write it once with `--save-storage-state FILE`).
 - Action-only UI (modal/dropdown): `--click SEL`, or ordered `--action "click:SEL:5000"`.
-- Flutter/Dart app: `-u flutter://<device> --project DIR --depth N` (debug build only).
-- Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.
+- Flutter/Dart app: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).
+- Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`
+(or `--persist PATH` for an explicit file).
 
 Contract: stdout = data (JSONL), stderr = logs; `--json` = {success, command, data?, error{code,message,retryable}, warnings?}.
 Exit: 2 invalid, 3 not_found, 5 io, 70 internal.

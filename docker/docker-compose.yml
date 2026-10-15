@@ -5,7 +5,7 @@
 # you see at http://localhost:3001 is exactly what gets captured (fidelity).
 #
 #   docker compose -f docker/docker-compose.yml up -d
-#   docker compose -f docker/docker-compose.yml exec sniffcss sniff capture -u URL -s SEL
+#   docker compose -f docker/docker-compose.yml exec sniffcss sniff capture URL -s SEL
 #
 # MCP integration (run sniff-mcp inside the container, stdio):
 #   docker compose -f docker/docker-compose.yml exec -i sniffcss sniff-mcp

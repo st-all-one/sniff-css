@@ -30,7 +30,7 @@ docker run -d --name sniffcss \
 
 ```bash
 docker exec sniffcss sniff capture \
-  -u http://localhost:3000 -s ".btn-primary" \
+  http://localhost:3000 -s ".btn-primary" \
   --depth 0 --wait "network-idle:1200:60000"
 ```
 
@@ -38,7 +38,7 @@ docker exec sniffcss sniff capture \
 
 ```bash
 docker exec sniffcss sniff diff base.jsonl head.jsonl --tolerance 0.5
-docker exec sniffcss sniff check --input snap.jsonl --uniform --rules
+docker exec sniffcss sniff check snap.jsonl --uniform --rules
 ```
 
 ## MCP (agentes de IA)
@@ -118,7 +118,7 @@ Uso:
 
 ```bash
 docker compose -f docker-compose.override.yml up -d sniffcss
-docker exec sniffcss sniff capture -u http://app:3000 -s ".btn-primary"
+docker exec sniffcss sniff capture http://app:3000 -s ".btn-primary"
 ```
 
 > Com `network_mode: service:app` o sniffcss usa a rede do serviço `app`, então
@@ -128,7 +128,7 @@ docker exec sniffcss sniff capture -u http://app:3000 -s ".btn-primary"
 
 ```bash
 docker run --rm -v "$PWD:/ws" stallonels/sniffcss \
-  sniff capture -u "$URL" -s "$SEL" --output "$PWD/base.jsonl"
+  sniff capture "$URL" -s "$SEL" --output "$PWD/base.jsonl"
 docker run --rm -v "$PWD:/ws" stallonels/sniffcss \
   sniff diff "$PWD/base.jsonl" "$PWD/head.jsonl" --tolerance 0.5
 ```

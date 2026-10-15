@@ -5,7 +5,7 @@
 #   scripts/docker.sh build-source    # docker build compilando do fonte (dev)
 #   scripts/docker.sh up              # docker compose up -d (GUI em :3001)
 #   scripts/docker.sh down            # docker compose down
-#   scripts/docker.sh exec -- sniff capture -u URL -s SEL   # captura dentro do container
+#   scripts/docker.sh exec -- sniff capture URL -s SEL   # captura dentro do container
 #   scripts/docker.sh mcp             # sniff-mcp (stdio) via docker exec -i
 set -euo pipefail
 

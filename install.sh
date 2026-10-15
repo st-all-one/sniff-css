@@ -9,7 +9,7 @@
 #
 # Uso:
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.0 sh
+#   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.1 sh
 #   curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | INSTALL_DIR=/usr/local/bin sh
 #
 # Variáveis de ambiente:
@@ -257,8 +257,8 @@ done
 setup_path
 echo ""
 info "Pronto! Execute no terminal:"
-echo "  sniff capture -u <URL> -s <selector>   # captura (--output summary por padrão)"
-echo "  sniff check -i snap.jsonl --rules --uniform"
+echo "  sniff capture <URL> -s <selector>   # captura (--output summary por padrão)"
+echo "  sniff check snap.jsonl --rules --uniform"
 echo "  sniff diff base.jsonl head.jsonl --tolerance 0.5"
 echo "  sniff prime                             # protocolo para IA (byte-idêntico)"
 echo "  sniff-mcp                               # servidor MCP (stdio) para agentes de IA"

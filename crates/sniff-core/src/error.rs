@@ -52,6 +52,10 @@ pub enum SniffError {
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    /// I/O error reading an operand, file or stdin.
+    #[error("I/O error: {0}")]
+    Io(String),
+
     /// Catch-all for errors without a dedicated variant.
     #[error("{0}")]
     Other(String),

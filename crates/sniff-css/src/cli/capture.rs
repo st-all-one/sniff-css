@@ -7,7 +7,10 @@ use sniff_core::{
 };
 
 /// Which capture backend to use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Backend {
     /// Chromium over CDP (the classic computed-style capture).
     Web,
@@ -27,15 +30,22 @@ pub(crate) enum EffectiveBackend {
 }
 
 /// Flags de `sniff capture` (mapeadas para [`SniffConfig`]).
-#[derive(Debug, Clone, Args)]
+#[derive(Debug, Clone, Args, serde::Serialize, serde::Deserialize)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "flags independentes da CLI (clap), não estados mutuamente exclusivos"
 )]
 pub(crate) struct CaptureArgs {
-    /// Page URL to navigate to (e.g. <http://localhost:3000/foo>).
-    #[arg(long, short = 'u')]
-    pub url: String,
+    /// Operando — a página (http(s)://… ou flutter://<device>).
+    #[arg(
+        value_name = "URL",
+        conflicts_with_all = ["url_legacy", "params", "batch"]
+    )]
+    pub url: Option<String>,
+
+    /// [deprecado] Use o operando posicional: `sniff capture <URL>`.
+    #[arg(long = "url", short = 'u', hide = true, value_name = "URL")]
+    pub url_legacy: Option<String>,
 
     /// CSS selector of the element(s) to sniff. Required for the web
     /// backend; the Flutter backend defaults to `root`.
@@ -174,15 +184,12 @@ pub(crate) struct CaptureArgs {
     #[arg(long, default_value = "summary")]
     pub output: String,
 
-    /// Shorthand for `--output summary`: emit the intermediate per-node
-    /// digest (structural skeleton + curated css subset + contrast + aria)
-    /// instead of the full snapshot. This is the default.
-    #[arg(long, default_value_t = false)]
+    /// [deprecado] Use `--output summary` (já é o default).
+    #[arg(long, hide = true, default_value_t = false)]
     pub summary: bool,
 
-    /// Emit the full, non-summarized snapshot (`--output jsonl`) instead of
-    /// the default summary digest.
-    #[arg(long = "no-summary", default_value_t = false)]
+    /// [deprecado] Use `--output jsonl`.
+    #[arg(long = "no-summary", hide = true, default_value_t = false)]
     pub no_summary: bool,
 
     /// Save a PNG of the page (post-stabilize, post-interaction) to this
@@ -195,14 +202,6 @@ pub(crate) struct CaptureArgs {
     /// instead of only the visible viewport.
     #[arg(long = "fullpage-screenshot", default_value_t = false)]
     pub fullpage_screenshot: bool,
-
-    /// Persist the snapshot to disk, mirroring the MCP store: creates
-    /// `sniff/[domain]/[UTC]-[path]-[selector].<ext>` under the CWD (or
-    /// `SNIFF_SNAPSHOT_DIR` when set), using the selected `--output` format,
-    /// and auto-ignores the tree with a `.gitignore`. The output is still
-    /// written to stdout as usual.
-    #[arg(long, default_value_t = false)]
-    pub persist: bool,
 
     /// Pretty-print JSON (single-JSON output only).
     #[arg(long, default_value_t = false)]
@@ -356,6 +355,24 @@ pub(crate) struct CaptureArgs {
     #[arg(long, value_delimiter = ',', action = clap::ArgAction::Append)]
     pub attrs: Vec<String>,
 
+    /// Objeto JSON com todos os campos de UMA operação. `-` lê de stdin.
+    #[arg(long, value_name = "JSON", conflicts_with = "batch")]
+    pub params: Option<String>,
+
+    /// Lote JSONL: uma operação por linha (`-` lê de stdin).
+    #[arg(long, value_name = "FONTE")]
+    pub batch: Option<String>,
+
+    /// Valida os parâmetros sem capturar (útil com `--batch`).
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+
+    /// Persiste o snapshot em JSONL: sem valor vai para o store gerenciado,
+    /// com `PATH` grava no arquivo indicado. Não afeta o stdout.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
+    #[serde(default, deserialize_with = "de_persist")]
+    pub persist: Option<String>,
+
     /// Full-fidelity mode: disables every AI optimization at once
     /// (`--no-compact --no-custom-props --no-stabilize --no-contrast
     /// --no-ax`). Equivalent to the pre-AI-default behavior.
@@ -364,19 +381,25 @@ pub(crate) struct CaptureArgs {
 }
 
 impl CaptureArgs {
+    /// URL resolvida (posicional ou alias legado `--url`).
+    pub(crate) fn url_ref(&self) -> Option<&str> {
+        self.url.as_deref().or(self.url_legacy.as_deref())
+    }
+
     /// The effective backend: `--backend auto` (default) infers Flutter from
     /// a `flutter://` URL scheme, otherwise web. Explicit `--backend` wins.
     pub(crate) fn effective_backend(&self) -> EffectiveBackend {
+        let url = self.url_ref().unwrap_or_default();
         match self.backend {
             Backend::Flutter => EffectiveBackend::Flutter,
-            Backend::Auto if self.url.starts_with("flutter://") => EffectiveBackend::Flutter,
+            Backend::Auto if url.starts_with("flutter://") => EffectiveBackend::Flutter,
             Backend::Web | Backend::Auto => EffectiveBackend::Web,
         }
     }
 
     /// The `adb` serial implied by a `flutter://<device>` URL (the URL host).
     pub(crate) fn flutter_device(&self) -> Option<String> {
-        let rest = self.url.strip_prefix("flutter://")?;
+        let rest = self.url_ref()?.strip_prefix("flutter://")?;
         let host = rest.split('/').next()?;
         if host.is_empty() {
             None
@@ -387,6 +410,15 @@ impl CaptureArgs {
 
     /// Convert parsed CLI arguments into a full sniffing config.
     pub(crate) fn into_config(self) -> SniffResult<SniffConfig> {
+        let url = self
+            .url
+            .clone()
+            .or_else(|| self.url_legacy.clone())
+            .ok_or_else(|| {
+                SniffError::Other(
+                    "missing <URL>: pass the page URL, `--params`/`--batch`, or a pipe".into(),
+                )
+            })?;
         let is_flutter = self.effective_backend() == EffectiveBackend::Flutter;
         let selector = match self.selector {
             Some(s) => s,
@@ -482,7 +514,7 @@ impl CaptureArgs {
         };
 
         Ok(SniffConfig {
-            url: self.url,
+            url,
             selector,
             depth: self.depth,
             categories: parse_categories(&self.categories)?,
@@ -506,6 +538,24 @@ impl CaptureArgs {
             storage_state_path: self.storage_state,
             save_storage_state: self.save_storage_state,
         })
+    }
+}
+
+/// Desserializa `persist` aceitando `true` (store gerenciado), `false`/`null`
+/// (desligado) ou `"PATH"` (arquivo explícito) — ergonomia do JSON.
+fn de_persist<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null | serde_json::Value::Bool(false)) => Ok(None),
+        Some(serde_json::Value::Bool(true)) => Ok(Some(String::new())),
+        Some(serde_json::Value::String(path)) => Ok(Some(path)),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "`persist` deve ser true|false ou \"PATH\", não {other}"
+        ))),
     }
 }
 
@@ -582,6 +632,19 @@ mod tests {
         Wrapper::try_parse_from(argv).map(|wrapper| wrapper.args)
     }
 
+    /// Argumentos-base dos testes: operando posicional + seletor + saída jsonl.
+    fn base() -> CaptureArgs {
+        parse_capture([
+            "sniff",
+            "http://localhost:3000",
+            "-s",
+            ".card",
+            "--output",
+            "jsonl",
+        ])
+        .unwrap()
+    }
+
     #[test]
     fn parse_delay() {
         assert_eq!(
@@ -644,69 +707,7 @@ mod tests {
 
     #[test]
     fn cli_to_config_defaults() {
-        let cli = CaptureArgs {
-            url: "http://localhost:3000".into(),
-            selector: Some(".card".into()),
-            depth: 0,
-            categories: "all".into(),
-            props: vec![],
-            pseudo: vec![],
-            wait: vec![],
-            actions: vec![],
-            click: vec![],
-            hover: vec![],
-            r#type: vec![],
-            no_visible: false,
-            min_width: None,
-            min_height: None,
-            exclude: vec![],
-            output: "jsonl".into(),
-            summary: false,
-            no_summary: false,
-            screenshot: None,
-            fullpage_screenshot: false,
-            persist: false,
-            pretty: false,
-            no_rect: false,
-            no_path: false,
-            no_metrics: false,
-            no_normalize_colors: false,
-            no_group: false,
-            compact: true,
-            no_compact: false,
-            no_visibility: false,
-            no_style_hash: false,
-            no_aria: false,
-            contrast: true,
-            no_contrast: false,
-            ax: true,
-            no_ax: false,
-            ax_tree: false,
-            stabilize: true,
-            no_stabilize: false,
-            effects: true,
-            no_effects: false,
-            effects_limit: 10,
-            chrome: None,
-            connect: None,
-            ignore_certificate_errors: false,
-            viewport: None,
-            custom_props: true,
-            no_custom_props: false,
-            stable_key: None,
-            attrs: vec![],
-            full: false,
-            upload: vec![],
-            header: vec![],
-            storage_state: None,
-            save_storage_state: None,
-            backend: Backend::Web,
-            device: None,
-            avd: None,
-            project: None,
-            target: "lib/main.dart".into(),
-            attach: false,
-        };
+        let cli = base();
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.categories, vec![StyleCategory::All]);
         assert_eq!(cfg.output.format, OutputFormat::JsonLines);
@@ -731,69 +732,7 @@ mod tests {
 
     #[test]
     fn cli_to_config_wires_stable_key() {
-        let mut cli = CaptureArgs {
-            url: "http://localhost:3000".into(),
-            selector: Some(".card".into()),
-            depth: 0,
-            categories: "all".into(),
-            props: vec![],
-            pseudo: vec![],
-            wait: vec![],
-            actions: vec![],
-            click: vec![],
-            hover: vec![],
-            r#type: vec![],
-            no_visible: false,
-            min_width: None,
-            min_height: None,
-            exclude: vec![],
-            output: "jsonl".into(),
-            summary: false,
-            no_summary: false,
-            screenshot: None,
-            fullpage_screenshot: false,
-            persist: false,
-            pretty: false,
-            no_rect: false,
-            no_path: false,
-            no_metrics: false,
-            no_normalize_colors: false,
-            no_group: false,
-            compact: true,
-            no_compact: false,
-            no_visibility: false,
-            no_style_hash: false,
-            no_aria: false,
-            contrast: true,
-            no_contrast: false,
-            ax: true,
-            no_ax: false,
-            ax_tree: false,
-            stabilize: true,
-            no_stabilize: false,
-            effects: true,
-            no_effects: false,
-            effects_limit: 10,
-            chrome: None,
-            connect: None,
-            ignore_certificate_errors: false,
-            viewport: None,
-            custom_props: true,
-            no_custom_props: false,
-            stable_key: None,
-            attrs: vec![],
-            full: false,
-            upload: vec![],
-            header: vec![],
-            storage_state: None,
-            save_storage_state: None,
-            backend: Backend::Web,
-            device: None,
-            avd: None,
-            project: None,
-            target: "lib/main.dart".into(),
-            attach: false,
-        };
+        let mut cli = base();
         cli.stable_key = Some("data-testid".into());
         let cfg = cli.into_config().unwrap();
         assert_eq!(cfg.stable_key.as_deref(), Some("data-testid"));
@@ -888,69 +827,7 @@ mod tests {
 
     #[test]
     fn full_mode_disables_all_optimizations() {
-        let mut cli = CaptureArgs {
-            url: "http://localhost:3000".into(),
-            selector: Some(".card".into()),
-            depth: 0,
-            categories: "all".into(),
-            props: vec![],
-            pseudo: vec![],
-            wait: vec![],
-            actions: vec![],
-            click: vec![],
-            hover: vec![],
-            r#type: vec![],
-            no_visible: false,
-            min_width: None,
-            min_height: None,
-            exclude: vec![],
-            output: "jsonl".into(),
-            summary: false,
-            no_summary: false,
-            screenshot: None,
-            fullpage_screenshot: false,
-            persist: false,
-            pretty: false,
-            no_rect: false,
-            no_path: false,
-            no_metrics: false,
-            no_normalize_colors: false,
-            no_group: false,
-            compact: true,
-            no_compact: false,
-            no_visibility: false,
-            no_style_hash: false,
-            no_aria: false,
-            contrast: true,
-            no_contrast: false,
-            ax: true,
-            no_ax: false,
-            ax_tree: false,
-            stabilize: true,
-            no_stabilize: false,
-            effects: true,
-            no_effects: false,
-            effects_limit: 10,
-            chrome: None,
-            connect: None,
-            ignore_certificate_errors: false,
-            viewport: None,
-            custom_props: true,
-            no_custom_props: false,
-            stable_key: None,
-            attrs: vec![],
-            full: false,
-            upload: vec![],
-            header: vec![],
-            storage_state: None,
-            save_storage_state: None,
-            backend: Backend::Web,
-            device: None,
-            avd: None,
-            project: None,
-            target: "lib/main.dart".into(),
-            attach: false,
-        };
+        let mut cli = base();
         cli.full = true;
         let cfg = cli.into_config().unwrap();
         assert!(!cfg.output.compact);
@@ -966,69 +843,7 @@ mod tests {
 
     #[test]
     fn individual_no_flags_override_defaults() {
-        let mut cli = CaptureArgs {
-            url: "http://localhost:3000".into(),
-            selector: Some(".card".into()),
-            depth: 0,
-            categories: "all".into(),
-            props: vec![],
-            pseudo: vec![],
-            wait: vec![],
-            actions: vec![],
-            click: vec![],
-            hover: vec![],
-            r#type: vec![],
-            no_visible: false,
-            min_width: None,
-            min_height: None,
-            exclude: vec![],
-            output: "jsonl".into(),
-            summary: false,
-            no_summary: false,
-            screenshot: None,
-            fullpage_screenshot: false,
-            persist: false,
-            pretty: false,
-            no_rect: false,
-            no_path: false,
-            no_metrics: false,
-            no_normalize_colors: false,
-            no_group: false,
-            compact: true,
-            no_compact: false,
-            no_visibility: false,
-            no_style_hash: false,
-            no_aria: false,
-            contrast: true,
-            no_contrast: false,
-            ax: true,
-            no_ax: false,
-            ax_tree: false,
-            stabilize: true,
-            no_stabilize: false,
-            effects: true,
-            no_effects: false,
-            effects_limit: 10,
-            chrome: None,
-            connect: None,
-            ignore_certificate_errors: false,
-            viewport: None,
-            custom_props: true,
-            no_custom_props: false,
-            stable_key: None,
-            attrs: vec![],
-            full: false,
-            upload: vec![],
-            header: vec![],
-            storage_state: None,
-            save_storage_state: None,
-            backend: Backend::Web,
-            device: None,
-            avd: None,
-            project: None,
-            target: "lib/main.dart".into(),
-            attach: false,
-        };
+        let mut cli = base();
         cli.no_compact = true;
         cli.no_contrast = true;
         cli.no_ax = true;
@@ -1044,69 +859,7 @@ mod tests {
 
     #[test]
     fn ax_tree_implies_ax_even_in_full_mode() {
-        let mut cli = CaptureArgs {
-            url: "http://localhost:3000".into(),
-            selector: Some(".card".into()),
-            depth: 0,
-            categories: "all".into(),
-            props: vec![],
-            pseudo: vec![],
-            wait: vec![],
-            actions: vec![],
-            click: vec![],
-            hover: vec![],
-            r#type: vec![],
-            no_visible: false,
-            min_width: None,
-            min_height: None,
-            exclude: vec![],
-            output: "jsonl".into(),
-            summary: false,
-            no_summary: false,
-            screenshot: None,
-            fullpage_screenshot: false,
-            persist: false,
-            pretty: false,
-            no_rect: false,
-            no_path: false,
-            no_metrics: false,
-            no_normalize_colors: false,
-            no_group: false,
-            compact: true,
-            no_compact: false,
-            no_visibility: false,
-            no_style_hash: false,
-            no_aria: false,
-            contrast: true,
-            no_contrast: false,
-            ax: true,
-            no_ax: false,
-            ax_tree: false,
-            stabilize: true,
-            no_stabilize: false,
-            effects: true,
-            no_effects: false,
-            effects_limit: 10,
-            chrome: None,
-            connect: None,
-            ignore_certificate_errors: false,
-            viewport: None,
-            custom_props: true,
-            no_custom_props: false,
-            stable_key: None,
-            attrs: vec![],
-            full: false,
-            upload: vec![],
-            header: vec![],
-            storage_state: None,
-            save_storage_state: None,
-            backend: Backend::Web,
-            device: None,
-            avd: None,
-            project: None,
-            target: "lib/main.dart".into(),
-            attach: false,
-        };
+        let mut cli = base();
         cli.full = true;
         cli.ax_tree = true;
         let cfg = cli.into_config().unwrap();

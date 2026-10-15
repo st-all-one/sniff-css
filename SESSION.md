@@ -1,5 +1,28 @@
 # SESSION.md
 
+## Estado: FECHADO — v0.5.1 encerrada (2026-10-15)
+
+A **v0.5.1** (workspace em `0.5.1`) é a continuação da superfície de API iniciada
+na 0.5.0: a CLI ganha a **gramática de operandos** e os **canais de máquina**
+(entrada/saída estruturada) do knudge, sem alterar o contrato de máquina
+(MCP/`--json`/exit codes).
+
+### O que entrou na v0.5.1
+
+- **Operandos posicionais** — `sniff capture <URL>`, `sniff check <SNAP>`,
+  `sniff init [DIR]` (`sniff diff <BASE> <HEAD>` já seguia); aliases legados
+  `-u/--url`, `-i/--input`, `--dir` (avisam em stderr).
+- **stdin/heredoc** — `-` em qualquer entrada; operando ausente + stdin não-TTY
+  é preenchido pelo stdin; `sniff capture … --no-summary | sniff check -`.
+- **`--params`** (uma operação; `-` = stdin) e **`--batch`** (JSONL, N
+  operações; best-effort, teto `sniff.batch_max=100`), com schema `snake_case`
+  compartilhado com o MCP/`--json`; **`--dry-run`**.
+- **`--persist [PATH]`** + `--output` explícito; o lote registra cada payload
+  antes da linha de status.
+- Docs: `docs/cli-surface.md` §5–6, `docs/usage.md` (entrada estruturada),
+  README, SKILL, AGENTS, `prime` e o bloco do `sniff init`.
+- Gate: fmt ✓, clippy ✓, **439 testes** (0 falhas), deny/audit/machete ✓, Miri ✓.
+
 ## Estado: FECHADO — v0.5.0 encerrada (2026-10-15)
 
 Todas as frentes desta etapa foram concluídas, validadas e documentadas. A

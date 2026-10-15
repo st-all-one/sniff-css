@@ -12,6 +12,7 @@ pub mod contrast;
 pub mod diagnostic;
 pub mod env;
 pub mod error;
+pub mod input;
 pub mod numeric;
 pub mod properties;
 pub mod snapshot;

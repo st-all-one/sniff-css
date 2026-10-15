@@ -171,8 +171,8 @@ Widgets com esse mapeamento: `ColoredBox`, `Container`, `Material`, `Card`,
 
 ## 4. Como usar — modo padrão `auto`
 
-O `--backend` padrão agora é **`auto`**: o próprio `--url` decide o backend e o
-device. Um URL `flutter://<serial>` significa backend Flutter no device
+O `--backend` padrão agora é **`auto`**: o próprio operando `<URL>` decide o
+backend e o device. Um URL `flutter://<serial>` significa backend Flutter no device
 `<serial>`; qualquer outro URL significa web.
 
 ### 4.1 Subir o emulador
@@ -196,7 +196,7 @@ adb root && adb shell setenforce 0   # imagem google_apis (ver §2.3)
 
 ```bash
 # Forma enxuta: backend e device vêm do URL; -s vira "root" se omitido.
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10
+sniff capture flutter://emulator-5554 --project ~/projetos/app --depth 10
 
 # Forma explícita equivalente:
 sniff capture --backend flutter --device emulator-5554 \
@@ -213,13 +213,13 @@ Com o app debug já em execução (ex.: via `flutter run` ou hot-reload), sem
 recompilar:
 
 ```bash
-sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
+sniff capture flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
 ```
 
 ### 4.4 Lançar AVD + rodar o app
 
 ```bash
-sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
+sniff capture flutter://pixel --avd pixel --project ~/projetos/app --depth 10
 ```
 
 > Neste host, prefira `--device` com o emulador subido por `-gpu host` (§4.1):
@@ -228,7 +228,7 @@ sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
 ### 4.5 Screenshot junto com a captura
 
 ```bash
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
+sniff capture flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
 ```
 
 ### 4.6 Controlar o viewport do app
@@ -239,7 +239,7 @@ media queries e a geometria capturada mudam) e **restaura** o tamanho anterior
 ao final — inclusive em caminhos de erro:
 
 ```bash
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture flutter://emulator-5554 --project ~/projetos/app \
   --viewport 540x1200 --depth 10
 ```
 
@@ -255,7 +255,7 @@ Tabela resumida (referência completa: [`docs/usage.md`](usage.md)):
 
 | Flag | Descrição | Padrão |
 |---|---|---|
-| `-u, --url` | **Obrigatório.** `flutter://<serial>` (ou `flutter://<serial>/<path>`) | — |
+| `<URL>` (posicional) | **Obrigatório.** `flutter://<serial>` (ou `flutter://<serial>/<path>`); alias depreciado `-u/--url` | — |
 | `-s, --selector` | Identidade do nó-raiz; `root` se omitido no backend Flutter | `root` |
 | `--depth N` | Níveis de widget capturados abaixo da raiz (0 = só raiz) | `0` |
 | `--project DIR` | Dir do app (com `pubspec.yaml`) | pai de `--target` |
@@ -293,15 +293,15 @@ e a captura roda **depois**, sobre o estado pós-interação (ex.: o
 
 ```bash
 # toca o FilledButton de key `counter` (o snapshot passa a mostrar "Counter: 1")
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=click:FilledButton-[<'counter'>][0]"
 
 # abre o modal antes de capturar:
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=click:OutlinedButton-[<'modal'>][0]"
 
 # foca o TextField e digita (após o tap, o campo recebe o texto):
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture flutter://emulator-5554 --project ~/projetos/app \
   --attach --depth 15 "--action=type:TextField-[<'field'>][0]:hello"
 ```
 
@@ -388,7 +388,7 @@ flutter run --machine -d emulator-5554   # mantém aberto (o sniff anexa nele)
 ### 6.3 Smoke test — captura sem ações
 
 ```bash
-sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+sniff capture flutter://emulator-5554 --attach --project ~/projetos/meu-app \
   --depth 10 --output jsonl-flat > base.jsonl
 ```
 
@@ -415,7 +415,7 @@ Sinais de problema:
 
    ```bash
    # snapshot do contador antes
-   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat | rg -o '"data":"Counter: [0-9]+"' | head -1
    ```
 
@@ -424,7 +424,7 @@ Sinais de problema:
    ```bash
    # ATENÇÃO às aspas: o selector carrega apóstrofos — aspas simples do shell
    # quebram (vira ByText, o alvo não é achado e dá timeout). Use aspas duplas.
-   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:FilledButton-[<'counter'>][0]" \
      | rg -o '"data":"Counter: [0-9]+"' | head -1
@@ -434,15 +434,15 @@ Sinais de problema:
    base, mude o app, capture o head e compare:
 
    ```bash
-   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:OutlinedButton-[<'modal'>][0]" > base.jsonl
    # ... edite o app (hot-restart 'R' no flutter run), re-capture:
-   sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/meu-app \
+   sniff capture flutter://emulator-5554 --attach --project ~/projetos/meu-app \
      --depth 10 --output jsonl-flat \
      "--action=click:OutlinedButton-[<'modal'>][0]" > head.jsonl
    sniff diff base.jsonl head.jsonl --tolerance 0.5
-   sniff check --input base.jsonl --rules
+   sniff check base.jsonl --rules
    ```
 
    > O `selector`/`path` dos nós (ex. `AlertDialog[0]`) é o identificador estável
@@ -505,12 +505,12 @@ Os campos importantes:
 
 ```bash
 # Captura base e head em jsonl-flat, depois compara:
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
+sniff capture flutter://emulator-5554 --project ~/projetos/app --depth 10 \
   --output jsonl-flat > base.jsonl
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10 \
+sniff capture flutter://emulator-5554 --project ~/projetos/app --depth 10 \
   --output jsonl-flat > head.jsonl
 sniff diff base.jsonl head.jsonl --tolerance 0.5
-sniff check --input base.jsonl --rules
+sniff check base.jsonl --rules
 ```
 
 Os selectors estáveis (`ClassName[ordinal]`) fazem o diff casar nós entre

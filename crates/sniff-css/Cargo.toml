@@ -19,6 +19,7 @@ sniff-flutter = { path = "../sniff-flutter" }
 sniff-css-diff = { path = "../sniff-css-diff" }
 sniff-css-check = { path = "../sniff-css-check" }
 tokio = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

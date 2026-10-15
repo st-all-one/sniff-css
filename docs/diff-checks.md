@@ -3,13 +3,17 @@
 Dois binários **sem IA**: reduzem dois snapshots ao que mudou (`sniff diff`) e
 descobrem problemas num snapshot (`sniff check`). O LLM só avalia o resultado.
 
+> Ambos aceitam o snapshot por **stdin** (`-`) e entrada estruturada
+> (`--params '<json>'` / `--batch file.jsonl`), e `--dry-run` para validar sem
+> executar. Ver [`cli-surface.md`](cli-surface.md) §5–6.
+
 ## Pipeline de diff
 
 ```bash
 # 1. Extração em dois momentos, com âncora estável
-sniff capture -u URL -s ".widget" --stable-key data-testid > base.jsonl
+sniff capture URL -s ".widget" --stable-key data-testid > base.jsonl
 # ... (deploy/tempo passa) ...
-sniff capture -u URL -s ".widget" --stable-key data-testid > head.jsonl
+sniff capture URL -s ".widget" --stable-key data-testid > head.jsonl
 
 # 2. Diff determinístico
 sniff diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
@@ -55,8 +59,8 @@ sniff diff base.jsonl head.jsonl --stats-only
 ## Checks determinísticos (`sniff check`)
 
 ```bash
-sniff check --input snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
-sniff check --input snap.jsonl --rules                     # PASS/WARN/FAIL
+sniff check snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
+sniff check snap.jsonl --rules                     # PASS/WARN/FAIL
 ```
 
 - **`--uniform`**: entre instâncias irmãs do mesmo selector, computa a norma do

@@ -7,7 +7,8 @@ use super::Cli;
 /// Resumo global exibido no fim do help.
 pub(crate) const AFTER_HELP: &str = "\
 CICLO: sniff capture → sniff check → sniff diff
-INIT: sniff init grava/atualiza o bloco do AGENTS.md do projeto (--force = sobrescreve)
+ENTRADA: operando posicional (<URL>, <SNAP>) ou --params '<json>' / --batch arq.jsonl / pipe (- = stdin)
+INIT: sniff init [DIR] grava/atualiza o bloco do AGENTS.md do projeto (--force = sobrescreve)
 ALVO: -s/--selector aceita CSS; `flutter://<device>` ativa o backend Flutter
 SAÍDA: stdout = dados (JSONL), stderr = logs; --json = envelope de máquina
 veja: sniff help <verbo>   # exemplo, escopo e quando NÃO usar";

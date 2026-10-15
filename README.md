@@ -7,7 +7,7 @@ Computed styles reais e árvore de widgets Flutter, determinísticos, para agent
 [![License](https://img.shields.io/badge/license-CC0--1.0-2b3a42?style=for-the-badge)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
-[![Version](https://img.shields.io/badge/version-0.5.0-009739?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.1-009739?style=for-the-badge)](CHANGELOG.md)
 
 </div>
 
@@ -35,7 +35,7 @@ curl --proto '=https' \
   | sh
 ```
 
-Versão fixa: `... | VERSION=v0.5.0 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Versão fixa: `... | VERSION=v0.5.1 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
 Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
 [`docs/docker.md`](docs/docker.md).
 
@@ -45,34 +45,34 @@ Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
 
 ```bash
 # capture — computed styles de um elemento (default otimizado para IA)
-sniff capture -u https://example.net -s ".btn-primary"
-sniff capture -u https://example.net -s ".card" --depth 4 --categories box-model,typography
+sniff capture https://example.net -s ".btn-primary"
+sniff capture https://example.net -s ".card" --depth 4 --categories box-model,typography
 # snapshot completo (entrada de diff/check/jq): --no-summary
 
 # capture — revelar elementos que só existem após uma ação (modal, dropdown, menu)
-sniff capture -u https://example.net -s ".modal" --click "#open-modal"
-sniff capture -u https://example.net -s ".result" \
+sniff capture https://example.net -s ".modal" --click "#open-modal"
+sniff capture https://example.net -s ".result" \
   --action "click:#open-modal:5000" --action "type:#q:shoes"
 
 # capture — área restrita e HTTPS self-signed (header em todo request, sem token na URL)
-sniff capture -u https://example.net/cms -s "main" --header "X-CMS-AI-Token: <token>"
-sniff capture -u https://app.local:3443/home -s "body" --ignore-certificate-errors
+sniff capture https://example.net/cms -s "main" --header "X-CMS-AI-Token: <token>"
+sniff capture https://app.local:3443/home -s "body" --ignore-certificate-errors
 
 # capture — evidência visual para review humana (PNG ao lado do snapshot)
-sniff capture -u https://example.net -s ".btn-primary" --screenshot snap.png
+sniff capture https://example.net -s ".btn-primary" --screenshot snap.png
 
 # flutter — árvore de widgets de um app Android (build debug), mesmo pipeline JSONL
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 10
-sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
-sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 10
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app \
+sniff capture flutter://emulator-5554 --project ~/projetos/app --depth 10
+sniff capture flutter://emulator-5554 --attach --project ~/projetos/app --depth 10
+sniff capture flutter://pixel --avd pixel --project ~/projetos/app --depth 10
+sniff capture flutter://emulator-5554 --project ~/projetos/app \
   --action "click:FilledButton-[<'counter'>][0]" --screenshot snap.png
 
 # diff — só o que mudou entre duas capturas (CHANGED/ADDED/REMOVED + resumo)
 sniff diff base.jsonl head.jsonl --tolerance 0.5
 
 # check — regras offline: contraste AA/AAA, alvo ≥24px, foco, alt, uniformidade, oclusão
-sniff check --input snap.jsonl --uniform --rules
+sniff check snap.jsonl --uniform --rules
 
 # mcp — servidor stdio para agentes: captura → diff → checks → IA interpreta o delta
 sniff-mcp
@@ -85,6 +85,12 @@ sniff self completions bash
 
 # init — grava/atualiza o bloco do sniff no AGENTS.md do projeto (--force = sobrescreve)
 sniff init
+
+# entrada estruturada — --params (uma operação) / --batch (N) / stdin, como o knudge
+sniff capture --params '{"url":"https://example.net","selector":".btn","depth":2}'
+sniff check --params '{"input":"snap.jsonl","rules":true}'
+sniff capture --batch pages.jsonl        # uma página por linha (JSONL)
+sniff capture https://example.net -s body --no-summary | sniff check -
 ```
 
 Auth por header, login persistente (`--storage-state`), uploads reais e o mapa

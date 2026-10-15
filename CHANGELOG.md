@@ -4,6 +4,45 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+## [0.5.1] — 2026-10-15
+
+**Superfície de API (entrada/saída estruturada).** Continuação direta da
+superfície da 0.5.0: a CLI ganha a **gramática de operandos** e os canais
+de máquina do knudge, sem mudar o contrato de máquina (MCP/`--json`/exit codes).
+
+### Added
+
+- **Convenção de operandos** — o objeto do verbo é sempre posicional:
+  `sniff capture <URL>`, `sniff check <SNAP>` e `sniff init [DIR]`
+  (`sniff diff <BASE> <HEAD>` já seguia). Operando não se passa por flag.
+- **stdin/heredoc universal** — `-` lê de stdin em qualquer entrada
+  (operando de arquivo, `--params`, `--batch`); sem operando e com stdin
+  não-TTY, o stdin preenche o canal; sem entrada e com TTY → exit 2.
+- **`--params '<json>'`** — objeto com **todos** os campos do verbo em uma
+  chamada (uma operação); `--params -` lê de stdin. Chaves em `snake_case`,
+  iguais às do MCP e do `--json`.
+- **`--batch <FONTE|->`** — JSONL com uma operação por linha; `--params` é o
+  **lote de 1** (mesmo parser). Best-effort (linha ruim não aborta o lote),
+  teto `sniff.batch_max=100`, saída JSONL de status (`index`/`ok`/`path`/`error`).
+- **`--dry-run`** — valida a configuração de cada item sem tocar no browser.
+- **`--persist [PATH]`** — registra o JSONL completo; sem valor vai para o
+  store gerenciado (`sniff/[domínio]/…`), com `PATH` grava no arquivo. No
+  `--batch`, cada item persiste o seu payload antes da linha de status.
+
+### Changed
+
+- **`--no-summary`/`--summary`** viram aliases ocultos de `--output`
+  (`jsonl`/`summary`); `--output` é o modo explícito.
+- **Aliases legados** preservados por um ciclo: `-u/--url`, `-i/--input` e
+  `--dir` continuam aceitos (avisam em stderr).
+- **Erros de configuração** passam a sair como entrada inválida (exit 2) em vez
+  de erro interno (70).
+
+### Fixed
+
+- `check`/`diff` aceitam o snapshot por **stdin** (`-`), permitindo
+  `sniff capture … --no-summary | sniff check -`.
+
 ## [0.5.0] — 2026-10-15
 
 Release de **qualidade e estabilidade**: base **Rust 1.99 / Edition 2024**,

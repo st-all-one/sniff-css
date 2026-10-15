@@ -12,42 +12,75 @@ acessibilidade, veja [`diff-checks.md`](diff-checks.md) e
 ```bash
 # Computed styles do botão — o default já é otimizado para IA:
 # compact + custom-props + stabilize + contrast + ax ligados.
-sniff capture --url http://localhost:3000 --selector ".btn-primary"
+sniff capture http://localhost:3000 -s ".btn-primary"
 
 # Full-fidelity (todas as ~400 props do navegador, sem dedup, sem facets
 # medidos) — comportamento antigo:
-sniff capture --url http://localhost:3000 --selector ".btn-primary" --full
+sniff capture http://localhost:3000 -s ".btn-primary" --full
 
 # Apenas box-model + tipografia, com 1 nível de filhos (flags continuam
 # funcionando e sobrepõem os defaults):
-sniff capture --url http://localhost:3000 --selector ".card" \
+sniff capture http://localhost:3000 -s ".card" \
   --depth 1 --categories box-model,typography
 
 # Espera o app carregar (flag JS), captura pseudo-elemento e normaliza cores
-sniff capture --url http://localhost:3000 --selector ".modal" \
+sniff capture http://localhost:3000 -s ".modal" \
   --wait app-flag:__APP_READY__:15000 --pseudo ::before
 
 # Conectar num browser já aberto (Chrome com --remote-debugging-port=9222).
 # Aceita ws:// direto OU um origin http:// que resolve via /json/version.
-sniff capture --url http://localhost:3000 --selector "header" \
+sniff capture http://localhost:3000 -s "header" \
   --connect http://127.0.0.1:9222
 
 # A mesma coisa usando a variável de ambiente (padrão do container Docker).
-SNIFF_CONNECT=http://127.0.0.1:9222 sniff capture --url http://localhost:3000 \
-  --selector "header"
+SNIFF_CONNECT=http://127.0.0.1:9222 sniff capture http://localhost:3000 \
+  -s "header"
 
 # Dev server com certificado self-signed (ex.: https://app.local:3443): ignora
 # o erro de TLS em vez de capturar o interstitial "conexão não é particular".
-sniff capture --url https://app.local:3443/home --selector "body" \
+sniff capture https://app.local:3443/home -s "body" \
   --ignore-certificate-errors
 
 # Revelar elementos que só existem após uma interação (modal, dropdown, menu):
 # a ação roda antes da captura; o pipeline de waits roda depois do clique.
-sniff capture --url http://localhost:3000 --selector ".modal" \
+sniff capture http://localhost:3000 -s ".modal" \
   --click "#open-modal"
-sniff capture --url http://localhost:3000 --selector ".search-results" \
+sniff capture http://localhost:3000 -s ".search-results" \
   --type "#q:shoes" --wait "network-idle:800:30000"
 ```
+
+## Entrada estruturada (`--params`, `--batch`, stdin)
+
+O operando é sempre **posicional** (`sniff capture <URL>`, `sniff check <SNAP>`).
+Para scripts/agentes há dois canais de máquina, com o **mesmo schema** das flags
+(`snake_case`, idêntico ao MCP e ao `--json`):
+
+```bash
+# Uma operação — objeto JSON com todos os campos.
+sniff capture --params '{"url":"http://localhost:3000","selector":".btn","depth":2}'
+sniff check   --params '{"input":"snap.jsonl","rules":true,"uniform":true}'
+echo '{"url":"http://localhost:3000","selector":".btn"}' | sniff capture --params -
+
+# N operações — JSONL, uma por linha (best-effort; teto sniff.batch_max=100).
+sniff capture --batch pages.jsonl
+sniff capture --batch - <<'EOF'
+{"url":"http://localhost:3000","selector":".btn"}
+{"url":"http://localhost:3000","selector":".card","depth":3,"persist":"card.jsonl"}
+EOF
+sniff capture --batch pages.jsonl --dry-run   # valida sem abrir browser
+
+# stdin/heredoc: `-` em qualquer entrada; pipe também é aceito sem operando.
+sniff capture http://localhost:3000 -s body --no-summary | sniff check -
+sniff check - < snap.jsonl
+```
+
+- `--persist [PATH]`: registra o JSONL completo (store gerenciado ou arquivo);
+  no `--batch`, cada item persiste antes da linha de status.
+- `--dry-run`: valida cada item sem executar.
+- Fonte duplicada (posicional + `--params`/`--batch`) → exit 2.
+
+> Os nomes antigos continuam aceitos como **aliases depreciados**: `-u/--url`,
+> `-i/--input` e `--dir`.
 
 ## Opções principais
 
@@ -59,8 +92,8 @@ sniff capture --url http://localhost:3000 --selector ".search-results" \
 
 | Opção | Descrição | Padrão |
 |---|---|---|
-| `-u, --url` | URL da página | obrigatório |
-| `-s, --selector` | Seletor CSS | obrigatório |
+| `<URL>` (posicional) | URL da página (ou `flutter://<device>`) | obrigatório |
+| `-s, --selector` | Seletor CSS | obrigatório (web) |
 | `--depth N` | Níveis de filhos (0 = só o elemento) | `0` |
 | `-c, --categories` | Lista separada por vírgula | `all` |
 | `--props a,b` | Propriedades custom adicionais | — |
@@ -117,33 +150,33 @@ funcionam por path.
 ```bash
 # Forma enxuta: o URL `flutter://<serial>` infere o backend e o device
 # (`-s` vira `root` se omitido):
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --depth 2
+sniff capture flutter://emulator-5554 --project ~/projetos/app --depth 2
 
 # Equivalente explícito:
 sniff capture --backend flutter --device emulator-5554 --project ~/projetos/app \
   --target lib/main.dart --depth 2 -s root
 
 # Anexar a um device/emulador já rodando um app debug (flutter attach):
-sniff capture -u flutter://emulator-5554 --attach --project ~/projetos/app --depth 2
+sniff capture flutter://emulator-5554 --attach --project ~/projetos/app --depth 2
 
 # Lançar um AVD, rodar o app (flutter run --machine) e capturar:
-sniff capture -u flutter://pixel --avd pixel --project ~/projetos/app --depth 2
+sniff capture flutter://pixel --avd pixel --project ~/projetos/app --depth 2
 
 # Screenshot do device junto com a captura:
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
+sniff capture flutter://emulator-5554 --project ~/projetos/app --screenshot out.png
 
 # Viewport do app (media queries/layout do Flutter) em runtime:
-sniff capture -u flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
+sniff capture flutter://emulator-5554 --project ~/projetos/app --viewport 540x1200
 ```
 
-> O `--backend` padrão é `auto`: um `--url flutter://<serial>` (ou
+> O `--backend` padrão é `auto`: um `<URL>` `flutter://<serial>` (ou
 > `flutter://<serial>/<path>`) seleciona o backend Flutter e usa `<serial>`
 > como device; qualquer outra URL usa o backend web. Flags explícitas
 > (`--backend`, `--device`, `--avd`) sempre vencem a inferência.
 
 | Opção | Descrição | Padrão |
 |---|---|---|
-| `--backend web\|flutter\|auto` | Backend de captura: `web` (Chromium/CDP), `flutter` (VM Service) ou `auto` (inferido de `--url`) | `auto` |
+| `--backend web\|flutter\|auto` | Backend de captura: `web` (Chromium/CDP), `flutter` (VM Service) ou `auto` (inferido do operando `<URL>`) | `auto` |
 | `--device SERIAL` | Serial `adb` do emulador/device (ex.: `emulator-5554`); default: host do `flutter://<serial>` | — |
 | `--avd NAME` | Lançar este AVD em vez de anexar a um device já rodando | — |
 | `--project DIR` | Diretório do app (com `pubspec.yaml`); default: pai de `--target` que tem `pubspec.yaml` | — |
@@ -221,7 +254,7 @@ Para um CMS com middleware stateless de IA, o token vai por header — o request
 já nasce autenticado, sem token em URL, `.env` ou proxy:
 
 ```bash
-sniff capture -u http://localhost:10011/cms -s "main" \
+sniff capture http://localhost:10011/cms -s "main" \
   --header "X-CMS-AI-Token: <token>"
 # configure uma vez no shell e nunca repita:
 export SNIFF_DEFAULT_HEADERS='{"X-CMS-AI-Token":"<token>"}'
@@ -232,11 +265,11 @@ sobrevivem a restarts do browser):
 
 ```bash
 # 1. faça login via ações e exporte o estado
-sniff capture -u "$URL/login" -s ".dashboard" \
+sniff capture "$URL/login" -s ".dashboard" \
   --type "#email:user@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/state.json
 # 2. nas capturas seguintes, restaure antes da navegação
-sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
+sniff capture "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
 ```
 
 O mesmo se aplica ao MCP via `headers`/`storage_state`/`save_storage_state`, com
@@ -255,14 +288,14 @@ Um dev server em `https://` com certificado self-signed (ex.:
 `--ignore-certificate-errors` (ou a env `SNIFF_IGNORE_CERTIFICATE_ERRORS`):
 
 ```bash
-sniff capture -u https://app.local:3443/ouvidoria -s "body" \
+sniff capture https://app.local:3443/ouvidoria -s "body" \
   --ignore-certificate-errors
 
 # equivalente via variável de ambiente
-SNIFF_IGNORE_CERTIFICATE_ERRORS=1 sniff capture -u https://app.local:3443/ -s body
+SNIFF_IGNORE_CERTIFICATE_ERRORS=1 sniff capture https://app.local:3443/ -s body
 
 # conectando num browser já aberto (sem reabrir o Chromium com flag)
-sniff capture -u https://app.local:3443/ouvidoria -s body \
+sniff capture https://app.local:3443/ouvidoria -s body \
   --ignore-certificate-errors --connect http://127.0.0.1:9222
 ```
 
@@ -301,7 +334,7 @@ snapshot de página inteira antes/depois da ação e responde **o que** mudou e
 Exemplo:
 
 ```bash
-sniff capture --url "$URL" --selector ".modal" --click "#open" \
+sniff capture "$URL" -s ".modal" --click "#open" \
   | jq 'select(has("__actions")) | .__actions[0] | {effect, summary}'
 ```
 
@@ -397,7 +430,7 @@ pré-AI-default. Útil quando você precisa do conjunto **completo** de
 propriedades do navegador e das cores como o Chrome reporta:
 
 ```bash
-sniff capture --url http://localhost:3000 --selector ".card" --full
+sniff capture http://localhost:3000 -s ".card" --full
 ```
 
 A mesma saída também pode ser obtida flag a flag:
@@ -458,8 +491,8 @@ Complementa o snapshot calculado com o "como a página realmente está" no estad
 final do pipeline (pós-stabilize, pós-interações):
 
 ```bash
-sniff capture -u "$URL" -s ".modal" --click "#open" --screenshot modal.png
-sniff capture -u "$URL" -s "main" --depth 5 --screenshot page.png --fullpage-screenshot
+sniff capture "$URL" -s ".modal" --click "#open" --screenshot modal.png
+sniff capture "$URL" -s "main" --depth 5 --screenshot page.png --fullpage-screenshot
 ```
 
 O PNG é um artefato para olho humano; o JSONL continua sendo a fonte de verdade
@@ -473,7 +506,7 @@ reindexação de um form), peça-o explicitamente — ele entra verbatim no mapa
 `attrs` de cada nó e é comparado por chave pelo diff:
 
 ```bash
-sniff capture -u "$URL" -s "form#sucesu" --depth 3 --attrs name,value
+sniff capture "$URL" -s "form#sucesu" --depth 3 --attrs name,value
 # ... "attrs": {"name": "parameters[items][0][title]", "value": "Primeiro"} ...
 ```
 
@@ -488,11 +521,11 @@ gerada é **ignorada pelo git** automaticamente. O snapshot continua saindo no
 stdout; o caminho salvo é reportado no stderr.
 
 ```bash
-sniff capture -u "$URL" -s "main" --depth 5 --persist
+sniff capture "$URL" -s "main" --depth 5 --persist
 # criou sniff/localhost_3000/20260812T101530Z-index-main.jsonl
 # (como o summary é o formato padrão, o arquivo guarda o digest; para persistir
 #  o snapshot completo — necessário como entrada de diff/check — use junto o
-#  --no-summary, ex.: sniff capture -u "$URL" -s "main" --depth 5 --no-summary --persist)
+#  --no-summary, ex.: sniff capture "$URL" -s "main" --depth 5 --no-summary --persist)
 ```
 
 ## Docker
@@ -513,7 +546,7 @@ ambiente: veja [`docker.md`](docker.md).
   # versão específica:
   curl --proto '=https' --tlsv1.2 -sSf \
     https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh \
-    | VERSION=v0.5.0 sh
+    | VERSION=v0.5.1 sh
   ```
 
 - **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em

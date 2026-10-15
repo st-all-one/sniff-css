@@ -42,13 +42,13 @@ Para que duas runs sejam comparáveis, os seguintes parâmetros devem ser
 # 1. Baseline (antes da mudança) — default otimizado já inclui
 #    compact + custom-props + stabilize + contrast + ax
 sniff capture \
-  --url "$URL" --selector "$SEL" \
+  "$URL" -s "$SEL" \
   --depth 2 --stable-key data-testid \
   > snapshots/base.jsonl
 
 # 2. Após a mudança/deploy (mesmos flags)
 sniff capture \
-  --url "$URL" --selector "$SEL" \
+  "$URL" -s "$SEL" \
   --depth 2 --stable-key data-testid \
   > snapshots/head.jsonl
 
@@ -62,7 +62,7 @@ sniff diff snapshots/base.jsonl snapshots/head.jsonl \
 #   ^--ignore-props:  props animadas não marcam o nó como changed.
 
 # 4. Checks determinísticos (descoberta, sem IA)
-sniff check --input snapshots/head.jsonl --uniform --rules
+sniff check snapshots/head.jsonl --uniform --rules
 
 # 5. Avaliação IA (só agora o LLM vê algo)
 #   Envie delta.jsonl + docs/eval-prompt.md; valide a resposta contra

@@ -52,12 +52,12 @@ o DOM pós-interação e o `--stabilize` é reaplicado para determinismo:
 
 ```bash
 # header auth (sem token em URL / .env / proxy)
-sniff capture -u http://localhost:10011/cms -s "main" --header "X-CMS-AI-Token: <token>"
+sniff capture http://localhost:10011/cms -s "main" --header "X-CMS-AI-Token: <token>"
 # login via ações → exporta estado → restaura nas próximas
-sniff capture -u "$URL/login" -s ".dashboard" \
+sniff capture "$URL/login" -s ".dashboard" \
   --type "#email:user@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/state.json
-sniff capture -u "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
+sniff capture "$URL/cms/dashboard" -s "main" --storage-state /tmp/state.json
 ```
 
 ### Volumetria, prova visual e atributos DOM
@@ -93,7 +93,18 @@ Campos derivados que a IA **não precisa inferir**:
 
 ## 2. Diff determinístico (antes da IA)
 
+> Para agentes/scripts, a entrada pode ser estruturada: `--params '<json>'` (uma
+> operação) ou `--batch file.jsonl` (N, best-effort, teto `sniff.batch_max=100`),
+> com `-` = stdin. `diff`/`check` também aceitam o snapshot por stdin (`-`).
+> Schema compartilhado com o MCP/`--json`; detalhe em
+> [`cli-surface.md`](cli-surface.md) §5–6.
+
 ```bash
+# diff/check por stdin, encadeados a partir de uma captura
+sniff capture "$URL" -s body --no-summary | sniff check -
+sniff diff base.jsonl - < head.jsonl
+
+# diff de dois snapshots em disco
 sniff diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 ```
 
@@ -109,8 +120,8 @@ sniff diff base.jsonl head.jsonl --tolerance 0.5 > delta.jsonl
 ## 2b. Checks determinísticos (`sniff check`)
 
 ```bash
-sniff check --input head.jsonl --uniform --tolerance 0.5   # o "card estranho"
-sniff check --input head.jsonl --rules                     # PASS/WARN/FAIL
+sniff check head.jsonl --uniform --tolerance 0.5   # o "card estranho"
+sniff check head.jsonl --rules                     # PASS/WARN/FAIL
 ```
 
 Saída JSONL com **evidência medida** (contraste AA/AAA, alvo 24×24, foco
@@ -182,7 +193,7 @@ relativa, ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`).
 > **Fluxo low-token (recomendado):** cada captura salva no disco. No CLI
 > (preferido quando há shell), `sniff ... --no-summary --persist` grava o
 > snapshot completo e emite o digest summary; `sniff diff <base> <head>` e
-> `sniff check --input <head>` leem os arquivos. No MCP, cada `sniff_page`
+> `sniff check <head>` leem os arquivos. No MCP, cada `sniff_page`
 > salva e responde o summary; depois `sniff_diff base_path/head_path` e
 > `sniff_check path` leem os arquivos — o snapshot completo **nunca** entra
 > no contexto do LLM (nem no retorno, nem nos argumentos).
@@ -200,10 +211,10 @@ Config do Claude Desktop:
 ### Monitor de regressão (CI)
 
 ```bash
-sniff capture --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
+sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid \
   > snapshots/base.jsonl
 # ... no build seguinte ... (mesmos flags nos dois lados)
-sniff capture --url "$URL" --selector "$SEL" --no-summary --stable-key data-testid \
+sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid \
   > snapshots/head.jsonl
 sniff diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 # falha o job se changed/added/removed > limiar
@@ -215,9 +226,9 @@ sniff diff snapshots/base.jsonl snapshots/head.jsonl --stats-only
 ### Debug de um elemento pontual
 
 ```bash
-sniff capture -u http://localhost:3000 -s ".btn-primary" --categories visual,typography \
+sniff capture http://localhost:3000 -s ".btn-primary" --categories visual,typography \
   | jq '{color:.css.color, font:.css."font-size"}'                  # summary (default)
-sniff capture -u http://localhost:3000 -s ".btn-primary" --no-summary --categories visual,typography \
+sniff capture http://localhost:3000 -s ".btn-primary" --no-summary --categories visual,typography \
   | jq '{color:.styles.visual.color, font:.styles.typography."font-size"}'  # full
 ```
 
@@ -232,9 +243,9 @@ perceptibilidade é **graduada** (`is_user_noticeable`) e as regras
 algo está invisível.
 
 ```bash
-sniff capture -u "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
-sniff check --input main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
-sniff check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
+sniff capture "$URL" -s "body" --depth 5 --ax-tree > body.jsonl
+sniff check main.jsonl   --rules    # contraste AA, target 24x24, foco, alt, hidden-focusable
+sniff check body.jsonl   --uniform  # o "card estranho" entre irmãos
 ```
 
 ## 6. Boas práticas / armadilhas
@@ -267,7 +278,7 @@ sniff check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 
 | Ação | Comando |
 |---|---|
-| Capturar (default otimizado) | `sniff capture -u URL -s SEL [flags]` |
+| Capturar (default otimizado) | `sniff capture URL -s SEL [flags]` |
 | Snapshot completo (diff/check/jq) | `--no-summary` (ou `--output jsonl`) |
 | Full-fidelity | `--full` nos dois lados |
 | Revelar elementos por interação | `--click #open` · `--hover #menu` · `--type #q:shoes` · `--action click:#open` · `--upload #file:foto.png` |
@@ -279,7 +290,7 @@ sniff check --input body.jsonl   --uniform  # o "card estranho" entre irmãos
 | Ignorar props voláteis | `sniff diff ... --ignore-props transform,opacity` |
 | Listas de contagem variável | `sniff diff ... --no-structural` |
 | Delta completo | `sniff diff base.jsonl head.jsonl > delta.jsonl` |
-| Checagens determinísticas | `sniff check --input snap.jsonl --uniform --rules` |
+| Checagens determinísticas | `sniff check snap.jsonl --uniform --rules` |
 | Schema da resposta IA | [`sniff-eval.schema.json`](sniff-eval.schema.json) |
 | Prompt de avaliação | [`eval-prompt.md`](eval-prompt.md) |
 | Padrão ouro de execução | [`golden-run.md`](golden-run.md) |

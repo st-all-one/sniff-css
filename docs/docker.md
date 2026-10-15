@@ -31,7 +31,7 @@ Capture:
 
 ```bash
 docker exec sniffcss sniff capture \
-  -u http://localhost:3000 -s ".btn-primary" \
+  http://localhost:3000 -s ".btn-primary" \
   --depth 0 --wait "network-idle:1200:60000"
 ```
 
@@ -40,7 +40,7 @@ docker exec sniffcss sniff capture \
 ```bash
 docker compose -f docker/docker-compose.yml up -d
 docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniff capture -u "$URL" -s "$SEL" --stable-key data-testid
+  sniff capture "$URL" -s "$SEL" --stable-key data-testid
 ```
 
 ## docker-compose.yml otimizado para integração em projetos
@@ -164,7 +164,7 @@ docker compose -f docker/docker-compose.yml exec -i sniffcss sniff-mcp
 docker compose -f docker/docker-compose.yml exec sniffcss \
   sniff diff base.jsonl head.jsonl --tolerance 0.5
 docker compose -f docker/docker-compose.yml exec sniffcss \
-  sniff check --input snap.jsonl --uniform --rules
+  sniff check snap.jsonl --uniform --rules
 ```
 
 ## Variáveis de ambiente (defaults)
@@ -185,7 +185,7 @@ docker compose -f docker/docker-compose.yml exec sniffcss \
 ## Como a imagem é construída
 
 - Por padrão o `docker/Dockerfile` **baixa os binários pré-compilados do
-  GitHub Release** (`--build-arg VERSION=v0.5.0`) e verifica o `sha256sums.txt`
+  GitHub Release** (`--build-arg VERSION=v0.5.1`) e verifica o `sha256sums.txt`
   — não compila nada.
 - Para desenvolvimento local sem Release publicado:
   `scripts/docker.sh build-source` (compila do fonte, `--build-arg BUILD_FROM_SOURCE=1`).
