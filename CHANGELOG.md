@@ -31,6 +31,9 @@ de máquina do knudge, sem mudar o contrato de máquina (MCP/`--json`/exit codes
 
 ### Changed
 
+- **Licença** — de `CC0-1.0` para **`MIT OR Apache-2.0`** (dual, padrão do
+  knudge): arquivos `LICENSE-MIT` e `LICENSE-APACHE`; o campo `license` do
+  workspace e dos 8 crates passa a `MIT OR Apache-2.0`.
 - **`--no-summary`/`--summary`** viram aliases ocultos de `--output`
   (`jsonl`/`summary`); `--output` é o modo explícito.
 - **Aliases legados** preservados por um ciclo: `-u/--url`, `-i/--input` e

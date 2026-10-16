@@ -132,7 +132,7 @@ Já pagos: `disallowed_types` (A1), `allow_attributes` + `let_underscore_untyped
 ## 7. Supply chain — `deny.toml`
 
 `cargo deny check` valida quatro checks: advisories, licenses, bans e sources.
-Licenças permitidas incluem `CC0-1.0` (licença do projeto) e `BSL-1.0`
+Licenças permitidas incluem `MIT OR Apache-2.0` (licença do projeto) e `BSL-1.0`
 (xxhash-rust). Versões duplicadas do mesmo crate geram **warning**; wildcard de
 versão e registry/git desconhecidos são **erro**. O ban explícito de runtime
 assíncrono do knudge **não** se aplica: o sniff é um cliente de rede

@@ -4,7 +4,7 @@
 
 Computed styles reais e árvore de widgets Flutter, determinísticos, para agentes de IA — captura → diff → checks.
 
-[![License](https://img.shields.io/badge/license-CC0--1.0-2b3a42?style=for-the-badge)](./LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b3a42?style=for-the-badge)](./LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
 [![Version](https://img.shields.io/badge/version-0.5.1-009739?style=for-the-badge)](CHANGELOG.md)
@@ -121,4 +121,5 @@ de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 
 ## Licença
 
-[CC0 1.0 Universal](LICENSE) (domínio público) — uso livre, sem atribuição.
+Licenciado sob **[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)** — uso livre,
+inclusive comercial, com atribuição.

@@ -19,6 +19,7 @@ na 0.5.0: a CLI ganha a **gramática de operandos** e os **canais de máquina**
   compartilhado com o MCP/`--json`; **`--dry-run`**.
 - **`--persist [PATH]`** + `--output` explícito; o lote registra cada payload
   antes da linha de status.
+- **Licença** — de `CC0-1.0` para **`MIT OR Apache-2.0`** (padrão do knudge).
 - Docs: `docs/cli-surface.md` §5–6, `docs/usage.md` (entrada estruturada),
   README, SKILL, AGENTS, `prime` e o bloco do `sniff init`.
 - Gate: fmt ✓, clippy ✓, **439 testes** (0 falhas), deny/audit/machete ✓, Miri ✓.
