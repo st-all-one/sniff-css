@@ -116,6 +116,7 @@ de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 | Baseline de desempenho (`criterion`) | [`docs/benchmarks.md`](docs/benchmarks.md) |
 | Guia ativo para agentes | [`SKILL.md`](SKILL.md) |
 | Índice para LLM | [`llms.txt`](llms.txt) |
+| Plano de modernização (detecção de oportunidades) | [`docs/modernization/README.md`](docs/modernization/README.md) |
 | Histórico de mudanças | [`CHANGELOG.md`](CHANGELOG.md) |
 | Contribuição | [`AGENTS.md`](AGENTS.md) |
 
