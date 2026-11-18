@@ -24,6 +24,7 @@
 use serde_json::Value;
 use sniff_core::TriState;
 use sniff_core::contrast::derive_contrast_values;
+use sniff_core::modern::{CheckClass, Evidence, Severity};
 use sniff_css_diff::DiffNode;
 use std::collections::BTreeMap;
 
@@ -49,7 +50,7 @@ fn tri_from_json(v: Option<&Value>) -> TriState {
 }
 
 /// Status of a single check line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuleStatus {
     /// The rule passed.
@@ -72,8 +73,40 @@ pub struct CheckLine {
     pub tag: Option<String>,
     /// Verdict of the rule for this node.
     pub status: RuleStatus,
-    /// Measured evidence backing the verdict.
-    pub evidence: String,
+    /// Existing break (bug) versus new modernization opportunity.
+    pub class: CheckClass,
+    /// Structured evidence backing the verdict, including its source facet.
+    pub evidence: Evidence,
+    /// Guide reference, when the check is tied to one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide: Option<String>,
+    /// Declared severity (absent for informational passes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
+    /// Additional machine-readable metrics, when needed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<Value>,
+}
+
+/// Build a legacy rule line: always a bug, no guide attachment and the
+/// severity derived from the verdict (`Pass` is informational only).
+fn rule_line(check: &str, node: &DiffNode, status: RuleStatus, evidence: Evidence) -> CheckLine {
+    tracing::trace!(check, status = ?status, class = "bug", "derived rule line emitted");
+    CheckLine {
+        check: check.into(),
+        selector: node.selector.clone(),
+        tag: node.tag.clone(),
+        status,
+        class: CheckClass::Bug,
+        evidence,
+        guide: None,
+        severity: match status {
+            RuleStatus::Fail => Some(Severity::Fail),
+            RuleStatus::Warn => Some(Severity::Warn),
+            RuleStatus::Pass => None,
+        },
+        metrics: None,
+    }
 }
 
 /// Tags that typically render visible text.
@@ -288,6 +321,11 @@ pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
             }
         }
     }
+    tracing::debug!(
+        candidates = cands.len(),
+        covered = covered.len(),
+        "occlusion sweep complete"
+    );
 
     let mut out = Vec::new();
     // `BTreeMap` iterates in ascending key order, so the output is already
@@ -299,20 +337,28 @@ pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
         let covered_sel = &fk.node.selector;
         let coverer_sel = &fc.node.selector;
         let pct = sniff_core::numeric::f64_to_u32(cover * 100.0);
-        out.push(CheckLine {
-            check: "occluded".into(),
-            selector: covered_sel.clone(),
-            tag: fk.node.tag.clone(),
-            status: if cover >= 0.75 {
-                RuleStatus::Fail
-            } else {
-                RuleStatus::Warn
-            },
-            evidence: format!(
+        let status = if cover >= 0.75 {
+            RuleStatus::Fail
+        } else {
+            RuleStatus::Warn
+        };
+        let threshold = if status == RuleStatus::Fail {
+            0.75
+        } else {
+            0.5
+        };
+        let evidence = Evidence::numeric(
+            format!(
                 "{pct}% of {covered_sel} is covered by {coverer_sel} — \
                  the element is visually behind an overlapping element"
             ),
-        });
+            "rect",
+            "coverage_ratio",
+            cover,
+            threshold,
+            ">=",
+        );
+        out.push(rule_line("occluded", fk.node, status, evidence));
     }
     out
 }
@@ -375,6 +421,7 @@ pub fn check_backdrop_over_modal(
         interactive || text || TEXT_TAGS.contains(&tag)
     };
 
+    tracing::debug!(nodes = flat.len(), "backdrop-over-modal sweep started");
     let mut out = Vec::new();
     for (bi, bf) in flat.iter().enumerate() {
         if !is_backdrop(bf) {
@@ -413,18 +460,25 @@ pub fn check_backdrop_over_modal(
                 continue;
             }
             let pct = sniff_core::numeric::f64_to_u32(cov * 100.0);
-            out.push(CheckLine {
-                check: "backdrop-over-modal".into(),
-                selector: mf.node.selector.clone(),
-                tag: mf.node.tag.clone(),
-                status: RuleStatus::Fail,
-                evidence: format!(
+            let evidence = Evidence::numeric(
+                format!(
                     "{pct}% of {} is covered by the modal backdrop {} — \
                      the dialog paints below its own dark scrim (negative z-index); \
                      check the stacking order",
                     mf.node.selector, bf.node.selector
                 ),
-            });
+                "rect",
+                "coverage_ratio",
+                cov,
+                0.5,
+                ">=",
+            );
+            out.push(rule_line(
+                "backdrop-over-modal",
+                mf.node,
+                RuleStatus::Fail,
+                evidence,
+            ));
         }
     }
     out
@@ -740,34 +794,53 @@ fn check_node(
             });
         if let Some(info) = info {
             let large = if info.large { "large " } else { "" };
+            let source = if node.contrast.is_some() {
+                "contrast_facet"
+            } else {
+                "styles.visual"
+            };
             match info.aa {
-                TriState::Pass => out.push(CheckLine {
-                    check: "contrast-aa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Pass,
-                    evidence: format!("ratio {}:1 (need 4.5:1 {large}text AA)", info.ratio),
-                }),
-                TriState::Fail => out.push(CheckLine {
-                    check: "contrast-aa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Fail,
-                    evidence: format!(
-                        "ratio {}:1 on {} against {} (need 4.5:1 {large}text AA)",
-                        info.ratio, info.foreground, info.background
+                TriState::Pass => out.push(rule_line(
+                    "contrast-aa",
+                    node,
+                    RuleStatus::Pass,
+                    Evidence::numeric(
+                        format!("ratio {}:1 (need 4.5:1 {large}text AA)", info.ratio),
+                        source,
+                        "contrast_ratio",
+                        info.ratio,
+                        4.5,
+                        ">=",
                     ),
-                }),
-                TriState::Unknown => out.push(CheckLine {
-                    check: "contrast-aa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Warn,
-                    evidence: format!(
-                        "contrast unmeasurable: {} (manual review)",
-                        info.unknown_reason.as_deref().unwrap_or("unknown")
+                )),
+                TriState::Fail => out.push(rule_line(
+                    "contrast-aa",
+                    node,
+                    RuleStatus::Fail,
+                    Evidence::numeric(
+                        format!(
+                            "ratio {}:1 on {} against {} (need 4.5:1 {large}text AA)",
+                            info.ratio, info.foreground, info.background
+                        ),
+                        source,
+                        "contrast_ratio",
+                        info.ratio,
+                        4.5,
+                        ">=",
                     ),
-                }),
+                )),
+                TriState::Unknown => out.push(rule_line(
+                    "contrast-aa",
+                    node,
+                    RuleStatus::Warn,
+                    Evidence::new(
+                        format!(
+                            "contrast unmeasurable: {} (manual review)",
+                            info.unknown_reason.as_deref().unwrap_or("unknown")
+                        ),
+                        source,
+                    ),
+                )),
             }
 
             // AAA (WCAG 1.4.6): threshold 7.0:1 normal / 4.5:1 large text.
@@ -777,33 +850,47 @@ fn check_node(
                 (7.0, "normal")
             };
             match info.aaa {
-                TriState::Pass => out.push(CheckLine {
-                    check: "contrast-aaa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Pass,
-                    evidence: format!("ratio {}:1 (need {aaa_th}:1 {label} text AAA)", info.ratio),
-                }),
-                TriState::Fail => out.push(CheckLine {
-                    check: "contrast-aaa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Fail,
-                    evidence: format!(
-                        "ratio {}:1 on {} against {} (need {aaa_th}:1 {label} text AAA)",
-                        info.ratio, info.foreground, info.background
+                TriState::Pass => out.push(rule_line(
+                    "contrast-aaa",
+                    node,
+                    RuleStatus::Pass,
+                    Evidence::numeric(
+                        format!("ratio {}:1 (need {aaa_th}:1 {label} text AAA)", info.ratio),
+                        source,
+                        "contrast_ratio",
+                        info.ratio,
+                        aaa_th,
+                        ">=",
                     ),
-                }),
-                TriState::Unknown => out.push(CheckLine {
-                    check: "contrast-aaa".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Warn,
-                    evidence: format!(
-                        "contrast unmeasurable: {} (manual review)",
-                        info.unknown_reason.as_deref().unwrap_or("unknown")
+                )),
+                TriState::Fail => out.push(rule_line(
+                    "contrast-aaa",
+                    node,
+                    RuleStatus::Fail,
+                    Evidence::numeric(
+                        format!(
+                            "ratio {}:1 on {} against {} (need {aaa_th}:1 {label} text AAA)",
+                            info.ratio, info.foreground, info.background
+                        ),
+                        source,
+                        "contrast_ratio",
+                        info.ratio,
+                        aaa_th,
+                        ">=",
                     ),
-                }),
+                )),
+                TriState::Unknown => out.push(rule_line(
+                    "contrast-aaa",
+                    node,
+                    RuleStatus::Warn,
+                    Evidence::new(
+                        format!(
+                            "contrast unmeasurable: {} (manual review)",
+                            info.unknown_reason.as_deref().unwrap_or("unknown")
+                        ),
+                        source,
+                    ),
+                )),
             }
         }
     }
@@ -814,13 +901,19 @@ fn check_node(
         && let Some((w, h)) = rect_size(node)
         && (w < 24.0 || h < 24.0)
     {
-        out.push(CheckLine {
-            check: "target-size".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Fail,
-            evidence: format!("interactive {tag} is {w:0.0}x{h:0.0}px (minimum 24x24)"),
-        });
+        out.push(rule_line(
+            "target-size",
+            node,
+            RuleStatus::Fail,
+            Evidence::numeric(
+                format!("interactive {tag} is {w:0.0}x{h:0.0}px (minimum 24x24)"),
+                "rect",
+                "target_min_side_px",
+                w.min(h),
+                24.0,
+                ">=",
+            ),
+        ));
     }
 
     // --- Visible focus indicator ---
@@ -832,26 +925,29 @@ fn check_node(
         let style_none = outline_style == "none";
         let no_shadow = box_shadow == "none" || box_shadow.is_empty();
         if width_zero && style_none && no_shadow {
-            out.push(CheckLine {
-                check: "focus-indicator".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "focusable element suppresses the outline and has no box-shadow"
-                    .to_string(),
-            });
+            out.push(rule_line(
+                "focus-indicator",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "focusable element suppresses the outline and has no box-shadow",
+                    "styles.visual",
+                ),
+            ));
         }
     }
 
     // --- Hidden but focusable ---
     if focusable && node.accessibility_grade() == Some("NONE") {
-        out.push(CheckLine {
-            check: "hidden-focusable".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Warn,
-            evidence: "focusable element is not exposed to assistive tech (tab trap)".to_string(),
-        });
+        out.push(rule_line(
+            "hidden-focusable",
+            node,
+            RuleStatus::Warn,
+            Evidence::new(
+                "focusable element is not exposed to assistive tech (tab trap)",
+                "aria",
+            ),
+        ));
     }
 
     // --- Empty alt on a non-decorative image ---
@@ -866,15 +962,21 @@ fn check_node(
             && w > 32.0
             && h > 32.0
         {
-            out.push(CheckLine {
-                check: "empty-alt-image".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "image {w:0.0}x{h:0.0}px has an empty alt (decorative? otherwise add a label)"
+            out.push(rule_line(
+                "empty-alt-image",
+                node,
+                RuleStatus::Warn,
+                Evidence::numeric(
+                    format!(
+                        "image {w:0.0}x{h:0.0}px has an empty alt (decorative? otherwise add a label)"
+                    ),
+                    "aria",
+                    "image_min_side_px",
+                    w.min(h),
+                    32.0,
+                    ">",
                 ),
-            });
+            ));
         }
     }
 
@@ -883,16 +985,15 @@ fn check_node(
         && style_val(node, "layout", "position") == Some("sticky")
         && ctx.has_overflow_hidden_ancestor
     {
-        out.push(CheckLine {
-            check: "sticky-in-overflow-hidden".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Warn,
-            evidence:
-                "position:sticky inside an overflow:hidden/auto/scroll ancestor — the stickiness "
-                    .to_string()
-                    + "never engages",
-        });
+        out.push(rule_line(
+            "sticky-in-overflow-hidden",
+            node,
+            RuleStatus::Warn,
+            Evidence::new(
+                "position:sticky inside an overflow:hidden/auto/scroll ancestor — the stickiness never engages",
+                "styles.layout",
+            ),
+        ));
     }
 
     // --- position:fixed broken by a transformed ancestor ---
@@ -900,15 +1001,15 @@ fn check_node(
         && style_val(node, "layout", "position") == Some("fixed")
         && ctx.has_transform_ancestor
     {
-        out.push(CheckLine {
-            check: "fixed-broken-by-transform".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Warn,
-            evidence: "position:fixed inside a transformed/filtered ancestor — the element "
-                .to_string()
-                + "is positioned relative to that ancestor, not the viewport",
-        });
+        out.push(rule_line(
+            "fixed-broken-by-transform",
+            node,
+            RuleStatus::Warn,
+            Evidence::new(
+                "position:fixed inside a transformed/filtered ancestor — the element is positioned relative to that ancestor, not the viewport",
+                "styles.layout",
+            ),
+        ));
     }
 
     // --- position:absolute with no insets (sits at its static position) ---
@@ -931,15 +1032,15 @@ fn check_node(
             // decorative overlay / backdrop), skip — it's sized intentionally.
             let is_likely_overlay = rect_size(node).is_some_and(|(w, h)| w >= 300.0 && h >= 300.0);
             if !is_likely_overlay {
-                out.push(CheckLine {
-                    check: "absolute-without-insets".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Warn,
-                    evidence: "position:absolute with no top/right/bottom/left — the element stays "
-                        .to_string()
-                        + "at its static position (a common dropdown/overlay bug)",
-                });
+                out.push(rule_line(
+                    "absolute-without-insets",
+                    node,
+                    RuleStatus::Warn,
+                    Evidence::new(
+                        "position:absolute with no top/right/bottom/left — the element stays at its static position (a common dropdown/overlay bug)",
+                        "styles.layout",
+                    ),
+                ));
             }
         }
     }
@@ -949,15 +1050,17 @@ fn check_node(
         && INTERACTIVE_TAGS.contains(&tag)
         && style_val(node, "interaction", "pointer-events") == Some("none")
     {
-        out.push(CheckLine {
-            check: "interactive-pointer-events-none".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Fail,
-            evidence: format!(
-                "interactive {tag} has pointer-events:none — it cannot be clicked or tapped"
+        out.push(rule_line(
+            "interactive-pointer-events-none",
+            node,
+            RuleStatus::Fail,
+            Evidence::new(
+                format!(
+                    "interactive {tag} has pointer-events:none — it cannot be clicked or tapped"
+                ),
+                "styles.interaction",
             ),
-        });
+        ));
     }
 
     // --- aria-hidden on a focusable element (focus trap / invisible focus) ---
@@ -969,15 +1072,15 @@ fn check_node(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if aria_hidden {
-            out.push(CheckLine {
-                check: "aria-hidden-focusable".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Fail,
-                evidence: "aria-hidden=\"true\" on a focusable element — keyboard focus lands on "
-                    .to_string()
-                    + "invisible content (WCAG 4.1.2)",
-            });
+            out.push(rule_line(
+                "aria-hidden-focusable",
+                node,
+                RuleStatus::Fail,
+                Evidence::new(
+                    "aria-hidden=\"true\" on a focusable element — keyboard focus lands on invisible content (WCAG 4.1.2)",
+                    "aria",
+                ),
+            ));
         }
     }
 
@@ -990,14 +1093,15 @@ fn check_node(
         let nowrap = style_val(node, "typography", "white-space")
             .is_some_and(|v| matches!(v, "nowrap" | "pre"));
         if !clipped && !nowrap {
-            out.push(CheckLine {
-                check: "ellipsis-without-clip".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "text-overflow:ellipsis needs overflow:hidden (and usually ".to_string()
-                    + "white-space:nowrap) to take effect",
-            });
+            out.push(rule_line(
+                "ellipsis-without-clip",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "text-overflow:ellipsis needs overflow:hidden (and usually white-space:nowrap) to take effect",
+                    "styles.typography",
+                ),
+            ));
         }
     }
 
@@ -1015,15 +1119,15 @@ fn check_node(
         .filter_map(|p| style_val(node, "box_model", p))
         .any(|v| v != "0px" && v != "0");
         if full && has_padding {
-            out.push(CheckLine {
-                check: "width-100-with-padding".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "width:100% with box-sizing:content-box and padding overflows its "
-                    .to_string()
-                    + "container — use box-sizing:border-box",
-            });
+            out.push(rule_line(
+                "width-100-with-padding",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "width:100% with box-sizing:content-box and padding overflows its container — use box-sizing:border-box",
+                    "styles.box_model",
+                ),
+            ));
         }
     }
 
@@ -1035,16 +1139,22 @@ fn check_node(
             && px > 0.0
             && px < 12.0
         {
-            out.push(CheckLine {
-                check: "small-text".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "font-size {} is below the ~12px comfortable minimum",
-                    fs.unwrap_or("?")
+            out.push(rule_line(
+                "small-text",
+                node,
+                RuleStatus::Warn,
+                Evidence::numeric(
+                    format!(
+                        "font-size {} is below the ~12px comfortable minimum",
+                        fs.unwrap_or("?")
+                    ),
+                    "styles.typography",
+                    "font_size_px",
+                    px,
+                    12.0,
+                    "<",
                 ),
-            });
+            ));
         }
     }
 
@@ -1064,17 +1174,23 @@ fn check_node(
             && let Some((_, _, w, h)) = rect_coords(node)
             && (w < 150.0 || h < 150.0)
         {
-            out.push(CheckLine {
-                check: "small-thumbnail".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "image thumbnail is {}×{}px (recommended minimum 150×150 for comfortable viewing)",
-                    sniff_core::numeric::f64_to_u32(w),
-                    sniff_core::numeric::f64_to_u32(h)
+            out.push(rule_line(
+                "small-thumbnail",
+                node,
+                RuleStatus::Warn,
+                Evidence::numeric(
+                    format!(
+                        "image thumbnail is {}×{}px (recommended minimum 150×150 for comfortable viewing)",
+                        sniff_core::numeric::f64_to_u32(w),
+                        sniff_core::numeric::f64_to_u32(h)
+                    ),
+                    "rect",
+                    "thumbnail_min_side_px",
+                    w.min(h),
+                    150.0,
+                    "<",
                 ),
-            });
+            ));
         }
     }
 
@@ -1087,15 +1203,21 @@ fn check_node(
             && lh_px > 0.0
             && lh_px < fs_px
         {
-            out.push(CheckLine {
-                check: "line-height-below-font-size".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "line-height {lh_px:0.1}px is smaller than font-size {fs_px:0.1}px — glyphs can clip or overlap"
+            out.push(rule_line(
+                "line-height-below-font-size",
+                node,
+                RuleStatus::Warn,
+                Evidence::numeric(
+                    format!(
+                        "line-height {lh_px:0.1}px is smaller than font-size {fs_px:0.1}px — glyphs can clip or overlap"
+                    ),
+                    "styles.typography",
+                    "line_height_to_font_size_ratio",
+                    lh_px / fs_px,
+                    1.0,
+                    "<",
                 ),
-            });
+            ));
         }
     }
 
@@ -1117,16 +1239,18 @@ fn check_node(
             && style_val(node, "layout", "position") == Some("static")
             && !ctx.parent_is_flex_or_grid
         {
-            out.push(CheckLine {
-                check: "z-index-on-static".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "z-index {} on a position:static element is ignored — position the element or make the parent a flex/grid container",
-                    zi.unwrap_or("?")
+            out.push(rule_line(
+                "z-index-on-static",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    format!(
+                        "z-index {} on a position:static element is ignored — position the element or make the parent a flex/grid container",
+                        zi.unwrap_or("?")
+                    ),
+                    "styles.layout",
                 ),
-            });
+            ));
         }
     }
 
@@ -1134,15 +1258,17 @@ fn check_node(
     if visible && INTERACTIVE_TAGS.contains(&tag) {
         let needs_name = tag == "INPUT" || tag == "BUTTON" || tag == "SELECT" || tag == "TEXTAREA";
         if needs_name && !has_name && !has_text {
-            out.push(CheckLine {
-                check: "control-without-name".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: format!(
-                    "interactive {tag} has no accessible name (no text, aria-label or label) — icon-only controls need one"
+            out.push(rule_line(
+                "control-without-name",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    format!(
+                        "interactive {tag} has no accessible name (no text, aria-label or label) — icon-only controls need one"
+                    ),
+                    "aria",
                 ),
-            });
+            ));
         }
     }
 
@@ -1156,15 +1282,15 @@ fn check_node(
     {
         let us = style_val(node, "interaction", "user-select");
         if us.is_some_and(|v| matches!(v, "none" | "-webkit-none")) {
-            out.push(CheckLine {
-                check: "text-not-selectable".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "user-select:none on body text prevents users from selecting/copying "
-                    .to_string()
-                    + "content",
-            });
+            out.push(rule_line(
+                "text-not-selectable",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "user-select:none on body text prevents users from selecting/copying content",
+                    "styles.interaction",
+                ),
+            ));
         }
     }
 
@@ -1177,15 +1303,21 @@ fn check_node(
             if let Some(d) = dur
                 && d < 0.5
             {
-                out.push(CheckLine {
-                    check: "infinite-fast-animation".into(),
-                    selector: node.selector.clone(),
-                    tag: node.tag.clone(),
-                    status: RuleStatus::Warn,
-                    evidence: format!(
-                        "infinite animation with a {d:0.2}s cycle may flicker fast enough to trigger photosensitive conditions (WCAG 2.3.1)"
+                out.push(rule_line(
+                    "infinite-fast-animation",
+                    node,
+                    RuleStatus::Warn,
+                    Evidence::numeric(
+                        format!(
+                            "infinite animation with a {d:0.2}s cycle may flicker fast enough to trigger photosensitive conditions (WCAG 2.3.1)"
+                        ),
+                        "styles.animation",
+                        "animation_cycle_s",
+                        d,
+                        0.5,
+                        "<",
                     ),
-                });
+                ));
             }
         }
     }
@@ -1194,15 +1326,15 @@ fn check_node(
     if visible {
         let tp = style_val(node, "animation", "transition-property");
         if tp.is_some_and(|v| v == "all") {
-            out.push(CheckLine {
-                check: "transition-all".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "transition-property:all animates every property (layout+repaint) — "
-                    .to_string()
-                    + "list the specific properties instead",
-            });
+            out.push(rule_line(
+                "transition-all",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "transition-property:all animates every property (layout+repaint) — list the specific properties instead",
+                    "styles.animation",
+                ),
+            ));
         }
     }
 
@@ -1211,15 +1343,15 @@ fn check_node(
         let ox = style_val(node, "box_model", "overflow-x")
             .or_else(|| style_val(node, "box_model", "overflow"));
         if ox.is_some_and(|v| v == "hidden") {
-            out.push(CheckLine {
-                check: "overflow-x-hidden-on-body".into(),
-                selector: node.selector.clone(),
-                tag: node.tag.clone(),
-                status: RuleStatus::Warn,
-                evidence: "overflow-x:hidden on the document masks horizontal overflow — find and "
-                    .to_string()
-                    + "fix the overflowing element instead",
-            });
+            out.push(rule_line(
+                "overflow-x-hidden-on-body",
+                node,
+                RuleStatus::Warn,
+                Evidence::new(
+                    "overflow-x:hidden on the document masks horizontal overflow — find and fix the overflowing element instead",
+                    "styles.box_model",
+                ),
+            ));
         }
     }
 
@@ -1233,15 +1365,21 @@ fn check_node(
         && !ctx.has_overflow_hidden_ancestor
         && x + w > vp_w + 1.0
     {
-        out.push(CheckLine {
-            check: "horizontal-overflow".into(),
-            selector: node.selector.clone(),
-            tag: node.tag.clone(),
-            status: RuleStatus::Warn,
-            evidence: format!(
-                "element extends to x={x:0.0}+{w:0.0}px, past the {vp_w:0.0}px viewport — forces horizontal scrolling"
+        out.push(rule_line(
+            "horizontal-overflow",
+            node,
+            RuleStatus::Warn,
+            Evidence::numeric(
+                format!(
+                    "element extends to x={x:0.0}+{w:0.0}px, past the {vp_w:0.0}px viewport — forces horizontal scrolling"
+                ),
+                "rect",
+                "horizontal_overflow_px",
+                x + w - vp_w,
+                1.0,
+                ">",
             ),
-        });
+        ));
     }
 }
 
@@ -1373,6 +1511,7 @@ mod tests {
             pseudo: None,
             aria: Some(serde_json::json!({"focusable": true})),
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],
@@ -1429,7 +1568,7 @@ mod tests {
             .find(|l| l.check == "contrast-aa")
             .expect("check");
         assert_eq!(aa.status, RuleStatus::Fail);
-        assert!(aa.evidence.contains("ratio"), "got: {}", aa.evidence);
+        assert!(aa.evidence.text.contains("ratio"), "got: {:?}", aa.evidence);
     }
 
     #[test]
@@ -1458,7 +1597,7 @@ mod tests {
             .expect("contrast-aaa");
         assert_eq!(aa.status, RuleStatus::Pass, "AA passes");
         assert_eq!(aaa.status, RuleStatus::Fail, "AAA fails for normal text");
-        assert!(aaa.evidence.contains("7:1"), "got: {}", aaa.evidence);
+        assert!(aaa.evidence.text.contains("7:1"), "got: {:?}", aaa.evidence);
 
         let large = style_node(
             "p.aaa-pass",
@@ -1476,7 +1615,11 @@ mod tests {
             .find(|l| l.check == "contrast-aaa")
             .expect("contrast-aaa");
         assert_eq!(aaa.status, RuleStatus::Pass, "large text passes AAA");
-        assert!(aaa.evidence.contains("4.5:1"), "got: {}", aaa.evidence);
+        assert!(
+            aaa.evidence.text.contains("4.5:1"),
+            "got: {:?}",
+            aaa.evidence
+        );
     }
 
     #[test]
@@ -1497,7 +1640,7 @@ mod tests {
             .find(|l| l.check == "contrast-aa")
             .expect("check");
         assert_eq!(aa.status, RuleStatus::Warn);
-        assert!(aa.evidence.contains("unmeasurable"));
+        assert!(aa.evidence.text.contains("unmeasurable"));
     }
 
     #[test]
@@ -1586,21 +1729,33 @@ mod tests {
                 selector: "s".into(),
                 tag: None,
                 status: RuleStatus::Pass,
-                evidence: String::new(),
+                class: CheckClass::Bug,
+                evidence: Evidence::new("", "test"),
+                guide: None,
+                severity: None,
+                metrics: None,
             },
             CheckLine {
                 check: "b".into(),
                 selector: "s".into(),
                 tag: None,
                 status: RuleStatus::Warn,
-                evidence: String::new(),
+                class: CheckClass::Bug,
+                evidence: Evidence::new("", "test"),
+                guide: None,
+                severity: None,
+                metrics: None,
             },
             CheckLine {
                 check: "c".into(),
                 selector: "s".into(),
                 tag: None,
                 status: RuleStatus::Fail,
-                evidence: String::new(),
+                class: CheckClass::Bug,
+                evidence: Evidence::new("", "test"),
+                guide: None,
+                severity: None,
+                metrics: None,
             },
         ]);
         assert_eq!((pass, warn, fail), (1, 1, 1));
@@ -1634,6 +1789,7 @@ mod tests {
             pseudo: None,
             aria: None,
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],
@@ -1658,11 +1814,15 @@ mod tests {
         assert_eq!(occ.status, RuleStatus::Fail);
         assert_eq!(occ.selector, "button.save");
         assert!(
-            occ.evidence.contains("covered by div.modal-backdrop"),
-            "got: {}",
+            occ.evidence.text.contains("covered by div.modal-backdrop"),
+            "got: {:?}",
             occ.evidence
         );
-        assert!(occ.evidence.contains("100%"), "got: {}", occ.evidence);
+        assert!(
+            occ.evidence.text.contains("100%"),
+            "got: {:?}",
+            occ.evidence
+        );
     }
 
     #[test]
@@ -1681,7 +1841,7 @@ mod tests {
             .find(|l| l.check == "occluded")
             .expect("occluded check");
         assert_eq!(occ.status, RuleStatus::Warn);
-        assert!(occ.evidence.contains("60%"), "got: {}", occ.evidence);
+        assert!(occ.evidence.text.contains("60%"), "got: {:?}", occ.evidence);
     }
 
     #[test]
@@ -1906,6 +2066,7 @@ mod tests {
             pseudo: None,
             aria: Some(aria),
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],
@@ -1948,7 +2109,7 @@ mod tests {
         parent.children = vec![child];
         let lines = run_rules(&[parent], None);
         let l = assert_check(&lines, "sticky-in-overflow-hidden", RuleStatus::Warn);
-        assert!(l.evidence.contains("overflow"), "{}", l.evidence);
+        assert!(l.evidence.text.contains("overflow"), "{:?}", l.evidence);
     }
 
     #[test]
@@ -2161,6 +2322,7 @@ mod tests {
             pseudo: None,
             aria: Some(serde_json::json!({"focusable": false, "has_text": false})),
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],
@@ -2197,6 +2359,7 @@ mod tests {
             pseudo: None,
             aria: Some(serde_json::json!({"focusable": false, "has_text": false})),
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],
@@ -2236,6 +2399,7 @@ mod tests {
             pseudo: None,
             aria: Some(serde_json::json!({"focusable": false, "has_text": false})),
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],

@@ -1,5 +1,6 @@
 //! Handler de `sniff check`.
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::Path;
 
@@ -7,8 +8,12 @@ use serde_json::json;
 
 use crate::cli::CheckArgs;
 use crate::output::{AppError, Output};
+use sniff_css_check::modern::{
+    ModernOptions, ModernProfile, compute_dom_stats, run_modern_checks_for,
+};
 use sniff_css_check::rules::{self, summarize, write_checks};
 use sniff_css_check::uniformity::check_uniformity;
+use sniff_css_diff::{DiffDocument, DiffNode, baseline_document};
 
 /// Checks determinísticos (uniformidade + regras derivadas) sobre um snapshot.
 pub(crate) fn run(args: &CheckArgs) -> Result<Output, AppError> {
@@ -75,23 +80,51 @@ pub(crate) fn run(args: &CheckArgs) -> Result<Output, AppError> {
     compute(&item)
 }
 
-/// Roda as regras/uniformidade de um item.
+/// Constrói os filtros da família `modern` a partir das flags da CLI.
+fn modern_options(args: &CheckArgs) -> ModernOptions {
+    let profile = match args.profile.as_deref() {
+        Some("strict") => ModernProfile::Strict,
+        _ => ModernProfile::Default,
+    };
+    ModernOptions {
+        profile,
+        ignore: args.ignore.iter().cloned().collect::<BTreeSet<_>>(),
+        guide: args.guide.clone(),
+        responsive: args.responsive && !args.no_responsive,
+    }
+}
+
+/// Flatten pré-order reaproveitado pelas estatísticas de DOM.
+fn flatten_nodes<'a>(nodes: &'a [DiffNode], out: &mut Vec<&'a DiffNode>) {
+    for node in nodes {
+        out.push(node);
+        flatten_nodes(&node.children, out);
+    }
+}
+
+/// Roda as regras/uniformidade e/ou as oportunidades de plataforma.
 fn compute(args: &CheckArgs) -> Result<Output, AppError> {
     let input = args.input.as_deref().or(args.input_legacy.as_deref());
     let doc = load_doc(input)?;
-    let nodes = doc.nodes;
+    let baseline_doc = baseline_document(&doc);
+    let nodes = &baseline_doc.nodes;
+    let opts = modern_options(args);
 
-    let run_uniform = args.uniform || !args.rules;
-    let run_rules = args.rules || !args.uniform;
+    // Contrato v2 (B2): default = tudo; `--rules` = só quebras; `--modern` =
+    // só oportunidades; `--no-modern` = perfil pré-v0.6.
+    let run_uniform = args.uniform || (!args.rules && !args.modern);
+    let run_rules = args.rules || !args.modern;
+    let run_modern = args.modern || (!args.rules && !args.no_modern);
 
     let mut buf: Vec<u8> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     let mut rule_count = 0usize;
+    let mut modern_count = 0usize;
     let mut uniformity_instances = 0usize;
     let mut uniformity_outliers = 0usize;
 
     if run_rules {
-        let lines = rules::run_rules(&nodes, doc.viewport);
+        let lines = rules::run_rules(nodes, doc.viewport);
         rule_count = lines.len();
         let (pass, warn, fail) = summarize(&lines);
         write_checks(&mut buf, &lines).map_err(AppError::from)?;
@@ -99,7 +132,7 @@ fn compute(args: &CheckArgs) -> Result<Output, AppError> {
     }
 
     if run_uniform {
-        let report = check_uniformity(&nodes, args.tolerance);
+        let report = check_uniformity(nodes, args.tolerance);
         uniformity_instances = report.instances;
         uniformity_outliers = report.outliers.len();
         if report.instances < 2 {
@@ -109,7 +142,7 @@ fn compute(args: &CheckArgs) -> Result<Output, AppError> {
             ));
         }
         for outlier in &report.outliers {
-            let evidence = outlier
+            let detail = outlier
                 .deviations
                 .iter()
                 .map(|d| match (d.norm.as_deref(), d.magnitude) {
@@ -121,45 +154,94 @@ fn compute(args: &CheckArgs) -> Result<Output, AppError> {
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
-            serde_json::to_writer(
-                &mut buf,
-                &serde_json::json!({
-                    "check": "uniformity",
-                    "selector": outlier.selector,
-                    "status": "fail",
-                    "evidence": format!(
-                        "deviates from the {}/{} group norm: {evidence}",
-                        report.instances, report.instances
-                    ),
-                }),
-            )
-            .map_err(|e| AppError::internal(e.to_string()))?;
+            let text = format!(
+                "deviates from the {}/{} group norm: {detail}",
+                report.instances, report.instances
+            );
+            let line = serde_json::json!({
+                "check": "uniformity",
+                "selector": outlier.selector,
+                "status": "fail",
+                "class": "bug",
+                "severity": "fail",
+                "evidence": {
+                    "text": text,
+                    "source": "uniformity"
+                },
+            });
+            serde_json::to_writer(&mut buf, &line)
+                .map_err(|e| AppError::internal(e.to_string()))?;
             writeln!(buf).map_err(|e| AppError::internal(e.to_string()))?;
         }
     }
+    if run_modern {
+        let lines = run_modern_checks_for(&doc, &baseline_doc, &opts);
+        modern_count = lines.len();
+        let (pass, warn, fail) = summarize(&lines);
+        write_checks(&mut buf, &lines).map_err(AppError::from)?;
+        notes.push(format!("modern: {pass} pass | {warn} warn | {fail} fail"));
+    }
 
-    let summary = serde_json::json!({
+    let mut flat = Vec::new();
+    flatten_nodes(nodes, &mut flat);
+    let dom_stats = compute_dom_stats(&flat);
+    let matrix_incomplete = doc.matrix.iter().any(|tag| tag.total > doc.matrix.len());
+    let modern_profile = match opts.profile {
+        ModernProfile::Strict => "strict",
+        ModernProfile::Default => "default",
+    };
+
+    let summary = json!({
         "__check_summary": {
             "uniformity_instances": uniformity_instances,
             "uniformity_outliers": uniformity_outliers,
             "rules": rule_count,
+            "modern": modern_count,
+            "class": {
+                "bug": rule_count.saturating_add(uniformity_outliers),
+                "opportunity": modern_count,
+            },
+            "opportunities_by_class": {
+                "opportunity": modern_count,
+            },
+            "modern_profile": modern_profile,
         }
     });
+    let summary_value = summary
+        .get("__check_summary")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     serde_json::to_writer(&mut buf, &summary).map_err(|e| AppError::internal(e.to_string()))?;
     writeln!(buf).map_err(|e| AppError::internal(e.to_string()))?;
 
-    let data = serde_json::json!({
+    let report = String::from_utf8_lossy(&buf).into_owned();
+    let checks: Vec<serde_json::Value> = report
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let data = json!({
         "uniformity_instances": uniformity_instances,
         "uniformity_outliers": uniformity_outliers,
         "rules": rule_count,
+        "modern": modern_count,
+        "dom_stats": dom_stats,
+        "checks": checks,
+        "__check_summary": summary_value,
     });
     let mut output = Output::new(String::from_utf8_lossy(&buf).into_owned(), data);
     output.warnings = notes;
+    if matrix_incomplete {
+        output.warnings.push(
+            "matrix is incomplete: some states were not captured; comparative checks skipped"
+                .to_string(),
+        );
+    }
     Ok(output)
 }
 
 /// Lê um snapshot de um arquivo, de stdin (`-`) ou do pipe implícito.
-fn load_doc(input: Option<&Path>) -> Result<sniff_css_diff::DiffDocument, AppError> {
+fn load_doc(input: Option<&Path>) -> Result<DiffDocument, AppError> {
     let path = input.map(Path::to_path_buf);
     match path.as_deref() {
         Some(p) if !sniff_core::input::is_stdin(p) => {

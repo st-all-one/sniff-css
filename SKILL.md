@@ -1,171 +1,130 @@
 ---
 name: sniff-css
-description: Use when working with computed-style capture, accessibility inspection, or visual regression via the sniff toolset. Covers capture, deterministic diff, a11y checks, and MCP/CLI usage. Trigger on keywords: sniff, computed-style, cdp, css, contrast, accessibility, ax, a11y, diff, snapshot, regression, styling, layout, is_user_noticeable.
+description: Use when working with computed-style capture, accessibility inspection, or visual regression via the sniff toolset. Covers capture, deterministic diff, offline checks, modern opportunities and MCP/CLI usage. Trigger on: sniff, computed-style, cdp, css, contrast, a11y, diff, snapshot, regression, layout.
 ---
 
 # sniff — Active Usage Guide
 
-**Role:** Capture real computed CSS + accessibility state from a live page over
-raw CDP (WebSocket), diff two versions deterministically, and emit offline
-PASS/WARN/FAIL checks. The JSONL snapshot IS the source of truth; the AI
-interprets only the delta. Onboard a project with `sniff init` (writes the
-token-optimized protocol into `AGENTS.md`); `sniff prime` is the same protocol.
+**Role.** Capture real computed CSS + accessibility state from a live page over
+raw CDP (or a Flutter debug build via the Dart VM Service), then diff/check the
+JSONL **offline**. The snapshot is the source of truth; the AI reads only
+evidence/delta. Never guess styles.
 
-**When to load:** Any time you need to inspect real rendered styles, audit
-accessibility, detect UI regressions, or answer "what actually changed?" on a
-live page.
+**When to load.** Any rendered-style question, accessibility audit, visual
+regression, or "what actually changed?" investigation.
 
-> **Detail lives in `docs/`.** This guide is the decision-oriented index. Full
-> CLI flag reference: [`docs/usage.md`](docs/usage.md). AI consumption flows:
-> [`docs/ai-usage.md`](docs/ai-usage.md). Diff/checks:
-> [`docs/diff-checks.md`](docs/diff-checks.md). Accessibility audit:
-> [`docs/accessibility.md`](docs/accessibility.md). Docker:
-> [`docs/docker.md`](docs/docker.md). Determinism contract:
+> Details live in `docs/`. This file is a decision index. Full flag reference:
+> [`docs/usage.md`](docs/usage.md). CLI surface:
+> [`docs/cli-surface.md`](docs/cli-surface.md). Checks/opportunities:
+> [`docs/diff-checks.md`](docs/diff-checks.md). Accessibility:
+> [`docs/accessibility.md`](docs/accessibility.md). Determinism:
 > [`docs/golden-run.md`](docs/golden-run.md).
 
 ---
 
-## Core Pipeline
+## Pipeline
 
 ```
-capture → diff → checks → AI interpretation (only the delta)
-sniff capture   sniff diff   sniff check / sniff_check   eval-prompt
+sniff capture → sniff check → sniff diff → AI interprets only evidence/delta
 ```
 
-`sniff init` writes this protocol into the project's `AGENTS.md` (managed block);
-`sniff prime` is the byte-identical protocol. All steps before the AI are
-deterministic and cost ~0 tokens.
+`sniff init` writes the managed protocol into the project's `AGENTS.md`;
+`sniff prime` prints the same protocol (static, `--long` for the full contract).
+Everything before the AI is deterministic and offline after capture.
 
-### Key capabilities
+### Defaults that matter
 
-- **Real interactions** — `--click` / `--hover` / `--type` / `--upload` /
-  `--action` dispatch **trusted input events** before capture to reveal
-  elements that only exist after an action (modals, dropdowns, hover menus,
-  type-ahead) and run real upload handlers. Each action waits for its own
-  target and scrolls it into view; the wait pipeline then runs against the
-  post-interaction DOM. `--action` is the ordered form for mixed flows
-  (modal → mini-modal → input).
-- **Header auth + persistent sessions** — `--header "Name: Value"` applies an
-  HTTP header to **every** request (`Network.setExtraHTTPHeaders`), so a
-  stateless CMS auth needs no URL token / `.env` / proxy;
-  `--storage-state` / `--save-storage-state` round-trip a login (cookies +
-  localStorage, Playwright `storageState` JSON) across browser restarts. On
-  the MCP server, team defaults are set once via `SNIFF_DEFAULT_HEADERS`,
-  `SNIFF_STORAGE_STATE` and `SNIFF_BASE_URL` — per-call values win on collision.
-- **TLS / self-signed dev servers** — `--ignore-certificate-errors` (env
-  `SNIFF_IGNORE_CERTIFICATE_ERRORS`) loads `https://` pages behind a
-  self-signed certificate instead of capturing Chromium's "connection is not
-  private" interstitial. Works when launching (adds
-  `--ignore-certificate-errors` to Chromium) and when attaching via
-  `--connect` (CDP `Security.setIgnoreCertificateErrors` before navigation).
-- **Deterministic pipeline** — capture → diff → checks are ~0-token binaries;
-  the AI interprets only the delta/evidence.
-- **Flutter/Dart backend** — the default backend is `auto`: a
-  `flutter://<device>` URL selects Flutter and that device
-  (`sniff capture flutter://emulator-5554 --project DIR --depth N`); MCP
-  `sniff_flutter_page` is the tool form. Captures the widget tree of a
-  **debug-mode** Flutter app on an Android emulator/device over the Dart VM
-  Service (`flutter run/attach --machine` + `ext.flutter.inspector.*`). Same
-  JSONL model (tag = widget class, colors normalized to `#rrggbb`, WCAG
-  contrast derived), so `sniff diff` / `sniff check` work by path
-  unchanged. `--click`/`--type`/`--action` and `--viewport` are supported here
-  too (driven via the Flutter Driver extension + `adb shell wm size`; the app
-  must call `enableFlutterDriverExtension()`; `hover`/`upload` stay web-only).
-  Detail:
-  [`docs/flutter.md`](docs/flutter.md) (setup + usage + real-app checklist),
-  [`docs/usage.md`](docs/usage.md#backend-flutterdart---backend-flutter) and
-  [`docs/architecture.md`](docs/architecture.md#backend-flutter-sniff-flutter).
+| Area | Default | Escape hatch |
+|---|---|---|
+| Output | `summary` digest (token-lean) | `--no-summary` → full JSONL for diff/check/jq |
+| v2 context | `__document`, `__env`, `__declared`, attrs preset `modern` | `--no-document`, `--no-env`, `--no-attrs`, `--minimal` |
+| Pseudo styles | `::before`,`::after` | `--pseudo ...` |
+| Matrix | 3 viewports (1366×768, 360×800, 768×1024) × 4 profiles (light, dark, reduce, coarse) = **12 states** | `--emulate K=V` → one profile; `--minimal` → no matrix |
+| Actions map | `__actions` emitted even when empty | `--no-effects` |
+| `sniff check` | uniformity + bug rules + modern opportunities, `--responsive` on | `--rules`, `--modern`, `--no-modern`, `--no-responsive` |
+| Node checks | first matrix state only; cross-state checks use all states | — |
+| Stabilization | animations frozen, reduce emulated unless overridden | `--no-stabilize`, `--emulate prefers-reduced-motion=no-preference` |
+| Profile | opportunities are `warn` | `--profile strict` → `fail` for CI |
 
-### Quick Reference
+Cost note: the 12-state capture is intentionally heavier (~20–30 s, hundreds of
+KB). Use `--emulate` or `--minimal` when the question does not need the matrix.
+
+### Quick reference
 
 | Action | Command |
-|--------|---------|
-| Capture (summary digest is the default) | `sniff capture URL -s SEL --depth N` |
-| Full non-summarized snapshot (diff/check input) | `sniff capture URL -s SEL --depth N --no-summary` |
-| Full-fidelity capture | `sniff capture URL -s SEL --depth N --no-summary --full` |
-| Accessibility capture | `sniff capture URL -s SEL --depth N --no-summary --ax-tree` |
-| Reveal action-only elements | `sniff capture URL -s ".modal" --click "#open"` |
-| Ordered mixed-flow interactions | `sniff capture URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
-| Real file upload (hidden inputs ok) | `sniff capture URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
-| Authenticated capture (header on every request) | `sniff capture URL -s "main" --header "X-CMS-AI-Token: <token>"` |
-| TLS / self-signed dev server | `sniff capture https://app.local:3443 -s "body" --ignore-certificate-errors` |
-| Diff two snapshots | `sniff diff base.jsonl head.jsonl --tolerance 0.5` |
-| Diff summary (CI) | `sniff diff base.jsonl head.jsonl --stats-only` |
-| Offline checks | `sniff check snap.jsonl --uniform --rules` |
-| Visual evidence | `sniff capture URL -s SEL --screenshot out.png` |
-| Verbatim DOM attrs | `sniff capture URL -s SEL --attrs name,value` |
-| Flutter app (attach) | `sniff capture flutter://emulator-5554 --attach --project DIR --depth N` |
-| Flutter app (run AVD) | `sniff capture flutter://pixel --avd pixel --project DIR --depth N` |
-| AI protocol (static, byte-identical) | `sniff prime` (`--long` for full detail) |
-| One structured call | `sniff capture --params '{"url":"…","selector":".btn"}'` |
-| Batch (N calls, JSONL) | `sniff capture --batch pages.jsonl` (`-` = stdin) |
-| stdin/heredoc | `… --no-summary \| sniff check -` · `sniff check - <<'EOF'` |
-| Register the JSONL | `sniff capture <URL> -s SEL --persist [PATH]` |
-| Write/update AGENTS.md block | `sniff init [DIR]` (`--force` overwrites the file) |
-| List persisted snapshots | `sniff snapshots` |
-| Binary utilities | `sniff self completions bash` · `sniff self setup pi` · `sniff self upgrade --dry-run` |
-
-> **Prefer the CLI.** `sniff`, `sniff diff` and `sniff check` stream to
-> stdout/redirectable files, accept `--persist` to mirror the MCP store layout,
-> and add no client/server indirection. The MCP server (`sniff_page` & co.)
-> is a convenience wrapper for MCP-native clients — use it only when the harness
-> demands tools (see [AI usage](docs/ai-usage.md)).
-
----
-
-## Orientation (read this first)
-
-The toolset is **measure, don't guess**: everything before the LLM is a
-deterministic binary. There are three stages plus an MCP server that wraps them:
-
-1. **Capture** (`sniff capture`) — reads real computed CSS + accessibility state via
-   raw CDP and emits a **snapshot**. Default output is the **summary digest**
-   (token-lean per node); `--no-summary` emits the full JSONL.
-2. **Diff** (`sniff diff`) — byte/number-level diff of two snapshots →
-   **only what changed** (`CHANGED` per property, plus `ADDED`/`REMOVED`).
-3. **Checks** (`sniff check`) — offline rules: uniformity (odd card) +
-   derived WCAG/UX rules (contrast, target size, focus, alt, hidden focusables,
-   **occlusion**).
-4. **MCP server** (`sniff-mcp`) — the same stages as tools over stdio, with
-   a **snapshot store** on disk so full JSONL never round-trips through the
-   LLM context.
-
-Rules of thumb:
-
-- **Never feed a full snapshot to the model** — diff or check it first; the AI
-  interprets only the delta/evidence.
-- **Determinism is a contract:** both diff sides must share URL, selector,
-  viewport, wait strategy and mode (default+default or `--full`+`--full`, never
-  mixed).
-- **The AI only judges:** the measured facets (`contrast.ratio`, `aria.name`,
-  `is_user_noticeable.accessibility_grade`, `ax.role`) are evidence the tools
-  already computed — cite them, don't re-derive them.
-- **Token budget:** capture once, persist, then reference by path
-  (`base_path`/`head_path`/`path`) instead of pasting JSONL around.
-
----
-
-## Reading the Facets (Interpretation)
-
-| Facet value | Meaning / action |
 |---|---|
-| `contrast.aa == "fail"` | Real AA failure (1.4.3). Cite the ratio. |
-| `contrast.aa == "unknown"` | Background image involved → manual review. |
-| `accessibility_grade == "NONE"` | Hidden from AT (`aria-hidden`, `hidden`/`inert`, `display:none`, zero-size). |
-| `accessibility_grade == "AA"` | In AX tree but off-screen / transparent / name-required role missing a name. |
-| `accessibility_grade == "AAA"` | On screen, exposed, named when required. |
-| `aria.name` empty on A/BUTTON/IMG | Candidate 1.1.1/2.4.4/4.1.2. **First check for a descendant `<img alt="...">`** — not yet derived by the tool. |
-| No `H1` or skipped levels (H2→H4) | 1.3.1/2.4.6 structure failure. |
-| Interactive `rect` < 24px | 2.5.8 target-size failure. |
-| `display_visible:true` + grade `AA` | Present and accessible, below the fold — **not** a failure. |
-| `occluded == "fail"` | ≥75% of the element is covered by another node painted above it (by `z-index`, else DOM order) — the element is visually **behind** an overlapping element. Layout/visibility regression: the user can't see it even though it's in the DOM. |
-| `occluded == "warn"` | 50–75% covered — partial overlap (hit-target / visibility risk). |
-| `backdrop-over-modal == "fail"` | A dark translucent scrim (fixed, ~viewport) paints **over** the modal content — the ancestor/descendant case `occluded` skips by design; check the stacking order. |
-| `sticky-in-overflow-hidden` / `fixed-broken-by-transform` / `horizontal-overflow` | Deterministic CSS-positioning bugs: sticky under an `overflow` ancestor, fixed under a transformed ancestor, content past the `__meta.viewport` width. |
+| Capture (default digest) | `sniff capture URL -s SEL --depth N` |
+| Full snapshot (diff/check input) | `sniff capture URL -s SEL --depth N --no-summary` |
+| Full-fidelity capture | `sniff capture URL -s SEL --depth N --no-summary --full` |
+| Accessibility subtree | `sniff capture URL -s SEL --no-summary --ax-tree` |
+| Reveal action-only UI | `sniff capture URL -s ".modal" --click "#open"` |
+| Ordered mixed flow | `sniff capture URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
+| Real key event | `sniff capture URL -s "dialog" --action "key:Escape"` |
+| Real file upload | `sniff capture URL -s ".cropper" --action "upload:#file:/tmp/img.png"` |
+| Auth header / session | `--header "X-CMS-AI-Token: T"` · `--storage-state FILE` · `--save-storage-state FILE` |
+| Self-signed TLS | `--ignore-certificate-errors` (or `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`) |
+| Diff / CI scale | `sniff diff base.jsonl head.jsonl --tolerance 0.5` · `--stats-only` |
+| Checks | `sniff check snap.jsonl` · `--rules` · `--modern` · `--no-modern` |
+| One structured call / batch | `--params '<json>'` · `--batch file.jsonl` (`-` = stdin) |
+| Piping | `sniff capture URL -s SEL --no-summary \| sniff check -` |
+| Persist / list | `--persist [PATH]` · `sniff snapshots` |
+| Onboard / protocol | `sniff init [DIR]` (`--force` overwrites `AGENTS.md`) · `sniff prime [--long]` |
+| Flutter (debug build) | `sniff capture flutter://emulator-5554 --project DIR --depth N` |
+| Binary utilities | `sniff self setup pi` · `sniff self completions bash` · `sniff self upgrade --dry-run` |
 
-Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
-[`docs/accessibility.md`](docs/accessibility.md). Occlusion rule:
-[`docs/diff-checks.md`](docs/diff-checks.md).
+**Prefer the CLI** when a shell exists. MCP (`sniff-mcp`) is a wrapper for
+MCP-native harnesses; use persisted paths (`base_path`, `head_path`, `path`),
+never inline JSONL, to keep full snapshots out of the model context.
+
+---
+
+## Interpreting results
+
+### Bug rules (`class:"bug"`)
+
+| Evidence | Meaning / action |
+|---|---|
+| `contrast.aa == "fail"` | AA failure (1.4.3). Cite `evidence.observed`. |
+| `contrast.aa == "unknown"` | Background image involved → **manual review**, not pass/fail. |
+| `accessibility_grade == "NONE"` | Hidden from AT (`aria-hidden`, `hidden`, `inert`, zero size). |
+| `accessibility_grade == "AA"` | In AX tree but off-screen/transparent/name-required role unnamed. |
+| `accessibility_grade == "AAA"` | On screen, exposed, named when required. |
+| Empty `aria.name` on A/BUTTON/IMG | Candidate 1.1.1/2.4.4/4.1.2 — first check for descendant `<img alt>`. |
+| Interactive `rect` < 24px | 2.5.8 target-size failure. |
+| `display_visible:true` + grade `AA` | Below the fold — **not** a failure. |
+| `occluded` fail/warn | ≥75% / 50–75% covered by another painted node. |
+| `backdrop-over-modal` fail | Scrim paints over modal content — check stacking order. |
+| `horizontal-overflow`, `sticky-in-overflow-hidden`, `fixed-broken-by-transform` | Deterministic positioning bugs. |
+
+### Modern opportunities (`class:"opportunity"`)
+
+Platform-debt hints derived only from the snapshot. `warn` by default; `fail`
+appears only with an explicit WCAG/WAI-ARIA criterion. Fields: `guide` (corpus
+id), typed `evidence` (`source`, optional `metric`/`observed`/`threshold`),
+`severity`. `keepWhen` is documented in `docs/modernization/findings/` and
+tested, but deliberately **not serialized**.
+
+**Triage order:** filter by `class` → read `evidence.source` → open `guide` →
+check `keepWhen` → confirm on the rendered page → only then change code. Use
+`--ignore CHECK` for a single noisy id, never a blanket suppression.
+
+**Heuristics needing human confirmation (not bugs):**
+
+- `breakpoint-jump` — large vertical shifts between matrix states are often
+  legitimate reflow.
+- `dark-mode-ignored` — transparent/inherited backgrounds can look "unchanged".
+- `overflow-only-at-width` — confirm the overflowing element, not just the body.
+- `inline-nontrivial-style`, transition-absence and `@view-transition` checks —
+  low-severity modernization prompts.
+
+**False positives already fixed** (regression tests exist): same-origin SRI with
+explicit `:443`/`:80`, pseudo `content:none`, viewport-proportional/height
+reflow in `breakpoint-jump`, and node rules repeated across matrix states.
+If a new one appears, add a `keepWhen` + negative test rather than weakening
+the check globally.
+
+Facet absent ⇒ check **silent**, never `pass`. Do not paste full JSONL into the
+model; diff/check first.
 
 ---
 
@@ -174,154 +133,97 @@ Full facet docs: [`docs/usage.md`](docs/usage.md#formato-de-saída-jsonl) and
 ### Accessibility audit
 
 ```bash
-sniff capture "$URL" -s "body" --depth 5 --no-summary --ax-tree > body.jsonl
-sniff capture "$URL" -s "nav"    --depth 4 --no-summary > nav.jsonl
+sniff capture "$URL" -s "body"   --depth 5 --no-summary --ax-tree > body.jsonl
 sniff capture "$URL" -s "main"   --depth 5 --no-summary > main.jsonl
 sniff capture "$URL" -s "footer" --depth 6 --no-summary > footer.jsonl
 sniff check main.jsonl --rules
 ```
 
-Complete recipe (facets, jq queries, judgment checklist):
-[`docs/accessibility.md`](docs/accessibility.md).
-
-### Regression monitoring (CI)
+### CI regression
 
 ```bash
 sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid > base.jsonl
 # ... deploy ...
 sniff capture "$URL" -s "$SEL" --no-summary --stable-key data-testid > head.jsonl
-sniff diff base.jsonl head.jsonl --stats-only   # fail job if changed/added/removed > threshold
+sniff diff base.jsonl head.jsonl --stats-only
 sniff diff base.jsonl head.jsonl --ignore-props transform,opacity --no-structural > delta.jsonl
 ```
 
-### Reveal elements that only exist after an interaction
+### Interactions
+
+`click`/`hover` selectors may contain `:` (pseudo-classes like
+`:nth-child(2)`); only trailing all-digit fields are timeout/settle. For
+`type`/`upload`, the first `:` splits selector from text/files — use an
+attribute/`aria-label` anchor. Actions are ordered, trusted input events; the
+wait pipeline runs against the post-interaction DOM. `key:Escape` requests
+native dialog dismissal. `__actions` records appeared/removed/changed/moved,
+rects, on-screen state and distance; `sniff diff` compares both sides.
+
+### Auth / restricted pages
 
 ```bash
-sniff capture "$URL" -s ".modal" --click "#open-modal"        # click to reveal
-sniff capture "$URL" -s ".menu-panel" --hover "#user-menu"    # hover to reveal
-sniff capture "$URL" -s ".search-results" --type "#q:shoes"   # type to reveal
-sniff capture "$URL" -s ".result" --action "click:#open:5000" \
-  --action "type:#q:shoes" --action "click:.result-item"    # ordered mixed flow
-sniff capture "$URL" -s "#cropper-wrapper" \
-  --action "upload:#media-input:/tmp/pixel.png"             # real file upload
-sniff capture "$URL" -s ".dropdown-menu" --click \
-  ".btn-group:nth-child(2) .dropdown-toggle:3000"           # `:` in selector is OK
-```
-
-Each action waits for its own target, scrolls it into view and dispatches a
-**real trusted input event**; the wait pipeline then runs against the
-post-interaction DOM. `--stabilize` is re-applied for deterministic snapshots.
-Upload works on visually hidden file inputs (the browser fires `change` itself).
-
-`click`/`hover` selectors **may contain `:`** (pseudo-classes like
-`:nth-child(2)`); only trailing all-digit fields are `timeout_ms`/`settle_ms`.
-For `type`/`upload`, the selector is the first token (text/files keep `:`), so
-prefer an attribute/`aria-label` anchor when that selector would contain a
-colon.
-
-### Authenticated / restricted captures
-
-```bash
-sniff capture "$URL" -s "main" --header "X-CMS-AI-Token: <token>"   # header auth
-sniff capture "https://app.local:3443/home" -s "body" \
-  --ignore-certificate-errors                                     # self-signed TLS
 sniff capture "$URL/login" -s ".dashboard" \
   --type "#email:admin@x.com" --type "#password:secret" \
   --click "button[type=submit]" --save-storage-state /tmp/cms-state.json
 sniff capture "$URL/cms/dashboard" -s "main" --storage-state /tmp/cms-state.json
 ```
 
-Server-side team defaults (`SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
-`SNIFF_BASE_URL`) let the agent skip auth plumbing per call:
-[`docs/ai-usage.md`](docs/ai-usage.md).
-
-### Map what happened at the UI level (`__actions`)
-
-With actions set (default ON; `--no-effects` to omit), each action emits an
-entry in a reserved `__actions` line: `effect` (`revealed`/`hidden`/`changed`/
-`moved`/`no_effect`), appeared/removed/changed elements with `rect`, `onscreen`,
-`out_of_view.{above,below,left,right}`, `distance_from_action`, `direction`,
-and a deterministic `summary`. `sniff diff` compares `__actions` blocks when
-both sides carry them → `ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED`.
+MCP team defaults: `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
+`SNIFF_BASE_URL` — per-call values win on collision.
 
 ---
 
-## Installation & releases
+## Installation, onboarding, release
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-# pinned version:
-curl --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | VERSION=v0.5.1 sh
+# pinned: ... | VERSION=v0.6.0 sh
+sniff init          # upsert managed AGENTS.md block
+sniff init --force  # overwrite AGENTS.md (destructive)
 ```
 
-Binaries: Linux glibc + musl (x86_64/aarch64), macOS, Windows — per GitHub
-Release (semver tags), checksum-verified, installed to `~/.local/bin` (and the
-legacy `sniffCSS*` binaries are removed). Env overrides: `INSTALL_DIR`,
-`SNIFF_TARGET`, `SNIFF_REPO`, `SNIFF_BASE_URL`.
-Onboard a project (writes the managed block into `AGENTS.md`, preserving the
-rest; `--force` overwrites the file):
-
-```bash
-sniff init
-```
-
-Docker image `stallonels/sniffcss` (multi-arch, self-contained Chromium):
-[`docs/docker.md`](docs/docker.md). New release: `git tag vX.Y.Z && git push
-origin vX.Y.Z` triggers `.github/workflows/release.yml`; MSRV 1.99. Changes
-tracked in [`CHANGELOG.md`](CHANGELOG.md).
+Binaries: Linux glibc/musl (x86_64/aarch64), macOS (arm64), Windows; checksums
+per GitHub Release; installed to `~/.local/bin` (legacy `sniffCSS*` removed).
+Docker: `stallonels/sniffcss` ([docs/docker.md](docs/docker.md)).
+Release trigger: `git tag vX.Y.Z && git push origin vX.Y.Z` →
+`.github/workflows/release.yml`. MSRV 1.99. History: [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
 ## Anti-patterns
 
-- Diffing across different modes (default vs `--full`) or viewports → false positives.
-- Feeding full snapshots to the model — always diff/check first.
-- Passing inline `base_jsonl`/`head_jsonl`/`jsonl` to MCP tools when a persisted
-  `path`/`base_path`/`head_path` exists — the inline string re-enters the LLM context.
-- Calling `sniff_page` with `return:"jsonl"` when only the reference/path is needed.
-- Running `sniff init --force` on a project you don't own — it wipes `AGENTS.md`.
-  Plain `sniff init` upserts only the managed `<!-- sniff:start/end -->` block.
-- Treating `unknown` contrast as pass/fail — it means "review manually".
-- Reporting every empty `aria.name` without checking a descendant `img alt`.
-- Flagging below-the-fold content as "invisible" — read `is_user_noticeable`.
-- Blindly raising `--tolerance` — it swallows real small changes.
-- Waiting on `element-ready` for a carousel's first hidden slide (use `delay` or the stable subtree).
+- Diffing different modes (`default` vs `--full`), viewports or wait strategies.
+- Feeding full snapshots to the model instead of diff/check output.
+- Treating an opportunity as a bug, or `unknown` contrast as pass.
+- Blanket `--ignore` without checking `keepWhen`.
+- Inline JSONL in MCP calls when a persisted path exists.
+- `sniff init --force` on a project you do not own.
+- Raising `--tolerance` to swallow real changes.
+- Waiting on `element-ready` for a carousel's hidden first slide.
 
----
+## Known limitations
 
-## Known Limitations
-
-- Link accessible name from inner `img alt` is not yet derived (verify before reporting).
-- Contrast over background images is always `unknown` (cannot measure without pixels).
-- Hidden panels (carousels/tabs) are still in the AX tree → grade `AA`, `display_visible:true`.
-- Interaction actions are scoped to the main frame (elements inside `<iframe>` are not clickable).
-- `type` inserts text (appends to the focused element); it does not clear the field first.
-- `upload` file paths are resolved **by the browser process** — in a container the files must exist inside it (mount them). Hidden inputs are supported; non-file inputs error out.
-- Session-state export captures `localStorage` only from the current page's origin; sub-origins (CDN hosts) are not represented. Restored cookies are host-scoped (a `.domain` prefix is normalized to host-only).
-- In CLI action strings, `click`/`hover` selectors **may** contain `:` (e.g. `:nth-child(2)` — only trailing `:N` fields are timeout/settle), but `type`/`upload` selectors **cannot** (the first `:` splits selector from text/files). For those, use an attribute/`aria-label` anchor or the MCP `actions` object.
-- **DOM attributes are not captured by default** — the tool is computed-style. Use `--attrs a,b` / MCP `attributes` for the specific attributes you need.
-- **Server-side data is out of scope** — payloads, templates, routes and backend state are not sniff's job; pair it with `curl`/API inspection when the question is about server data, not rendered styles.
-- **The tool captures whatever the server serves** — a stale page cache produces a stale snapshot. Clear/invalidate the cache before capturing.
-- **Flutter backend needs a debug build** — release APKs strip the Dart VM Service; `rect` is in device coordinates (not CSS viewport); widgets without a render box report no `rect`.
-
----
+- Link name from inner `<img alt>` not derived — verify before reporting.
+- Contrast over background images is always `unknown`.
+- Hidden panels remain in the AX tree (grade `AA`, `display_visible:true`).
+- Actions are scoped to the main frame; `type` appends, it does not clear.
+- `upload` paths resolve **inside the browser process** (mount files in containers).
+- Storage-state export covers the current origin only; cookies use the whole
+  browser jar (avoid `--connect`/shared MCP browsers for different accounts).
+- `evidence` can echo URLs/CSP tokens — treat check reports as sensitive.
+- Flutter needs a debug build; `rect` is in device coordinates; `hover`/`upload`
+  are web-only.
+- Server-side data/payloads and stale page caches are out of scope.
 
 ## Checklist
 
-Before completing any sniff operation:
-
-- [ ] **`sniff init` run** so the project's `AGENTS.md` carries the protocol (and `sniff prime` consulted for the full contract)?
-- [ ] **Prefer the CLI** over MCP when a shell is available?
-- [ ] **Summary digest is the default** — use `--no-summary` explicitly when the full snapshot (diff/check/jq input) is required?
-- [ ] **Same mode/viewport on both diff sides** (default+default, or `--full`+`--full`)?
-- [ ] **Page stable** (`--stabilize` default ON, proper `--wait`)?
-- [ ] **Stable keys** (`--stable-key data-testid`) when comparing across deploys?
-- [ ] **`--ax-tree`** when the full accessibility subtree is required?
-- [ ] **`sniff check` run** before the AI judges (measured evidence)?
-- [ ] **Delta only** sent to the model, not full snapshots?
-- [ ] **Diff/check via persisted paths** (CLI files or MCP `base_path`/`head_path`/`path`), not inline JSONL?
-- [ ] **`--screenshot`/`screenshot:true`** when a human eye on the rendered page is needed?
-- [ ] **`--attrs`/`attributes`** for verbatim DOM attributes (e.g. form `name` reindexing)?
-- [ ] **Evidence cited** in the evaluation reason (`contrast.ratio`, `aria.role`)?
+- [ ] `sniff init` run; `sniff prime` consulted for the full contract.
+- [ ] CLI preferred over MCP when a shell is available.
+- [ ] `--no-summary` used only when full JSONL is required.
+- [ ] Same mode/viewport on both diff sides; stable keys across deploys.
+- [ ] `sniff check` run before the AI judges; only evidence/delta sent.
+- [ ] `class` respected; heuristic opportunities confirmed manually.
+- [ ] Diff/check use persisted paths, not inline JSONL.
+- [ ] `--ax-tree` / `--screenshot` when human-level detail is needed.
+- [ ] Evidence cited in the evaluation reason.

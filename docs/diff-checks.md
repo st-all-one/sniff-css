@@ -60,8 +60,31 @@ sniff diff base.jsonl head.jsonl --stats-only
 
 ```bash
 sniff check snap.jsonl --uniform --tolerance 0.5   # o "card estranho"
-sniff check snap.jsonl --rules                     # PASS/WARN/FAIL
+sniff check snap.jsonl --rules                     # só quebras (PASS/WARN/FAIL)
+sniff check snap.jsonl --modern                    # só oportunidades de plataforma
 ```
+
+### Flags de `sniff check`
+
+| Flag | Efeito |
+|---|---|
+| *(nenhuma)* | roda `uniformity` + `rules` + `modern`: quebras **e** oportunidades |
+| `--rules` | somente quebras (`class:"bug"`) — **mudança de significado**: antes significava "rode as regras" |
+| `--modern` | somente oportunidades (`class:"opportunity"`) |
+| `--no-modern` | desliga oportunidades (equivalente ao antigo default) |
+| `--uniform` | mantido por compatibilidade; a detecção de outlier já roda no default |
+| `--guide ID` | filtra oportunidades por id de guia do corpus |
+| `--ignore CHECK` | suprime um `check_id` da execução (repetível) |
+| `--profile default\|strict` | `default` mantém oportunidades como `warn`; `strict` eleva todas as oportunidades a `fail` para gate de CI (registrado em `__check_summary.modern_profile`) |
+| `--responsive` \| `--no-responsive` | checks que comparam estados de `__meta.matrix`; **ligados por padrão**, `--no-responsive` desliga |
+
+`--rules` e `--modern` são mutuamente exclusivos na intenção (quebras x
+oportunidades); `--no-modern` é o escape hatch para quem quer só o comportamento
+anterior.
+O resumo `__check_summary` ganha `modern: N`, `class` (`bug`/`opportunity`),
+`modern_profile` e `opportunities_by_class: {"opportunity": N}` — a
+classificação D/F/N/E do corpus fica em
+[`modernization/05-inventario-guias.md`](modernization/05-inventario-guias.md).
 
 - **`--uniform`**: entre instâncias irmãs do mesmo selector, computa a norma do
   grupo (mediana para números, moda caso contrário) e reporta os **outliers**
@@ -131,22 +154,90 @@ sniff check snap.jsonl --rules                     # PASS/WARN/FAIL
       negativo) — o caso ancestral/descendente que o `occluded` ignora por
       design. Requer `__meta.viewport`.
 
-Saída JSONL com evidência + `__check_summary`:
+Saída JSONL com `evidence` tipado e `__check_summary`:
 
 ```jsonc
 {"check":"contrast-aa","selector":"footer .text","tag":"P","status":"fail",
- "evidence":"ratio 2.1:1 on #212529 against #020842 (need 4.5:1 text AA)"}
+ "class":"bug","severity":"fail",
+ "evidence":{"text":"ratio 2.1:1 on #212529 against #020842 (need 4.5:1 text AA)",
+   "metric":"contrast_ratio","observed":2.1,"threshold":4.5,
+   "comparator":">=","source":"contrast_facet"},
+ "metrics":{"font_size_px":16,"text_size":"normal"}}
 {"check":"uniformity","selector":"div.card:nth-child(3)","status":"fail",
- "evidence":"deviates from the 3/3 group norm: box_model.height: 80px (norm 120px ±40.00)"}
-{"check":"occluded","selector":"button.save","tag":"BUTTON","status":"fail",
- "evidence":"100% of button.save is covered by div.modal-backdrop — the element is visually behind an overlapping element"}
-{"check":"backdrop-over-modal","selector":"div.modal-content","tag":"DIV","status":"fail",
- "evidence":"100% of div.modal-content is covered by the modal backdrop div.backdrop — the dialog paints below its own dark scrim (negative z-index); check the stacking order"}
-{"__check_summary":{"uniformity_instances":3,"uniformity_outliers":1,"rules":12}}
+ "class":"bug",
+ "evidence":{"text":"deviates from the 3/3 group norm: box_model.height: 80px (norm 120px ±40.00)",
+   "metric":"group_deviation","observed":80,"threshold":40,
+   "comparator":"<=","source":"uniformity"}}
+{"check":"native-dialog-reimplemented","selector":"div.modal","tag":"DIV","status":"warn",
+ "class":"opportunity","guide":"dialog","severity":"warn",
+ "evidence":{"text":"div.modal reimplements a dialog with role=dialog instead of <dialog>",
+   "source":"attrs+aria"}}
+{"__check_summary":{"uniformity_instances":3,"uniformity_outliers":1,"rules":12,"modern":4,
+ "class":{"bug":13,"opportunity":4},"opportunities_by_class":{"opportunity":4},
+ "modern_profile":"default"}}
+```
+
+`observed`/`threshold`/`comparator`/`metric` aparecem só em checks com limiar
+numérico; `text` e `source` estão sempre presentes. `source` diz qual facet
+sustenta a afirmação (contraste, `attrs`, `__document`, `declared`, ...) para o
+agente calibrar confiança. Filtros determinísticos não precisam mais de regex
+sobre prosa:
+
+```bash
+sniff check snap.jsonl | jq -c 'select(.evidence.observed < .evidence.threshold)'
+sniff check snap.jsonl | jq -c 'select(.class == "opportunity" and .guide == "dialog")'
 ```
 
 O resultado vira **evidência** para o `reason` da avaliação IA (veja
 [`eval-prompt.md`](eval-prompt.md) e [`sniff-eval.schema.json`](sniff-eval.schema.json)).
+
+## Oportunidades de plataforma
+
+Além das **quebras** (bugs), `sniff check` reporta **dívida de plataforma**:
+padrões que funcionam, mas lutam contra recursos nativos da web. São
+oportunidades determinísticas, derivadas somente do snapshot — nenhuma LLM e
+nenhuma leitura de código-fonte. O catálogo completo está em
+[`modernization/04-catalogo-de-checks.md`](modernization/04-catalogo-de-checks.md);
+as flags estão na tabela acima.
+
+- **`class`** — toda linha diz `class:"bug"` (quebra detectada: contraste AA,
+  alvo pequeno, oclusão, ...) ou `class:"opportunity"` (dívida de plataforma:
+  modal reimplementado sem `<dialog>`, `autocomplete` ausente, imagem sem
+  dimensões reservadas, ...). É o campo mais barato para filtrar num pipeline.
+- **`evidence` tipado** — objeto com `text` e `source` sempre presentes e, em
+  checks com limiar numérico, `metric`/`observed`/`threshold`/`comparator`.
+  `metrics` traz fatos auxiliares. Permite agregação determinística sem
+  parsing de prosa (ex.: `jq 'select(.evidence.observed < .evidence.threshold)'`).
+- **`guide`** — id do guia no corpus de modernização (ex.: `dialog`, `forms`,
+  `respect-os-text-scale`); presente só em oportunidades. É a ponte para a
+  recomendação exata: consulte o guia antes de agir, pois ele descreve o
+  fallback e o Baseline que a recomendação preserva.
+- **`keepWhen`** — condição que **suprime** o check para evitar falso
+  positivo. Faz parte da especificação e dos testes de cada check (ver os
+  relatórios em [`modernization/findings/`](modernization/findings/)), mas
+  **não vai no JSON**: é documentação, não ruído de token. Se uma
+  oportunidade parecer errada, confira o `keepWhen` da origem antes de usar
+  `--ignore`.
+- **Padrão e escape hatches** — sem flags, `uniformity` + `rules` + `modern`
+  rodam juntos. Use `--rules` para só quebras, `--modern` para só
+  oportunidades, `--no-modern` para o comportamento anterior,
+  `--guide ID`/`--ignore CHECK` para recortar o conjunto e `--profile strict`
+  para tratá-las como gate de CI. Facetas ausentes silenciam o check que delas
+  depende — nunca viram `pass` por omissão.
+- **Captura padrão completa** — `__document`/`__env`/`__declared`, attrs e
+  matriz de 12 estados (3 viewports × light/dark/reduce/coarse) já vêm sem
+  flags. `--emulate K=V` reduz a um perfil, `--no-responsive` desliga as
+  comparações e `--minimal` remove todas as fatias v2. Checks por nó rodam só
+  no primeiro estado; comparações de matriz usam os 12.
+- **Heurísticas que exigem confirmação humana** — `breakpoint-jump`,
+  `dark-mode-ignored`, `overflow-only-at-width`, `inline-nontrivial-style` e
+  checks de ausência de `@view-transition` são oportunidades, não bugs.
+  Confira `evidence.source`/`guide` e o `keepWhen` da origem antes de agir.
+  Falsos positivos já corrigidos: SRI same-origin com `:443` explícito,
+  `content:none` em pseudo-elemento e reflow vertical proporcional ao viewport.
+  Se aparecer outro, adicione `keepWhen` + teste de negação — não globalize o
+  `--ignore`.
+
 
 ## Qualidade e não-regressão
 
@@ -167,6 +258,11 @@ falsos-positivos que surgiram em página real:
 - `occluded` ignora SVGs irmãos dentro do mesmo `<svg>` (ordem do documento).
 - `small-text` ignora `font-size:0` (técnica de ocultação de texto).
 - `contrast` pula nós sem `has_text` (texto em filho, não no nó direto).
+
+Cada oportunidade da família `modern` tem **triplet de teste**: caso positivo,
+caso de negação pelo `keepWhen` e verificação de que o `guide` existe no corpus.
+Checks com facet ausente silenciam (teste de negação por facet), e
+`__dom_stats` é derivado offline com teste de contagem.
 
 Para rodar: `cargo test --workspace` (baseline ~413 testes) ·
 `cargo clippy --workspace --all-targets -- -D warnings` ·

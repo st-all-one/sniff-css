@@ -13,6 +13,7 @@ sniff-css-diff = { path = "../sniff-css-diff" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [lib]
 name = "sniff_css_check"

@@ -7,7 +7,7 @@ Computed styles reais e árvore de widgets Flutter, determinísticos, para agent
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b3a42?style=for-the-badge)](./LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
-[![Version](https://img.shields.io/badge/version-0.5.1-009739?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.0-009739?style=for-the-badge)](CHANGELOG.md)
 
 </div>
 
@@ -16,7 +16,7 @@ página via **Chrome DevTools Protocol (CDP)** — e a **árvore de widgets** de
 **Flutter/Dart** nativos via **Dart VM Service** — emitindo JSONL compacto e
 determinístico. Em vez de screenshots e julgamento visual, o pipeline mede:
 **`sniff capture`** captura, **`sniff diff`** devolve só o que mudou,
-**`sniff check`** roda regras de acessibilidade/consistência offline e
+**`sniff check`** roda regras de acessibilidade/consistência offline e oportunidades modernas (schema v2);
 **`sniff-mcp`** expõe tudo a agentes de IA. `sniff init` grava o protocolo de uso
 no `AGENTS.md` do projeto e `sniff prime` é o protocolo token-optimized para a
 IA. A IA interpreta apenas o delta.
@@ -35,7 +35,7 @@ curl --proto '=https' \
   | sh
 ```
 
-Versão fixa: `... | VERSION=v0.5.1 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Versão fixa: `... | VERSION=v0.6.0 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
 Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
 [`docs/docker.md`](docs/docker.md).
 
@@ -71,8 +71,8 @@ sniff capture flutter://emulator-5554 --project ~/projetos/app \
 # diff — só o que mudou entre duas capturas (CHANGED/ADDED/REMOVED + resumo)
 sniff diff base.jsonl head.jsonl --tolerance 0.5
 
-# check — regras offline: contraste AA/AAA, alvo ≥24px, foco, alt, uniformidade, oclusão
-sniff check snap.jsonl --uniform --rules
+# check — regras offline + oportunidades modernas (default); --rules / --modern / --no-modern
+sniff check snap.jsonl
 
 # mcp — servidor stdio para agentes: captura → diff → checks → IA interpreta o delta
 sniff-mcp

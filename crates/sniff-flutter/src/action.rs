@@ -43,6 +43,9 @@ pub fn unsupported(action: &Action) -> Result<()> {
         Action::Upload { selector, .. } => Err(VmError::Other(format!(
             "flutter has no file input: `{selector}` (upload actions are web-only)"
         ))),
+        Action::Key { key, .. } => Err(VmError::Other(format!(
+            "flutter has no keyboard: `{key}` (key actions are web-only)"
+        ))),
         _ => Ok(()),
     }
 }

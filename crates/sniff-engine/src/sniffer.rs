@@ -10,8 +10,11 @@ use sniff_cdp::client::CdpClient;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_cdp::session::CdpSession;
 use sniff_core::contrast;
+use sniff_core::modern::MatrixTag;
 use sniff_core::storage::StorageState;
+use sniff_core::types::ElementSnapshot;
 use sniff_core::{Action, SniffConfig, SniffError, SniffResult};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -180,9 +183,15 @@ where
     F: FnMut(Phase) -> Fut,
     Fut: Future<Output = ()>,
 {
+    let coarse_pointer = ["pointer", "any-pointer"].iter().any(|key| {
+        config
+            .emulate
+            .get(*key)
+            .is_some_and(|value| value == "coarse")
+    });
     if let Some(vp) = config.viewport {
         session
-            .set_viewport(vp.width, vp.height)
+            .set_viewport_with_mobile(vp.width, vp.height, coarse_pointer)
             .await
             .map_err(|e| SniffError::Cdp(e.to_string()))?;
     }
@@ -196,21 +205,43 @@ where
     if let Some(path) = &config.storage_state_path {
         apply_storage_state(session, path).await?;
     }
+    // Explicit `--emulate` features win over the stabilization default;
+    // applying them before navigation makes page scripts observe them.
+    let mut features: Vec<serde_json::Value> = Vec::new();
+    if config.stabilize {
+        features.push(serde_json::json!({
+            "name": "prefers-reduced-motion", "value": "reduce"
+        }));
+    }
+    for (name, value) in &config.emulate {
+        if name == "pointer" || name == "any-pointer" {
+            continue;
+        }
+        let entry = serde_json::json!({"name": name, "value": value});
+        if let Some(slot) = features
+            .iter_mut()
+            .find(|item| item.get("name") == Some(&serde_json::Value::String(name.clone())))
+        {
+            *slot = entry;
+        } else {
+            features.push(entry);
+        }
+    }
+    if !features.is_empty() {
+        session
+            .call(
+                "Emulation.setEmulatedMedia",
+                serde_json::json!({"features": features}),
+            )
+            .await
+            .map_err(|e| SniffError::Cdp(e.to_string()))?;
+    }
     on_progress(Phase::Navigating).await;
     session
         .navigate(&config.url)
         .await
         .map_err(|e| SniffError::Cdp(e.to_string()))?;
     if config.stabilize {
-        session
-            .call(
-                "Emulation.setEmulatedMedia",
-                serde_json::json!({
-                    "features": [{ "name": "prefers-reduced-motion", "value": "reduce" }]
-                }),
-            )
-            .await
-            .map_err(|e| SniffError::Cdp(e.to_string()))?;
         session
             .evaluate(STABILIZE_JS, false)
             .await
@@ -270,7 +301,7 @@ where
     waiter::wait_for_page(session, config).await?;
     on_progress(Phase::Extracting).await;
     let mut outcome = extractor::extract(session, config).await?;
-    if !action_reports.is_empty() {
+    if config.effects {
         outcome.actions = Some(serde_json::Value::Array(action_reports));
     }
     if outcome.snapshots.is_empty() {
@@ -318,10 +349,99 @@ where
     let nodes: usize = outcome
         .snapshots
         .iter()
-        .map(sniff_core::ElementSnapshot::node_count)
+        .map(ElementSnapshot::node_count)
         .sum();
     on_progress(Phase::Formatting { nodes }).await;
     Ok(outcome)
+}
+
+/// Captures one state per viewport/emulation profile and folds them into a
+/// single schema-2 outcome with `__meta.matrix` tags. Node ids are rebased so
+/// consumers can slice states by contiguous chunks without collisions.
+pub async fn sniff_matrix_with_progress<F, Fut>(
+    sniffer: &Sniffer,
+    config: &SniffConfig,
+    mut on_progress: F,
+) -> SniffResult<SniffOutcome>
+where
+    F: FnMut(Phase) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let viewports: Vec<_> = config
+        .viewport
+        .into_iter()
+        .chain(config.matrix_viewports.iter().copied())
+        .collect();
+    let profiles = if config.matrix_emulations.is_empty() {
+        vec![config.emulate.clone()]
+    } else {
+        config.matrix_emulations.clone()
+    };
+    let total = viewports.len().saturating_mul(profiles.len());
+    if total <= 1 {
+        let session = sniffer.new_session().await?;
+        let result = sniff_session_with_progress(&session, config, on_progress).await;
+        drop(session.close().await);
+        return result;
+    }
+
+    let mut combined = SniffOutcome::default();
+    let mut offset = 0_u64;
+    let mut index = 0_usize;
+    for viewport in &viewports {
+        for profile in &profiles {
+            let mut state = config.clone();
+            state.viewport = Some(*viewport);
+            state.emulate = profile.clone();
+            let session = sniffer.new_session().await?;
+            let result = sniff_session_with_progress(&session, &state, &mut on_progress).await;
+            drop(session.close().await);
+            let mut outcome = result?;
+            let node_id_start = offset.saturating_add(1);
+            let last = rebase_ids(&mut outcome.snapshots, offset);
+            // Empty states must not rewind the id counter; non-empty ones end
+            // exactly at `last` so the next state starts at `last + 1`.
+            if last >= node_id_start {
+                offset = last;
+            }
+            combined.matrix.push(MatrixTag {
+                index,
+                total,
+                viewport: Some(*viewport),
+                emulation: profile.clone(),
+                node_id_start: Some(node_id_start),
+                node_id_end: Some(last),
+            });
+            if index == 0 {
+                combined.document_facet = outcome.document_facet.take();
+                combined.env_facet = outcome.env_facet.take();
+                combined.declared_facet = outcome.declared_facet.take();
+                combined.global_css_variables = outcome.global_css_variables.take();
+                combined.shadow_roots = outcome.shadow_roots;
+                combined.actions = outcome.actions.take();
+                combined.screenshot = outcome.screenshot.take();
+                combined.ax_tree = outcome.ax_tree.take();
+            }
+            combined.snapshots.append(&mut outcome.snapshots);
+            index = index.saturating_add(1);
+        }
+    }
+    Ok(combined)
+}
+
+/// Adds `offset` to every `id`/`parent_id` in the forest, returning the largest
+/// resulting id so the next state starts above it.
+fn rebase_ids(nodes: &mut [ElementSnapshot], offset: u64) -> u64 {
+    let mut largest = 0_u64;
+    for node in nodes {
+        node.id = node.id.saturating_add(offset);
+        largest = largest.max(node.id);
+        if let Some(parent) = node.parent_id {
+            node.parent_id = Some(parent.saturating_add(offset));
+        }
+        largest = largest.max(rebase_ids(&mut node.children, offset));
+    }
+    largest
 }
 
 /// Restore a persisted session state into the browser before navigation:
@@ -379,6 +499,7 @@ fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: &SniffErr
         Action::Upload {
             selector, files, ..
         } => format!("upload:{selector}:{}", files.join(",")),
+        Action::Key { key, .. } => format!("key:{key}"),
     };
     let prior = chain
         .get(..index)

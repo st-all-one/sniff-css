@@ -11,8 +11,10 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod modern;
 pub mod rules;
 pub mod uniformity;
+pub use modern::{ModernOptions, ModernProfile, run_modern_checks};
 
 pub use error::{CheckError, CheckResult};
 pub use rules::{CheckLine, RuleStatus, run_rules};

@@ -3,12 +3,21 @@
 //! Parses the JSONL produced by `sniff` into a lightweight
 //! [`DiffNode`] tree, accepting both `jsonl` (tree: one root per line with
 //! nested `children`) and `jsonl-flat` (one node per line with
-//! `id`/`parent_id`) inputs. `__meta` lines (global `css_variables` and the
-//! compact `style_defaults` hoist map) are parsed; `style_defaults` are
-//! merged back into every node's `styles` so the diff always sees the full
-//! effective values (lossless reconstruction of the compact dedup).
+//! `id`/`parent_id`) inputs. `__meta` lines (global `css_variables`, the
+//! compact `style_defaults` hoist map and the v2 schema/matrix metadata) are
+//! parsed; `style_defaults` are merged back into every node's `styles` so the
+//! diff always sees the full effective values (lossless reconstruction of the
+//! compact dedup).
+//!
+//! The v2 snapshot facetas (`__document`, `__env`, `__declared`) and the
+//! matrix/shadow-root metadata are parsed in a single pass, tolerantly: a
+//! malformed or missing line leaves the corresponding field absent. A v1
+//! snapshot (schema absent or `1`) is promoted in memory to schema `2` with
+//! empty facets — it is never rejected, so `diff` keeps working across the
+//! v1/v2 boundary.
 
 use serde_json::{Map, Value};
+use sniff_core::modern::{DeclaredFacet, DocumentFacet, EnvFacet, MatrixTag};
 use std::path::Path;
 
 use crate::error::{DiffError, DiffResult};
@@ -54,6 +63,9 @@ pub struct DiffNode {
     pub ax: Option<Value>,
     /// Extra captured DOM attributes.
     pub attributes: Option<Value>,
+    /// In-page computed effective background (behind transparent nodes),
+    /// parsed from `effectiveBackground` or `effective_background`.
+    pub effective_background: Option<Value>,
     /// Child nodes.
     pub children: Vec<Self>,
 }
@@ -92,6 +104,11 @@ impl DiffNode {
             contrast: v.get("contrast").cloned(),
             ax: v.get("ax").cloned(),
             attributes: v.get("attrs").cloned(),
+            effective_background: v
+                .get("effectiveBackground")
+                .or_else(|| v.get("effective_background"))
+                .filter(|value| !value.is_null())
+                .cloned(),
             children,
         }
     }
@@ -166,8 +183,8 @@ fn build_forest(flat: &[FlatEntry]) -> Vec<DiffNode> {
         .collect()
 }
 
-/// A parsed snapshot: the node forest plus any `__actions` UI-effect map
-/// (per-interaction before/after reports) that the capture carried.
+/// A parsed snapshot: the node forest plus the global v2 facetas carried by
+/// the capture (`__document`, `__env`, `__declared`, matrix and shadow roots).
 #[derive(Debug, Clone, Default)]
 pub struct DiffDocument {
     /// Root nodes of the captured forest.
@@ -177,6 +194,46 @@ pub struct DiffDocument {
     /// Emulated viewport `(width, height)` from the `__meta` line, when the
     /// capture recorded it (used by viewport-relative offline checks).
     pub viewport: Option<(f64, f64)>,
+    /// `__document` facet: title/lang/doctype/meta/links/scripts/stylesheets.
+    pub document: Option<DocumentFacet>,
+    /// `__env` facet: normalized media preferences, emulation and device.
+    pub env: Option<EnvFacet>,
+    /// `__declared` facet: CSSOM rule origins (opt-in capture).
+    pub declared: Option<DeclaredFacet>,
+    /// Matrix states in capture order (`__meta.matrix`, one per state).
+    pub matrix: Vec<MatrixTag>,
+    /// Global CSS custom properties from `__meta.css_variables`.
+    pub css_variables: Option<Map<String, Value>>,
+    /// Snapshot schema: `1` is promoted to `2` on load; v2 is used directly.
+    pub schema: u8,
+    /// Number of open shadow roots traversed during capture.
+    pub shadow_roots: usize,
+}
+
+/// Narrows a snapshot to the first matrix state for node-level checks.
+///
+/// Uses captured ID ranges when present and positional slicing as a
+/// backward-compatible fallback for older v2 snapshots without ranges.
+pub fn baseline_document(doc: &DiffDocument) -> DiffDocument {
+    let Some(first) = doc.matrix.iter().min_by_key(|tag| tag.index) else {
+        return doc.clone();
+    };
+    let mut baseline = doc.clone();
+    let ranged = match (first.node_id_start, first.node_id_end) {
+        (Some(start), Some(end)) if start <= end => {
+            baseline
+                .nodes
+                .retain(|node| node.id >= start && node.id <= end);
+            true
+        }
+        _ => false,
+    };
+    if !ranged && doc.matrix.len() > 1 {
+        let per_state = doc.nodes.len().checked_div(doc.matrix.len()).unwrap_or(0);
+        baseline.nodes.truncate(per_state);
+    }
+    baseline.matrix.clear();
+    baseline
 }
 
 /// Load a snapshot JSONL file into a [`DiffDocument`].
@@ -186,54 +243,166 @@ pub fn load_file_doc(path: &Path) -> DiffResult<DiffDocument> {
 }
 
 /// Parse snapshot JSONL from an in-memory string into a [`DiffDocument`].
+///
+/// Nodes are parsed by [`load_str`]; every global line is collected in a
+/// single additional pass by [`extract_globals`].
 pub fn load_str_doc(content: &str) -> DiffResult<DiffDocument> {
-    let nodes = load_str(content)?;
-    let actions = extract_actions(content);
-    let viewport = extract_viewport(content);
-    Ok(DiffDocument {
-        nodes,
-        actions,
-        viewport,
-    })
+    let mut doc = extract_globals(content);
+    doc.nodes = load_str(content)?;
+    Ok(doc)
 }
 
-/// Collect the `viewport` `(width, height)` from a `__meta` line, when present.
-fn extract_viewport(content: &str) -> Option<(f64, f64)> {
+/// Collect all global metadata in one pass over the JSONL lines.
+///
+/// Parsing is tolerant: a missing, malformed or wrongly typed line leaves its
+/// field empty rather than failing the load. Repeated facets (matrix states)
+/// keep the last successfully parsed value; matrix tags are appended in wire
+/// order. Unknown `__*` lines are ignored.
+fn extract_globals(content: &str) -> DiffDocument {
+    let mut doc = DiffDocument::default();
+    let mut raw_schema: u8 = 1;
+    let mut explicit_v1 = false;
+    let mut schema_declared = false;
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let Some(meta) = v.get("__meta") else {
+
+        if let Some(facet) = value.get("__document") {
+            match serde_json::from_value::<DocumentFacet>(facet.clone()) {
+                Ok(parsed) => doc.document = Some(parsed),
+                Err(err) => tracing::warn!(error = %err, "ignoring malformed __document facet"),
+            }
             continue;
-        };
-        let vp = meta.get("viewport")?;
-        let width = vp.get("width")?.as_f64()?;
-        let height = vp.get("height")?.as_f64()?;
-        return Some((width, height));
+        }
+        if let Some(facet) = value.get("__env") {
+            match serde_json::from_value::<EnvFacet>(facet.clone()) {
+                Ok(parsed) => doc.env = Some(parsed),
+                Err(err) => tracing::warn!(error = %err, "ignoring malformed __env facet"),
+            }
+            continue;
+        }
+        if let Some(facet) = value.get("__declared") {
+            match serde_json::from_value::<DeclaredFacet>(normalize_at_rules(facet)) {
+                Ok(parsed) => doc.declared = Some(parsed),
+                Err(err) => tracing::warn!(error = %err, "ignoring malformed __declared facet"),
+            }
+            continue;
+        }
+        if let Some(actions) = value.get("__actions").and_then(Value::as_array) {
+            doc.actions.extend(actions.iter().cloned());
+            continue;
+        }
+
+        if let Some(meta) = value.get("__meta").and_then(Value::as_object) {
+            if doc.viewport.is_none()
+                && let Some((width, height)) = viewport_from_meta(meta)
+            {
+                doc.viewport = Some((width, height));
+            }
+            if let Some(schema) = meta.get("schema").and_then(Value::as_u64) {
+                schema_declared = true;
+                if let Ok(schema) = u8::try_from(schema) {
+                    raw_schema = schema;
+                    explicit_v1 = schema == 1;
+                }
+            }
+            if let Some(roots) = meta.get("shadow_roots").and_then(Value::as_u64) {
+                doc.shadow_roots = usize::try_from(roots).unwrap_or(0);
+            }
+            if let Some(variables) = meta.get("css_variables").and_then(Value::as_object) {
+                doc.css_variables = Some(variables.clone());
+            }
+            if let Some(matrix) = meta.get("matrix") {
+                append_matrix_tags(matrix, &mut doc.matrix);
+            }
+        }
     }
-    None
+
+    // Snapshot migration (docs/modernization/08-contrato-v2.md §8.6): a v1
+    // snapshot has no `__meta.schema` (or declares `1`) and no new facets.
+    // Promote it in memory to schema 2 with empty facets instead of rejecting
+    // it, so `sniff diff base-v1.jsonl head-v2.jsonl` keeps working. v2 is
+    // used directly. Pre-existing v1 data (nodes, actions, viewport and
+    // css_variables) is preserved; only the new facets are empty.
+    let has_v2_facets = doc.document.is_some()
+        || doc.env.is_some()
+        || doc.declared.is_some()
+        || !doc.matrix.is_empty()
+        || doc.shadow_roots > 0;
+    let promote = explicit_v1 || (!schema_declared && !has_v2_facets);
+    if promote {
+        tracing::debug!(
+            from = raw_schema,
+            to = 2u8,
+            "promoting v1 snapshot in memory"
+        );
+        doc.document = None;
+        doc.env = None;
+        doc.declared = None;
+        doc.matrix.clear();
+        doc.shadow_roots = 0;
+    }
+    doc.schema = if promote { 2 } else { raw_schema.max(2) };
+    doc
 }
 
-/// Collect the `__actions` UI-effect reports embedded in the JSONL.
-fn extract_actions(content: &str) -> Vec<Value> {
-    let mut out = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+/// Read the `(width, height)` viewport from a `__meta` object, when valid.
+fn viewport_from_meta(meta: &Map<String, Value>) -> Option<(f64, f64)> {
+    let viewport = meta.get("viewport")?;
+    let width = viewport.get("width")?.as_f64()?;
+    let height = viewport.get("height")?.as_f64()?;
+    Some((width, height))
+}
+
+/// Append matrix tags to `out` in wire order, accepting both the array form
+/// and the single-object form emitted per state by the capture.
+fn append_matrix_tags(value: &Value, out: &mut Vec<MatrixTag>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                push_matrix_tag(item, out);
+            }
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if let Some(arr) = v.get("__actions").and_then(Value::as_array) {
-            out.extend(arr.iter().cloned());
+        Value::Object(_) => push_matrix_tag(value, out),
+        _ => {}
+    }
+}
+
+/// Parse one matrix tag, skipping malformed entries without dropping the rest.
+fn push_matrix_tag(value: &Value, out: &mut Vec<MatrixTag>) {
+    match serde_json::from_value::<MatrixTag>(value.clone()) {
+        Ok(tag) => {
+            tracing::trace!(index = tag.index, total = tag.total, "parsed matrix tag");
+            out.push(tag);
+        }
+        Err(err) => tracing::warn!(error = %err, "ignoring malformed matrix tag"),
+    }
+}
+
+/// Normalize the capture's `conditionText` spelling to the typed field name
+/// `condition_text` used by [`DeclaredFacet`], keeping all other keys intact.
+fn normalize_at_rules(value: &Value) -> Value {
+    let Some(mut declared) = value.as_object().cloned() else {
+        return value.clone();
+    };
+    let Some(rules) = declared.get_mut("at_rules").and_then(Value::as_array_mut) else {
+        return Value::Object(declared);
+    };
+    for rule in rules {
+        if let Some(obj) = rule.as_object_mut()
+            && !obj.contains_key("condition_text")
+            && let Some(text) = obj.remove("conditionText")
+        {
+            obj.insert("condition_text".into(), text);
         }
     }
-    out
+    Value::Object(declared)
 }
 
 /// Load a snapshot JSONL file, returning one root node per matched element.
@@ -268,7 +437,12 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             }
             continue;
         }
-        if v.get("__ax_tree").is_some() || v.get("__actions").is_some() {
+        if v.get("__ax_tree").is_some()
+            || v.get("__actions").is_some()
+            || v.get("__document").is_some()
+            || v.get("__env").is_some()
+            || v.get("__declared").is_some()
+        {
             continue;
         }
         let tree = v.get("children").is_some();

@@ -129,28 +129,42 @@ Antes de fechar um ciclo de documentação ou release, **revise as dependências
   `.github/workflows/release.yml`).
 
 <!-- sniff:start -->
-<!-- sniff:version: 1 -->
+<!-- sniff:version: 2 -->
 # sniff — computed styles for LLMs
 
 `sniff capture` is the source of truth for layout/style — never guess CSS, capture it.
-Cycle: `sniff capture` → `sniff check` → `sniff diff`; the AI reads only the delta.
+Cycle: `capture` → `check` → `diff`; the AI reads only evidence/delta.
 
 - Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`
-(default `summary`, token-lean). Diff/check need `--no-summary` JSONL snapshots.
-- Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]` (deterministic, offline).
-- Checks: `sniff check <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).
-- Batch/params: `--params '<json>'` (one op) or `--batch file.jsonl` (one op per line);
-`-` reads stdin, so `sniff capture … --no-summary | sniff check -` works.
-- Protocol: `sniff prime` (`--long` = full); `sniff self` = setup/completions/upgrade.
+(default `summary`; `--no-summary` = full JSONL for diff/check). Default v2 context:
+`__document`, `__env`, `__declared`, attrs preset and a 12-state matrix
+(3 viewports × light/dark/reduce/coarse). `--emulate K=V` reduces to one profile;
+`--minimal` removes all v2 facets.
+- Checks: `sniff check <SNAP>` runs bugs + modern opportunities by default.
+`--rules` = bugs only; `--modern` = opportunities only; `--no-modern` = 0.5 default;
+`--no-responsive` disables cross-state checks. Lines carry `class` (`bug`/`opportunity`),
+`guide`, typed `evidence` (`source`, optional `metric/observed/threshold`).
+- Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]`, offline.
+- Batch: `--params '<json>'` / `--batch file.jsonl` (`-` = stdin);
+`sniff capture … --no-summary | sniff check -`.
+- Protocol: `sniff prime` (`--long` = full); `sniff init [DIR]` (`--force` overwrites AGENTS.md).
+
+Interpret:
+- `class:"bug"` with `status:"fail"/"warn"` = measured failure; act on it.
+- `class:"opportunity"` = heuristic platform debt; read `evidence.source` + `guide` first.
+`breakpoint-jump`, `dark-mode-ignored`, `inline-nontrivial-style` and transition-absence
+checks need human confirmation — they are not bugs. Suppress with `--ignore CHECK` only
+after checking the documented `keepWhen`; never auto-fix from the line alone.
+- `contrast.aa:"unknown"` = manual review, not pass. Facet absent ⇒ check silent.
+Never paste full JSONL into the model — diff/check first.
 
 Common cases:
-- Self-signed TLS: add `--ignore-certificate-errors` (or set `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).
-- Auth: `--header "Name: Value"` on every request; persist a login with `--storage-state FILE`
-(write it once with `--save-storage-state FILE`).
-- Action-only UI (modal/dropdown): `--click SEL`, or ordered `--action "click:SEL:5000"`.
-- Flutter/Dart app: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).
-- Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`
-(or `--persist PATH` for an explicit file).
+- Self-signed TLS: `--ignore-certificate-errors` (or `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).
+- Auth: `--header "Name: Value"`; login via `--storage-state FILE` / `--save-storage-state FILE`.
+- Action-only UI: `--click SEL` or ordered `--action "click:SEL:5000"`;
+`key:Escape` dispatches a real key event.
+- Flutter: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).
+- Persist: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.
 
 Contract: stdout = data (JSONL), stderr = logs; `--json` = {success, command, data?, error{code,message,retryable}, warnings?}.
 Exit: 2 invalid, 3 not_found, 5 io, 70 internal.

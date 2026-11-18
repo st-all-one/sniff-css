@@ -32,6 +32,41 @@ pub(crate) struct CheckArgs {
     #[arg(long, default_value_t = false)]
     pub rules: bool,
 
+    /// Run only modern opportunity checks (`class: opportunity`)
+    #[arg(long, default_value_t = false)]
+    #[serde(default)]
+    pub modern: bool,
+
+    /// Keep the v0.5 default: uniformity + bug rules, no opportunities.
+    #[arg(long = "no-modern", default_value_t = false, conflicts_with = "modern")]
+    #[serde(default)]
+    pub no_modern: bool,
+
+    /// Only emit opportunities whose check belongs to this guide id.
+    #[arg(long, value_name = "ID")]
+    #[serde(default)]
+    pub guide: Option<String>,
+
+    /// Suppress a check id (repeatable or comma-separated).
+    #[arg(long, value_name = "CHECK", value_delimiter = ',', action = clap::ArgAction::Append)]
+    #[serde(default)]
+    pub ignore: Vec<String>,
+
+    /// Modern-check profile: `default` or `strict`.
+    #[arg(long, value_name = "PROFILE")]
+    #[serde(default)]
+    pub profile: Option<String>,
+
+    /// Cross-state checks over `__meta.matrix`. ON by default.
+    #[arg(long, default_value_t = true)]
+    #[serde(default = "default_true")]
+    pub responsive: bool,
+
+    /// Disable cross-state checks.
+    #[arg(long = "no-responsive", default_value_t = false)]
+    #[serde(default)]
+    pub no_responsive: bool,
+
     /// Tolerância para desvios numéricos (na mesma unidade).
     #[arg(long, default_value_t = 0.5)]
     pub tolerance: f64,
@@ -47,4 +82,8 @@ pub(crate) struct CheckArgs {
     /// Valida os parâmetros sem executar (útil com `--batch`).
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
+}
+
+fn default_true() -> bool {
+    true
 }

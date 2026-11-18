@@ -277,6 +277,7 @@ mod tests {
             headers: Vec::new(),
             storage_state_path: None,
             save_storage_state: None,
+            ..SniffConfig::default()
         }
     }
 

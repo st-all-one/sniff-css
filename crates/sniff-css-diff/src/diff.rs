@@ -739,6 +739,7 @@ mod tests {
             contrast: None,
             ax: None,
             attributes: None,
+            effective_background: None,
             children: vec![],
         }
     }

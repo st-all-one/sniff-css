@@ -26,6 +26,48 @@ Para que duas runs sejam comparáveis, os seguintes parâmetros devem ser
 | Ações (`--click`/`--hover`/`--type`/`--upload`/`--action`, MCP `actions`) | mesmas em ambas | A interação define o estado revelado; runs com e sem ação capturam coisas diferentes. |
 | Auth/sessão | mesmos em ambas | `--header`/`SNIFF_DEFAULT_HEADERS` e `--storage-state` definem **quem** é o request; lados com credenciais diferentes capturam estados de usuário diferentes. |
 
+| `__meta.schema` + facetas globais | `2` + `__document`/`__env`/`attrs` (preset `modern`) | Baseline v2: uma linha global por captura e o preset curado por nó; o mesmo modo nos dois lados |
+PUT <39:
+## 1b. Bump do baseline v1 → v2 (schema 2)
+
+O golden de snapshot passa a ser **v2**: o JSONL traz `__meta.schema: 2`, uma
+linha `__document`, uma linha `__env` e `attrs` com o preset `modern`. Regenere
+o baseline com a mesma receita da §1 — as novas linhas são determinísticas e
+devem casar byte a byte entre runs:
+
+- `__document`: ordem do DOM para `meta`/`links`/`scripts`, ordem de
+  `document.styleSheets` para `style_sheets`, chaves de `meta` em ordem
+  alfabética, `blocked:true` para folha cross-origin.
+- `__env`: só chaves/valores canônicos fechados, em ordem alfabética;
+  `emulated` registra o pedido da CLI (emulação explícita vence a
+  estabilização), `device` informa `dpr`/`width`/`height`.
+- `attrs`: o preset `modern` é curado (≈20 nomes) e a ordem das chaves é
+  determinística; `--no-attrs`/`--minimal` produzem outro perfil de baseline.
+- `__declared` (opt-in): ordenado por `(href, index, selector)`; `matrix`
+  (opt-in): ordem da configuração, `index` a partir de 0.
+
+Nada disso lê relógio, ambiente ou aleatoriedade. `__dom_stats` não entra no
+snapshot: é derivado no `check`, também de forma determinística.
+
+### Garantias da migração v1 → v2
+
+**Quebramos a escrita, não a leitura.** Um snapshot v1 é promovido em memória
+pelo loader (`__meta.schema=2`, facetas novas vazias) sem erro:
+
+| Situação | Comportamento garantido |
+|---|---|
+| `sniff diff base-v1.jsonl head-v2.jsonl` | aceito; o v1 sobe em memória e o resultado é equivalente ao diff v2↔v2 para os campos comparáveis |
+| `sniff check snap-v1.jsonl` | aceito; checks que dependem de `__document`/`__env`/`attrs`/`declared`/matriz **não emitem linha** (ausência ≠ falha) |
+| Linhas `__*` desconhecidas | ignoradas por versões antigas do parser (o payload é aditivo) |
+| Envelope, exit codes e canais | inalterados (`--json` com `{success,command,data?,error,warnings?}`, stdout = dado, stderr = log) |
+| `--minimal` | continua escrevendo `schema=2`, mas sem as facetas globais de contexto — é um perfil de baseline distinto, não um retorno ao v1 |
+
+Na prática: **nunca compare bytes de um golden v1 com um golden v2**. Regenere
+o baseline ao atualizar; para comparar capturas antigas com novas, use
+`sniff diff` (a promoção em memória resolve a diferença de schema). Se o diff
+entre um par migrado e o par regenerado divergir, isso é regressão de
+migração — o teste de equivalência faz parte do gate de release.
+
 > **Áreas restritas:** para um CMS com middleware stateless de IA, o token vai
 > por header (`--header "X-CMS-AI-Token: <token>"` ou `SNIFF_DEFAULT_HEADERS`
 > no MCP) — o request já nasce autenticado, sem token em URL. Um login por

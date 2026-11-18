@@ -48,6 +48,13 @@ pub async fn execute(session: &CdpSession, action: &Action) -> SniffResult<()> {
 /// and sized; `Upload` only needs it to exist, since file inputs are usually
 /// visually hidden (its rect/center are reported as zeroes).
 pub async fn prepare(session: &CdpSession, action: &Action) -> SniffResult<ActionTarget> {
+    if let Action::Key { key, .. } = action {
+        return Ok(ActionTarget {
+            path: format!("key:{key}"),
+            rect: (0.0, 0.0, 0.0, 0.0),
+            center: (0.0, 0.0),
+        });
+    }
     let selector = selector_of(action);
     let timeout_ms = timeout_of(action);
     let require_visible = !matches!(action, Action::Upload { .. });
@@ -134,6 +141,10 @@ pub async fn perform(
                 .set_file_input(selector, files)
                 .await
                 .map_err(cdp_err)?;
+            sleep(*settle_ms).await;
+        }
+        Action::Key { key, settle_ms, .. } => {
+            session.input_key(key).await.map_err(cdp_err)?;
             sleep(*settle_ms).await;
         }
     }
@@ -224,6 +235,7 @@ fn selector_of(action: &Action) -> &str {
         | Action::Hover { selector, .. }
         | Action::Type { selector, .. }
         | Action::Upload { selector, .. } => selector,
+        Action::Key { .. } => "",
     }
 }
 
@@ -232,7 +244,8 @@ fn timeout_of(action: &Action) -> u64 {
         Action::Click { timeout_ms, .. }
         | Action::Hover { timeout_ms, .. }
         | Action::Type { timeout_ms, .. }
-        | Action::Upload { timeout_ms, .. } => *timeout_ms,
+        | Action::Upload { timeout_ms, .. }
+        | Action::Key { timeout_ms, .. } => *timeout_ms,
     }
 }
 

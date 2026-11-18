@@ -96,3 +96,30 @@ fn delta_is_valid_json_lines() {
         assert!(v.get("selector").is_some());
     }
 }
+
+#[test]
+fn v2_global_lines_do_not_corrupt_node_loading() {
+    let snapshot = concat!(
+        r#"{"__meta":{"schema":2,"matrix":{"index":0,"total":1,"emulation":{}}}}"#,
+        "\n",
+        r#"{"__document":{"title":"x","meta":{},"links":[],"scripts":[],"style_sheets":[]}}"#,
+        "\n",
+        r#"{"__env":{"media":{},"emulated":{}}}"#,
+        "\n",
+        r#"{"__declared":{"rules":[],"blocked_sheets":[],"at_rules":[],"truncated":false}}"#,
+        "\n",
+        r#"{"id":1,"tag":"DIV","selector":"div","children":[]}"#,
+        "\n",
+    );
+    let doc = sniff_css_diff::load_str_doc(snapshot).unwrap();
+    assert_eq!(doc.schema, 2);
+    assert!(doc.document.is_some());
+    assert!(doc.env.is_some());
+    assert!(doc.declared.is_some());
+    assert_eq!(doc.matrix.len(), 1);
+    assert_eq!(
+        doc.nodes.len(),
+        1,
+        "global lines must not be parsed as nodes"
+    );
+}

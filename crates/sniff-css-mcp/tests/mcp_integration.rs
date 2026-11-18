@@ -242,24 +242,18 @@ async fn sniff_css_page_streams_progress_and_returns_jsonl() {
         .text
         .clone();
 
-    // JSONL: a leading __meta line (compact style_defaults hoist) precedes
-    // the node line(s); the node line(s) parse and carry expected fields.
-    let first_line: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    if first_line.get("__meta").is_some() {
-        let node_line: serde_json::Value =
-            serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
-        assert_eq!(node_line["tag"], "DIV");
-        assert_eq!(node_line["selector"], "div[data-testid=\"widget\"]");
-        assert_eq!(node_line["is_user_noticeable"]["display_visible"], true);
-        assert!(node_line["computed_style_hash"].is_string());
-        assert!(node_line["styles"]["box_model"]["width"].is_string());
-    } else {
-        assert_eq!(first_line["tag"], "DIV");
-        assert_eq!(first_line["selector"], "div[data-testid=\"widget\"]");
-        assert_eq!(first_line["is_user_noticeable"]["display_visible"], true);
-        assert!(first_line["computed_style_hash"].is_string());
-        assert!(first_line["styles"]["box_model"]["width"].is_string());
-    }
+    // v2 JSONL starts with global lines (__meta/__document/__env/...); the
+    // node line is whichever line carries an `id`.
+    let node_line: serde_json::Value = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .find(|value: &serde_json::Value| value.get("id").is_some())
+        .expect("a node line");
+    assert_eq!(node_line["tag"], "DIV");
+    assert_eq!(node_line["selector"], "div[data-testid=\"widget\"]");
+    assert_eq!(node_line["is_user_noticeable"]["display_visible"], true);
+    assert!(node_line["computed_style_hash"].is_string());
+    assert!(node_line["styles"]["box_model"]["width"].is_string());
 
     // Progress notifications were streamed asynchronously.
     wait_for_progress(&client, 2).await;

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::{SniffConfig, SniffError, SniffResult};
 use sniff_engine::extractor::SniffOutcome;
-use sniff_engine::{Phase, Sniffer, sniff_session_with_progress};
+use sniff_engine::{Phase, Sniffer, sniff_matrix_with_progress};
 use tokio::sync::{RwLock, Semaphore};
 
 #[derive(Debug)]
@@ -114,10 +114,7 @@ impl ChromePool {
         F: FnMut(Phase) -> Fut,
         Fut: Future<Output = ()>,
     {
-        let session = sniffer.new_session().await?;
-        let result = sniff_session_with_progress(&session, config, on_progress).await;
-        drop(session.close().await);
-        result
+        sniff_matrix_with_progress(sniffer, config, on_progress).await
     }
 
     /// Swap the current browser for a fresh one (best effort).

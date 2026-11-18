@@ -2,8 +2,52 @@
 
 Workflow validado contra páginas reais (portais de câmara e governo). O contraste
 é **medido** (fundo efetivo resolvido in-page), a perceptibilidade é **graduada**
-(`is_user_noticeable`) e as regras `sniff check` são **determinísticas** — a IA
-só interpreta evidências, não chuta.
+(`is_user_noticeable`), as regras `sniff check` são **determinísticas** e a
+**automação estrutural** cobre boa parte do que antes era checklist manual — a
+IA só interpreta evidências, não chuta.
+
+## Automação estrutural de acessibilidade
+
+O `sniff check` reporta, por default, **quebras** (`class:"bug"`) e
+**oportunidades** (`class:"opportunity"`) na mesma execução. A família de
+oportunidades automatiza parte do julgamento desta página, sempre a partir de
+facetas medidas — sem LLM e sem ler código-fonte:
+
+- **Metadata e estrutura** — `document-metadata-basics` (ausência de `lang`
+  em `__document` é `fail`, WCAG 3.1.1; `title` ausente é `warn`),
+  `site-nav-using-menu-roles`, `card-interactive-nested-in-link`, hierarquia
+  de headings.
+- **Formulários e autofill** — `form-semantics-basics` (associação
+  label/controle, `tabindex>0` e `aria-hidden` em focusável são `fail`),
+  `autofill-purpose-tokens` (`type=email` sem `autocomplete` é `fail`, WCAG
+  1.3.5), `credential-autocomplete-tokens`, `hint-above-input`.
+- **Semântica nativa** — `native-checkbox-reimplemented`,
+  `native-dialog-reimplemented`, `switch-semantics`,
+  `tabs-reimplemented-with-roving-tabindex`, `menu-composite-reimplemented`:
+  prefira o controle nativo em vez de reimplementar ARIA.
+- **Nomes e Web Components** — `shadow-internals-semantics` e
+  `elementinternals-ax-state` (controle sem nome dentro de shadow root aberto é
+  `fail`, WCAG 4.1.2), `copy-control-hidden-from-at`, `tour-popover-unnamed`.
+- **Preferências e alvos** — `os-text-scale-optin`,
+  `masked-icon-missing-forced-color-adjust`, `color-scheme-mismatch`,
+  `coarse-pointer-target-size` (WCAG 2.5.5, AAA),
+  `scrollbar-thumb-track-contrast` e `hidden-scrollbar-without-affordance`
+  (WCAG 1.4.11, `fail`), `hovercard-autofocus-on-hint` (WCAG 3.2.1, `fail`),
+  `swipe-gesture-no-button-alternative` (WCAG 2.5.1).
+
+Cada linha traz `guide` (id do guia no corpus, para abrir a recomendação com
+fallback/Baseline), `severity` e `evidence` com `text` e `source` (a facet que
+sustenta a afirmação). A condição `keepWhen` que evita falso positivo vive nos
+relatórios em [`modernization/findings/`](modernization/findings/) e **não** vai
+no JSON — consulte-a antes de usar `--ignore`. `--profile strict` eleva
+oportunidades `warn` a `fail` quando o objetivo é gate de CI. A semântica das
+flags de `check` está em [`diff-checks.md`](diff-checks.md#flags-de-sniff-check);
+as linhas com facet ausente silenciam, nunca viram `pass` por omissão.
+
+> O julgamento manual continua necessário: a ferramenta não infere intenção do
+> autor, não lê `alt` de `<img>` filho como nome do link e não mede contraste
+> sobre imagem de fundo. As oportunidades **reduzem** a checklist abaixo; não a
+> substituem.
 
 ## Facetas de acessibilidade
 
@@ -59,9 +103,15 @@ sniff capture "$URL" -s "form, #carouselExampleCaptions" --depth 3 > forms.jsonl
 ### 2. Regras determinísticas
 
 ```bash
-sniff check main.jsonl  --rules     # contrast-aa/contrast-aaa, target-size, focus-indicator, hidden-focusable, empty-alt-image, aria-hidden-focusable, + erros comuns de UI/UX
+sniff check main.jsonl              # quebras + oportunidades (default)
+sniff check main.jsonl  --rules     # só quebras: contrast-aa/aaa, target-size, focus-indicator, hidden-focusable, empty-alt-image, aria-hidden-focusable, + erros comuns de UI/UX
 sniff check body.jsonl  --uniform   # o "card estranho" entre irmãos
 ```
+
+Sem flags, a mesma chamada já traz as oportunidades da seção acima; `--rules`
+agora significa **somente quebras** (ver
+[`diff-checks.md`](diff-checks.md#flags-de-sniff-check)). `--uniform` segue
+disponível, mas a detecção de outlier também roda no default.
 
 `--rules` usa o facet `contrast` **medido pela engine** (fundo efetivo
 resolvido): `fail` é falha real de AA/AAA, `warn` é fundo-imagem (revisão
@@ -72,7 +122,7 @@ manual).
 ```bash
 # Falhas de contraste AA (só as reais)
 sniff check main.jsonl --rules \
-  | jq -r 'select(.check=="contrast-aa" and .status=="fail") | [.tag,.selector,.evidence]|@tsv'
+  | jq -r 'select(.check=="contrast-aa" and .status=="fail") | [.tag,.selector,.evidence.text]|@tsv'
 
 # Interativos sem nome acessível (1.1.1/2.4.4/4.1.2)
 jq -r '.. | objects | select(.tag=="A" or .tag=="BUTTON" or .tag=="IMG")

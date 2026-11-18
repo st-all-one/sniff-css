@@ -4,7 +4,8 @@ use anyhow::Context;
 use serde_json::json;
 use sniff_cdp::protocol::LaunchOptions;
 use sniff_core::snapshot::{ensure_gitignored, snapshot_file_name, snapshot_root};
-use sniff_engine::{Sniffer, write_output};
+use sniff_engine::extractor::SniffOutcome;
+use sniff_engine::{Sniffer, sniff_matrix_with_progress, write_output};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -191,11 +192,10 @@ async fn run_web(args: &CaptureArgs) -> Result<Captured, AppError> {
             .context("connecting to browser")
             .map_err(AppError::from)?;
         sniffer.set_ignore_certificate_errors(ignore_certificate_errors);
-        sniffer
-            .sniff(&config)
+        sniff_matrix_with_progress(&sniffer, &config, |_| async {})
             .await
-            .context("sniffing via existing browser")
-            .map_err(AppError::from)?
+            .map_err(AppError::from)
+            .context("sniffing via existing browser")?
     } else {
         let opts = LaunchOptions {
             executable: chrome_path,
@@ -207,11 +207,10 @@ async fn run_web(args: &CaptureArgs) -> Result<Captured, AppError> {
             .await
             .context("launching browser")
             .map_err(AppError::from)?;
-        sniffer
-            .sniff(&config)
+        sniff_matrix_with_progress(&sniffer, &config, |_| async {})
             .await
-            .context("sniffing page")
-            .map_err(AppError::from)?
+            .map_err(AppError::from)
+            .context("sniffing page")?
     };
 
     emit(
@@ -404,12 +403,11 @@ async fn run_flutter(args: &CaptureArgs) -> Result<Captured, AppError> {
     }
 
     let url = format!("flutter://{device}");
-    let outcome = sniff_engine::extractor::SniffOutcome {
+    let outcome = SniffOutcome {
         snapshots: roots,
         global_css_variables: None,
-        ax_tree: None,
-        actions: None,
         screenshot,
+        ..Default::default()
     };
     emit(
         &config,
@@ -430,7 +428,7 @@ async fn run_flutter(args: &CaptureArgs) -> Result<Captured, AppError> {
 )]
 fn emit(
     config: &sniff_core::SniffConfig,
-    outcome: &sniff_engine::extractor::SniffOutcome,
+    outcome: &SniffOutcome,
     persist: Option<&str>,
     screenshot_path: Option<&str>,
     url: &str,
@@ -537,13 +535,12 @@ mod tests {
         }
     }
 
-    fn outcome_with(screenshot: Option<Vec<u8>>) -> sniff_engine::extractor::SniffOutcome {
-        sniff_engine::extractor::SniffOutcome {
+    fn outcome_with(screenshot: Option<Vec<u8>>) -> SniffOutcome {
+        SniffOutcome {
             snapshots: Vec::new(),
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
             screenshot,
+            ..Default::default()
         }
     }
 

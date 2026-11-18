@@ -13,6 +13,7 @@ sniff-cdp = { path = "../sniff-cdp" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

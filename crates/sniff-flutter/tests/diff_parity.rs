@@ -21,9 +21,7 @@ fn jsonl_of(roots: Vec<sniff_flutter::ElementSnapshot>) -> String {
     let outcome = sniff_engine::extractor::SniffOutcome {
         snapshots: roots,
         global_css_variables: None,
-        ax_tree: None,
-        actions: None,
-        screenshot: None,
+        ..Default::default()
     };
     let config = OutputConfig {
         format: OutputFormat::JsonLines,

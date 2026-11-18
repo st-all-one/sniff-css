@@ -1,7 +1,9 @@
 # Plano de modernização do `sniff` — detecção de oportunidades na página
 
-> **Status:** plano proposto (não implementado). Documento de decisão, não de
-> referência de flags — a referência continua em [`usage.md`](../usage.md) e
+> **Status:** implementado na v0.6 — todas as famílias de checks e as fatias v2
+> (`__document`/`__env`/`__declared`, attrs, matriz 12 estados, pseudo e
+> `__actions`) estão ativas por padrão. Este é o documento de decisão; a
+> referência de flags continua em [`usage.md`](../usage.md) e
 > [`cli-surface.md`](../cli-surface.md).
 >
 > **Base de conhecimento:** os 210 guias do
@@ -79,4 +81,4 @@ plataforma na página renderizada**.
 | Cobertura automatizada de WCAG estrutural (h1/headings/landmarks) | manual | automatizada |
 | Regressão de performance no caminho quente | — | < 5% (gate de `criterion`) |
 | Falsos positivos em corpus de validação | — | 0 em casos `keepWhen` documentados |
-| Contexto disponível sem flags extras | parcial | `__document` + `__env` + `attrs` no default |
+| Contexto disponível sem flags extras | parcial | completo: `__document` + `__env` + `__declared` + attrs + matriz 12 estados |

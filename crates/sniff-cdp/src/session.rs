@@ -9,6 +9,15 @@ use std::time::Duration;
 /// Convenience alias for session-level errors.
 pub type CdpSessionError = CdpError;
 
+/// Build the params object for `Emulation.setEmulatedMedia` from `(name, value)` pairs.
+fn emulated_media_params(features: &[(String, String)]) -> Value {
+    let entries: Vec<Value> = features
+        .iter()
+        .map(|(name, value)| json!({"name": name, "value": value}))
+        .collect();
+    json!({"features": entries})
+}
+
 /// A bound session to a Chrome target (page).
 ///
 /// Wraps a shared [`CdpClient`] with the `session_id` that Chrome
@@ -116,17 +125,59 @@ impl CdpSession {
     /// Override the emulated viewport size (affects `%`, `vh`, `rem`
     /// derivations and media queries).
     pub async fn set_viewport(&self, width: u32, height: u32) -> Result<()> {
+        self.set_viewport_with_mobile(width, height, false).await
+    }
+
+    /// Override the emulated viewport, optionally in mobile/touch mode so
+    /// `pointer: coarse` media queries and touch handlers observe it.
+    pub async fn set_viewport_with_mobile(
+        &self,
+        width: u32,
+        height: u32,
+        mobile: bool,
+    ) -> Result<()> {
         self.call(
             "Emulation.setDeviceMetricsOverride",
             json!({
                 "width": width,
                 "height": height,
                 "deviceScaleFactor": 1.0,
-                "mobile": false,
+                "mobile": mobile,
             }),
         )
         .await?;
+        if mobile {
+            self.call(
+                "Emulation.setTouchEmulationEnabled",
+                json!({"enabled": true, "maxTouchPoints": 5}),
+            )
+            .await?;
+        }
         Ok(())
+    }
+
+    /// Apply emulated media features via `Emulation.setEmulatedMedia`.
+    ///
+    /// Each pair is a CDP media feature name/value (e.g.
+    /// `("prefers-reduced-motion", "reduce")`). Passing an empty slice
+    /// clears all emulated features, restoring the browser defaults.
+    pub async fn set_emulated_media(&self, features: &[(String, String)]) -> Result<()> {
+        tracing::debug!(session_id = %self.session_id, count = features.len(), "set emulated media");
+        self.call(
+            "Emulation.setEmulatedMedia",
+            emulated_media_params(features),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Stabilization wrapper: emulate `prefers-reduced-motion: reduce`.
+    ///
+    /// Kept as a dedicated wrapper so the stabilization path never has to
+    /// build the feature vector itself; delegates to [`Self::set_emulated_media`].
+    pub async fn emulate_reduced_motion(&self) -> Result<()> {
+        self.set_emulated_media(&[("prefers-reduced-motion".to_string(), "reduce".to_string())])
+            .await
     }
 
     /// Capture the current page as a PNG (`Page.captureScreenshot`).
@@ -281,6 +332,59 @@ impl CdpSession {
         Ok(())
     }
 
+    /// Dispatch a trusted keyboard event (`Input.dispatchKeyEvent`) to the
+    /// focused element. Used by `key:` actions (e.g. Escape on a dialog).
+    pub async fn input_key(&self, name: &str) -> Result<()> {
+        let (key, code, vk, text): (String, String, u64, Option<String>) = match name {
+            "Escape" | "Esc" => ("Escape".into(), "Escape".into(), 27, None),
+            "Enter" => ("Enter".into(), "Enter".into(), 13, Some("\r".into())),
+            "Tab" => ("Tab".into(), "Tab".into(), 9, None),
+            "Space" | " " => (" ".into(), "Space".into(), 32, Some(" ".into())),
+            "Backspace" => ("Backspace".into(), "Backspace".into(), 8, None),
+            other if other.chars().count() == 1 => {
+                let ch = other.chars().next().unwrap_or(' ');
+                let (code, vk) = if ch.is_ascii_alphabetic() {
+                    let upper = u64::from(u32::from(ch.to_ascii_uppercase()));
+                    (format!("Key{}", ch.to_ascii_uppercase()), upper)
+                } else if ch.is_ascii_digit() {
+                    let digit = u64::from(u32::from(ch))
+                        .saturating_sub(u64::from(u32::from('0')))
+                        .saturating_add(48);
+                    (format!("Digit{ch}"), digit)
+                } else {
+                    (other.to_string(), 0)
+                };
+                (other.to_string(), code, vk, Some(other.to_string()))
+            }
+            other => (other.to_string(), other.to_string(), 0, None),
+        };
+        for kind in ["keyDown", "keyUp"] {
+            let base = serde_json::json!({
+                "type": kind,
+                "key": key,
+                "code": code,
+                "windowsVirtualKeyCode": vk,
+                "nativeVirtualKeyCode": vk,
+            });
+            let params = if kind == "keyDown"
+                && let Some(text) = &text
+            {
+                serde_json::json!({
+                    "type": kind,
+                    "key": key,
+                    "code": code,
+                    "windowsVirtualKeyCode": vk,
+                    "nativeVirtualKeyCode": vk,
+                    "text": text,
+                })
+            } else {
+                base
+            };
+            self.call("Input.dispatchKeyEvent", params).await?;
+        }
+        Ok(())
+    }
+
     /// Insert text into the currently focused editable element
     /// (`Input.insertText`).
     pub async fn input_insert_text(&self, text: &str) -> Result<()> {
@@ -388,5 +492,31 @@ impl CdpSession {
     pub async fn close(&self) -> Result<()> {
         self.call_no_params("Page.close").await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emulated_media_params;
+    use serde_json::json;
+
+    #[test]
+    fn emulated_media_params_preserves_input_order() {
+        let features = vec![
+            ("prefers-reduced-motion".to_string(), "reduce".to_string()),
+            ("prefers-color-scheme".to_string(), "dark".to_string()),
+        ];
+        assert_eq!(
+            emulated_media_params(&features),
+            json!({"features": [
+                {"name": "prefers-reduced-motion", "value": "reduce"},
+                {"name": "prefers-color-scheme", "value": "dark"},
+            ]})
+        );
+    }
+
+    #[test]
+    fn emulated_media_params_empty_clears_features() {
+        assert_eq!(emulated_media_params(&[]), json!({"features": []}));
     }
 }

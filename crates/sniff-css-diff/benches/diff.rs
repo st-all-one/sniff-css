@@ -30,6 +30,7 @@ fn node(id: u64, color: &str) -> DiffNode {
         contrast: None,
         ax: None,
         attributes: None,
+        effective_background: None,
         children: Vec::new(),
     }
 }

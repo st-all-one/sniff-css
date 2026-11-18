@@ -537,7 +537,14 @@ pub fn write_output<W: Write>(
 
     match config.format {
         OutputFormat::JsonLines => {
-            emit_meta_line(writer, global.as_ref(), &defaults, config.viewport.as_ref())?;
+            emit_meta_line(
+                writer,
+                outcome,
+                global.as_ref(),
+                &defaults,
+                config.viewport.as_ref(),
+            )?;
+            emit_v2_facet_lines(writer, outcome)?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             for snap in &outcome.snapshots {
@@ -551,7 +558,14 @@ pub fn write_output<W: Write>(
             }
         }
         OutputFormat::JsonLinesFlat => {
-            emit_meta_line(writer, global.as_ref(), &defaults, config.viewport.as_ref())?;
+            emit_meta_line(
+                writer,
+                outcome,
+                global.as_ref(),
+                &defaults,
+                config.viewport.as_ref(),
+            )?;
+            emit_v2_facet_lines(writer, outcome)?;
             emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             emit_actions_line(writer, outcome.actions.as_ref())?;
             let mut nodes = Vec::new();
@@ -569,20 +583,15 @@ pub fn write_output<W: Write>(
             }
         }
         OutputFormat::Json => {
-            let compact_meta = config.compact && global.as_ref().is_some_and(|g| !g.is_empty());
             let array: Vec<Value> = outcome
                 .snapshots
                 .iter()
                 .map(|s| snapshot_to_json(s, config, global.as_ref(), Some(&defaults)))
                 .collect();
-            let document = if compact_meta
-                || !defaults.is_empty()
-                || outcome.ax_tree.is_some()
-                || outcome.actions.is_some()
-                || config.viewport.is_some()
-            {
+            let document = {
                 let mut root = Map::new();
                 let mut meta = Map::new();
+                meta.insert("schema".into(), Value::from(2));
                 if let Some(vars) = global.as_ref()
                     && !vars.is_empty()
                 {
@@ -597,8 +606,33 @@ pub fn write_output<W: Write>(
                         serde_json::json!({"width": vp.width, "height": vp.height}),
                     );
                 }
-                if !meta.is_empty() {
-                    root.insert("__meta".into(), Value::Object(meta));
+                if !outcome.matrix.is_empty() {
+                    meta.insert(
+                        "matrix".into(),
+                        serde_json::to_value(&outcome.matrix).map_err(SniffError::from)?,
+                    );
+                }
+                if outcome.shadow_roots > 0 {
+                    meta.insert("shadow_roots".into(), Value::from(outcome.shadow_roots));
+                }
+                root.insert("__meta".into(), Value::Object(meta));
+                if let Some(value) = &outcome.document_facet {
+                    root.insert(
+                        "__document".into(),
+                        serde_json::to_value(value).map_err(SniffError::from)?,
+                    );
+                }
+                if let Some(value) = &outcome.env_facet {
+                    root.insert(
+                        "__env".into(),
+                        serde_json::to_value(value).map_err(SniffError::from)?,
+                    );
+                }
+                if let Some(value) = &outcome.declared_facet {
+                    root.insert(
+                        "__declared".into(),
+                        serde_json::to_value(value).map_err(SniffError::from)?,
+                    );
                 }
                 if let Some(ax_tree) = &outcome.ax_tree {
                     root.insert("__ax_tree".into(), ax_tree.clone());
@@ -608,8 +642,6 @@ pub fn write_output<W: Write>(
                 }
                 root.insert("elements".into(), Value::Array(array));
                 Value::Object(root)
-            } else {
-                Value::Array(array)
             };
             if config.pretty {
                 serde_json::to_writer_pretty(&mut *writer, &document).map_err(SniffError::from)?;
@@ -896,11 +928,15 @@ fn vars_to_json(vars: &GlobalVars) -> Value {
 /// nodes can omit them.
 fn emit_meta_line<W: Write>(
     writer: &mut W,
+    outcome: &SniffOutcome,
     global: Option<&GlobalVars>,
     defaults: &Map<String, Value>,
     viewport: Option<&sniff_core::config::Viewport>,
 ) -> SniffResult<()> {
     let mut meta = Map::new();
+    // Every 0.6 capture is a schema-2 snapshot; v1 promotion in `sniff diff`
+    // relies on this marker to keep matrix/facet data intact.
+    meta.insert("schema".into(), Value::from(2));
     if let Some(vars) = global
         && !vars.is_empty()
     {
@@ -915,8 +951,14 @@ fn emit_meta_line<W: Write>(
             serde_json::json!({"width": vp.width, "height": vp.height}),
         );
     }
-    if meta.is_empty() {
-        return Ok(());
+    if !outcome.matrix.is_empty() {
+        meta.insert(
+            "matrix".into(),
+            serde_json::to_value(&outcome.matrix).map_err(SniffError::from)?,
+        );
+    }
+    if outcome.shadow_roots > 0 {
+        meta.insert("shadow_roots".into(), Value::from(outcome.shadow_roots));
     }
     let line = serde_json::to_string(&Value::Object({
         let mut m = Map::new();
@@ -925,6 +967,29 @@ fn emit_meta_line<W: Write>(
     }))
     .map_err(SniffError::from)?;
     writeln!(writer, "{line}").map_err(io_err)?;
+    Ok(())
+}
+
+/// Emit the global v2 facets as one JSONL line each, in stable order.
+fn emit_v2_facet_lines<W: Write>(writer: &mut W, outcome: &SniffOutcome) -> SniffResult<()> {
+    let facets = [
+        ("__document", serde_json::to_value(&outcome.document_facet)),
+        ("__env", serde_json::to_value(&outcome.env_facet)),
+        ("__declared", serde_json::to_value(&outcome.declared_facet)),
+    ];
+    for (key, value) in facets {
+        let Ok(value) = value else { continue };
+        if value.is_null() {
+            continue;
+        }
+        let line = serde_json::to_string(&Value::Object({
+            let mut m = Map::new();
+            m.insert(key.to_string(), value);
+            m
+        }))
+        .map_err(SniffError::from)?;
+        writeln!(writer, "{line}").map_err(io_err)?;
+    }
     Ok(())
 }
 
@@ -1099,9 +1164,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: snaps,
             global_css_variables: global,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
 
         let cfg = OutputConfig {
@@ -1127,9 +1190,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             viewport: Some(sniff_core::config::Viewport {
@@ -1151,9 +1212,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             compact: true,
@@ -1178,9 +1237,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: global,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             compact: true,
@@ -1229,9 +1286,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![snap],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             format: OutputFormat::JsonLinesFlat,
@@ -1240,10 +1295,14 @@ mod tests {
         let mut buf = Vec::new();
         write_output(&mut buf, &outcome, &cfg).unwrap();
         let text = String::from_utf8(buf).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2);
-        let root: Value = serde_json::from_str(lines[0]).unwrap();
-        let child_v: Value = serde_json::from_str(lines[1]).unwrap();
+        let values: Vec<Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let nodes: Vec<&Value> = values.iter().filter(|v| v.get("id").is_some()).collect();
+        assert_eq!(nodes.len(), 2);
+        let root = nodes[0];
+        let child_v = nodes[1];
         assert_eq!(root["id"], 1);
         assert!(root.get("children").is_none());
         assert_eq!(child_v["parent_id"], 1);
@@ -1291,9 +1350,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![snap],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             format: OutputFormat::Summary,
@@ -1398,9 +1455,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![root],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             compact: true,
@@ -1438,9 +1493,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             compact: true,
@@ -1461,9 +1514,7 @@ mod tests {
         let outcome = SniffOutcome {
             snapshots: vec![sample_snapshot()],
             global_css_variables: Some(vec![("--x".to_string(), "1".to_string())]),
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -1610,16 +1661,19 @@ mod tests {
             ax_tree: Some(serde_json::json!([
                 {"role": "group", "children": [{"role": "button"}]}
             ])),
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig::default();
         let mut buf = Vec::new();
         write_output(&mut buf, &outcome, &cfg).unwrap();
         let text = String::from_utf8(buf).unwrap();
-        let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-        assert_eq!(first["__ax_tree"][0]["role"], "group");
-        assert_eq!(first["__ax_tree"][0]["children"][0]["role"], "button");
+        let ax_line: Value = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .find(|value: &Value| value.get("__ax_tree").is_some())
+            .expect("__ax_tree line");
+        assert_eq!(ax_line["__ax_tree"][0]["role"], "group");
+        assert_eq!(ax_line["__ax_tree"][0]["children"][0]["role"], "button");
     }
 
     #[test]
@@ -1628,8 +1682,7 @@ mod tests {
             snapshots: vec![sample_snapshot()],
             global_css_variables: None,
             ax_tree: Some(serde_json::json!([{"role": "main"}])),
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,
@@ -1660,7 +1713,7 @@ mod tests {
                     "changed": []
                 }
             ])),
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig::default();
         let mut buf = Vec::new();
@@ -1685,7 +1738,7 @@ mod tests {
             global_css_variables: None,
             ax_tree: None,
             actions: Some(serde_json::json!([{"index": 0, "effect": "revealed"}])),
-            screenshot: None,
+            ..Default::default()
         };
         let cfg = OutputConfig {
             format: OutputFormat::Json,

@@ -26,7 +26,7 @@
 | `sniff init` | — | grava/atualiza o bloco do `AGENTS.md` do projeto |
 | `sniff capture` | flags de captura (web CDP / Flutter VM Service) | fonte da verdade dos estilos |
 | `sniff diff` | `sniffCSS-diff` | diff determinístico entre dois JSONL |
-| `sniff check` | `sniffCSS-check` | contraste/alvo/foco/alt + uniformidade |
+| `sniff check` | `sniffCSS-check` | contraste/alvo/foco/alt + uniformidade + oportunidades de plataforma |
 | `sniff snapshots` | tool MCP `sniff_snapshots` | lista snapshots persistidos |
 | `sniff prime` | — | protocolo de uso estático (`--long`) |
 | `sniff self` | — | `setup` / `completions` / `upgrade` / `version` |
@@ -46,6 +46,33 @@ sniff [--json] [--log-level error|warn|info|debug|trace|off] [--quiet] <VERBO>
 - `--json`: envelope de máquina `{success, command, data?, error{code,message,retryable}, warnings?}`.
   Em `capture`, força a saída `--output json` (array único).
 - `--log-level` / `--quiet`: filtro de log em stderr (fechado; default `warn`).
+
+
+### Envelope `--json` — dados adicionais
+
+O envelope externo não muda: `{success, command, data?, error{code,message,retryable}, warnings?}`.
+O conteúdo de `data` é aditivo:
+
+- `data.checks` — linhas de `sniff check`, cada uma com `class` (`"bug"` ou
+  `"opportunity"`), `evidence` estruturado (`text`, `metric?`, `observed?`,
+  `threshold?`, `comparator?`, `source`) e `guide`/`severity` quando aplicável.
+- `__check_summary` em `data` (e no stdout) traz `modern: N`, `class`
+  (`bug`/`opportunity`), `modern_profile` e `opportunities_by_class`
+  (`{"opportunity": N}`; a classificação D/F/N/E do corpus está em
+  `docs/modernization/05-inventario-guias.md`).
+- `warnings[]` — capturas com matriz (`N>1` estados) avisam que o snapshot
+  contém blocos `__meta.matrix`; o campo é o mesmo canal de avisos do envelope.
+- `__document` / `__env` / `__declared` / `__meta.matrix` e `__meta.schema=2`
+  aparecem como linhas/payload no payload de `capture` e são aceitos por
+  `diff`/`check` (schema 1 é promovido em memória). A semântica das facetas e
+  das flags de captura está em [`usage.md`](usage.md#contexto-global-no-default-document-env-attrs);
+  a das flags de `check` em [`diff-checks.md`](diff-checks.md).
+- `sniff-mcp` não ganha tool nova: os mesmos parâmetros viram campos opcionais
+  nas tools existentes de capture/check e a resposta é aditiva.
+
+`sniff prime` continua byte-idêntico por versão; a regeneração do protocolo
+explica `class`, `evidence.text`/`metrics`, as facetas globais, o preset de
+`attrs`, os perfis de `check` e o `guide` das oportunidades.
 
 ## 4. Códigos de saída
 
@@ -138,15 +165,21 @@ sniff capture [OPTIONS] <URL> [--output MODO] [--persist [PATH]]
 
 Captura estilos computados de uma página (web) ou a árvore de widgets de um app
 Flutter. O default é otimizado para IA (`compact`, `custom-props`, `stabilize`,
-`contrast`, `ax` ligados). O selector vem de `-s/--selector`; `flutter://<device>`
-ativa o backend Flutter (selector default `root`).
+`contrast`, `ax` ligados) e inclui **todas as fatias v2**: `__document`,
+`__env`, `__declared`, attrs do preset `modern`, `::before`/`::after` e matriz
+de 12 estados (3 viewports × light/dark/reduce/coarse). `--emulate K=V`
+reduz a um perfil; `--minimal` desliga as fatias v2. O selector vem de
+`-s/--selector`; `flutter://<device>` ativa o backend Flutter (selector default
+`root`).
 
 Web (CDP): `-s/--selector`, `--depth`, `-c/--categories`, `--props`,
-`--pseudo`, `--wait`, `--action`/`--click`/`--hover`/`--type`/`--upload`,
-`--header`, `--storage-state`/`--save-storage-state`, `--connect`/`--chrome`,
-`--viewport`, `--ignore-certificate-errors`, `--output`, `--screenshot`,
-`--fullpage-screenshot`, `--persist`, `--attrs`, `--stable-key`, `--full` e os
-`--no-*`.
+`--pseudo`, `--wait`, `--action`/`--click`/`--hover`/`--type`/`--upload`
+(`key:<name>` dispara tecla real), `--header`, `--storage-state`/
+`--save-storage-state`, `--connect`/`--chrome`, `--viewport`,
+`--viewport-matrix`, `--emulate`, `--ignore-certificate-errors`, `--output`,
+`--screenshot`, `--fullpage-screenshot`, `--persist`, `--attrs`,
+`--attrs-preset`, `--no-document`, `--no-env`, `--declared`
+(com `--declared-limit`), `--minimal`, `--stable-key`, `--full` e os `--no-*`.
 
 Flutter: `--backend flutter|auto`, `--device`, `--avd`, `--project`, `--target`,
 `--attach`.
@@ -157,13 +190,15 @@ Referência completa das flags: [`usage.md`](usage.md).
 
 ```
 sniff diff <BASE> <HEAD> [--tolerance 0.5] [--ignore-props a,b] [--no-structural] [--stats-only] [--no-actions] [--params|--batch]
-sniff check <SNAP> [--rules] [--uniform] [--tolerance 0.5] [--params|--batch]
+sniff check <SNAP> [--rules] [--uniform] [--modern | --no-modern] [--guide ID] [--ignore CHECK] [--profile default|strict] [--responsive | --no-responsive] [--tolerance 0.5] [--params|--batch]
 sniff snapshots [--root DIR]      # default: SNIFF_SNAPSHOT_DIR ou ./sniff
 ```
 
 `diff`/`check` são **offline e determinísticos** (nunca abrem browser) e aceitam
-o snapshot por stdin. `--json` devolve o resumo estruturado; o texto segue no
-stdout e o resumo em stderr.
+o snapshot por stdin. `--json` devolve o resumo estruturado (com `class` e
+`evidence` tipado); o texto segue no stdout e o resumo em stderr. O significado
+de cada flag de `check` — inclusive a mudança de sentido de `--rules` — está em
+[`diff-checks.md`](diff-checks.md).
 
 ## 9. `sniff init`
 

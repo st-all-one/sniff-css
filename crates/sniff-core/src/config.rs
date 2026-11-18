@@ -95,6 +95,34 @@ pub struct SniffConfig {
     /// `storage_state_path`. Survives browser restarts and the MCP pool
     /// relaunch.
     pub save_storage_state: Option<String>,
+    // ---- Contrato v2 (minor 0.6) -------------------------------------
+    /// Emitir `__document` (uma linha global). Ligado por default no v0.6.
+    #[serde(default = "default_true")]
+    pub document_facet: bool,
+    /// Emitir `__env` (uma linha global). Ligado por default no v0.6.
+    #[serde(default = "default_true")]
+    pub env_facet: bool,
+    /// Conjunto curado de atributos capturados por nó. `Modern` por default.
+    #[serde(default = "default_attr_preset")]
+    pub attr_preset: AttrPreset,
+    /// Coletar origem das declarações via CSSOM (ligado por default).
+    #[serde(default = "default_true")]
+    pub declared_facet: bool,
+    /// Limite de regras CSSOM coletadas.
+    #[serde(default = "default_declared_limit")]
+    pub declared_limit: usize,
+    /// Emulações pedidas (`prefers-color-scheme=dark`, etc.), em ordem chave.
+    #[serde(default)]
+    pub emulate: std::collections::BTreeMap<String, String>,
+    /// Viewports adicionais da matriz; ligados por default.
+    #[serde(default = "default_matrix_viewports")]
+    pub matrix_viewports: Vec<Viewport>,
+    /// Perfis de emulação da matriz. Cada perfil é combinado com cada viewport.
+    #[serde(default = "default_matrix_emulations")]
+    pub matrix_emulations: Vec<std::collections::BTreeMap<String, String>>,
+    /// Perfil enxuto: desliga `__document`/`__env`/preset de atributos.
+    #[serde(default)]
+    pub minimal: bool,
 }
 
 impl Default for SniffConfig {
@@ -105,7 +133,7 @@ impl Default for SniffConfig {
             depth: 0,
             categories: vec![StyleCategory::All],
             custom_properties: Vec::new(),
-            pseudo_elements: Vec::new(),
+            pseudo_elements: vec!["::before".to_string(), "::after".to_string()],
             wait: WaitStrategy::default_pipeline(""),
             filter: ElementFilter::default(),
             output: OutputConfig::default(),
@@ -130,7 +158,215 @@ impl Default for SniffConfig {
             headers: Vec::new(),
             storage_state_path: None,
             save_storage_state: None,
+            // Contrato v2: contexto rico ligado por default.
+            document_facet: true,
+            env_facet: true,
+            attr_preset: AttrPreset::Modern,
+            declared_facet: true,
+            declared_limit: 200,
+            emulate: std::collections::BTreeMap::new(),
+            matrix_viewports: default_matrix_viewports(),
+            matrix_emulations: default_matrix_emulations(),
+            minimal: false,
         }
+    }
+}
+
+fn default_matrix_viewports() -> Vec<Viewport> {
+    vec![
+        Viewport {
+            width: 360,
+            height: 800,
+        },
+        Viewport {
+            width: 768,
+            height: 1024,
+        },
+    ]
+}
+
+fn default_matrix_emulations() -> Vec<std::collections::BTreeMap<String, String>> {
+    use std::collections::BTreeMap;
+
+    let base = |scheme: &str, motion: &str| {
+        BTreeMap::from([
+            ("prefers-color-scheme".to_string(), scheme.to_string()),
+            ("prefers-reduced-motion".to_string(), motion.to_string()),
+        ])
+    };
+    let mut coarse = base("light", "no-preference");
+    coarse.insert("pointer".to_string(), "coarse".to_string());
+    vec![
+        base("light", "no-preference"),
+        base("dark", "no-preference"),
+        base("light", "reduce"),
+        coarse,
+    ]
+}
+
+/// Conjunto curado de atributos DOM capturados por nó no contrato v2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttrPreset {
+    /// Nenhum atributo de default (comportamento pré-v0.6).
+    None,
+    /// Atributos de formulário.
+    Forms,
+    /// Atributos de mídia e priorização.
+    Media,
+    /// Atributos de plataforma (popover, inert, …).
+    Platform,
+    /// União curada dos três presets — default no v0.6.
+    Modern,
+    /// Todos os atributos (`getAttributeNames`); diagnóstico, nunca default.
+    All,
+}
+
+impl AttrPreset {
+    /// Todos os valores aceitos pela CLI, em ordem estável.
+    pub const ALL_VALUES: &'static [&'static str] =
+        &["none", "forms", "media", "platform", "modern", "all"];
+
+    /// Nomes dos atributos do preset, em ordem alfabética e sem duplicatas.
+    pub fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::None | Self::All => &[],
+            Self::Forms => &[
+                "autocomplete",
+                "disabled",
+                "for",
+                "form",
+                "id",
+                "inputmode",
+                "max",
+                "min",
+                "name",
+                "pattern",
+                "placeholder",
+                "required",
+                "type",
+                "value",
+            ],
+            Self::Media => &[
+                "alt",
+                "fetchpriority",
+                "height",
+                "loading",
+                "poster",
+                "sizes",
+                "src",
+                "srcset",
+                "width",
+            ],
+            Self::Platform => &[
+                "href",
+                "inert",
+                "open",
+                "popover",
+                "popovertarget",
+                "role",
+                "tabindex",
+                "target",
+            ],
+            Self::Modern => MODERN_ATTRS,
+        }
+    }
+
+    /// Interpreta o nome usado na CLI (`--attrs-preset`).
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "none" | "off" => Some(Self::None),
+            "forms" => Some(Self::Forms),
+            "media" => Some(Self::Media),
+            "platform" => Some(Self::Platform),
+            "modern" => Some(Self::Modern),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// União curada dos presets `forms`/`media`/`platform` (≈20 nomes).
+const MODERN_ATTRS: &[&str] = &[
+    "alt",
+    "autocomplete",
+    "disabled",
+    "fetchpriority",
+    "for",
+    "form",
+    "height",
+    "href",
+    "id",
+    "inert",
+    "inputmode",
+    "loading",
+    "name",
+    "open",
+    "pattern",
+    "placeholder",
+    "popover",
+    "popovertarget",
+    "poster",
+    "required",
+    "role",
+    "sizes",
+    "src",
+    "srcset",
+    "tabindex",
+    "target",
+    "type",
+    "value",
+    "width",
+];
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_attr_preset() -> AttrPreset {
+    AttrPreset::Modern
+}
+
+const fn default_declared_limit() -> usize {
+    200
+}
+
+impl SniffConfig {
+    /// `__document` deve ser capturado nesta execução?
+    pub fn document_enabled(&self) -> bool {
+        !self.minimal && self.document_facet
+    }
+
+    /// `__env` deve ser capturado nesta execução?
+    pub fn env_enabled(&self) -> bool {
+        !self.minimal && self.env_facet
+    }
+
+    /// Atributos efetivos: preset curado + nomes explícitos, deduplicados.
+    /// `--minimal` desliga o preset mas preserva os nomes explícitos.
+    pub fn effective_attributes(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if !self.minimal {
+            for name in self.attr_preset.names() {
+                out.push((*name).to_string());
+            }
+        }
+        for name in &self.attributes {
+            if !out.iter().any(|n| n == name) {
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+
+    /// `--attrs-preset all` lê `getAttributeNames()` no page (diagnóstico).
+    pub fn all_attributes(&self) -> bool {
+        !self.minimal && self.attr_preset == AttrPreset::All
+    }
+
+    /// Número de estados da matriz (sempre ≥ 1).
+    pub fn matrix_total(&self) -> usize {
+        self.matrix_viewports.len().saturating_add(1)
     }
 }
 
@@ -302,6 +538,17 @@ pub enum Action {
         /// Extra settle time after the action, in milliseconds.
         settle_ms: u64,
     },
+
+    /// Dispatch a real keyboard event (`Input.dispatchKeyEvent`) without a
+    /// selector, e.g. `key:Escape` to request native dialog dismissal.
+    Key {
+        /// Key name in CDP notation (`Escape`, `Enter`, `Tab`, `Space`).
+        key: String,
+        /// Maximum wait for the page to settle, in milliseconds.
+        timeout_ms: u64,
+        /// Extra settle time after the key event, in milliseconds.
+        settle_ms: u64,
+    },
 }
 
 impl Action {
@@ -311,23 +558,25 @@ impl Action {
     /// and any resulting layout settle before the next step.
     pub const DEFAULT_SETTLE_MS: u64 = 150;
 
-    /// The kind of this action (`click`, `hover`, `type` or `upload`).
+    /// The kind of this action (`click`, `hover`, `type`, `upload` or `key`).
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Click { .. } => "click",
             Self::Hover { .. } => "hover",
             Self::Type { .. } => "type",
             Self::Upload { .. } => "upload",
+            Self::Key { .. } => "key",
         }
     }
 
-    /// The target selector of this action.
+    /// The target selector of this action (empty for key events).
     pub fn selector(&self) -> &str {
         match self {
             Self::Click { selector, .. }
             | Self::Hover { selector, .. }
             | Self::Type { selector, .. }
             | Self::Upload { selector, .. } => selector,
+            Self::Key { .. } => "",
         }
     }
 
@@ -337,7 +586,8 @@ impl Action {
             Self::Click { timeout_ms, .. }
             | Self::Hover { timeout_ms, .. }
             | Self::Type { timeout_ms, .. }
-            | Self::Upload { timeout_ms, .. } => *timeout_ms,
+            | Self::Upload { timeout_ms, .. }
+            | Self::Key { timeout_ms, .. } => *timeout_ms,
         }
     }
 
@@ -347,7 +597,8 @@ impl Action {
             Self::Click { settle_ms, .. }
             | Self::Hover { settle_ms, .. }
             | Self::Type { settle_ms, .. }
-            | Self::Upload { settle_ms, .. } => *settle_ms,
+            | Self::Upload { settle_ms, .. }
+            | Self::Key { settle_ms, .. } => *settle_ms,
         }
     }
 }
@@ -609,7 +860,8 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
         SniffError::InvalidAction(format!(
             "{e} — action format: click:<selector>[:<timeout_ms>[:<settle_ms>]] | \
              hover:<selector>[:<timeout_ms>[:<settle_ms>]] | \
-             type:<selector>:<text> | upload:<selector>:<file1,file2>"
+             type:<selector>:<text> | upload:<selector>:<file1,file2> | \
+             key:<name>[:<timeout_ms>[:<settle_ms>]]"
         ))
     };
 
@@ -707,6 +959,31 @@ pub fn parse_action(spec: &str) -> Result<Action, SniffError> {
                     settle_ms: Action::DEFAULT_SETTLE_MS,
                 })
             }
+        }
+        "key" => {
+            let tokens: Vec<&str> = body.split(':').collect();
+            let key = tokens.first().copied().unwrap_or("").trim().to_string();
+            if key.is_empty() {
+                return Err(err("missing key name".into()));
+            }
+            let parse_ms = |index: usize, label: &str| -> Result<u64, SniffError> {
+                match tokens.get(index).copied() {
+                    Some(value) if !value.trim().is_empty() => value
+                        .trim()
+                        .parse::<u64>()
+                        .map_err(|_| err(format!("invalid {label} for key action"))),
+                    _ => Ok(if label == "timeout_ms" {
+                        Action::DEFAULT_TIMEOUT_MS
+                    } else {
+                        Action::DEFAULT_SETTLE_MS
+                    }),
+                }
+            };
+            Ok(Action::Key {
+                key,
+                timeout_ms: parse_ms(1, "timeout_ms")?,
+                settle_ms: parse_ms(2, "settle_ms")?,
+            })
         }
         other => Err(err(format!("unknown action `{other}`"))),
     }
@@ -894,6 +1171,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parse_action_key_escape() {
+        assert_eq!(
+            parse_action("key:Escape:5000:200").unwrap(),
+            Action::Key {
+                key: "Escape".into(),
+                timeout_ms: 5000,
+                settle_ms: 200,
+            }
+        );
+        assert_eq!(parse_action("key:Escape").unwrap().kind(), "key");
+    }
+
+    #[test]
+    fn default_config_enables_every_capture_facet() {
+        let config = SniffConfig::default();
+        assert!(config.declared_facet);
+        assert!(!config.pseudo_elements.is_empty());
+        assert_eq!(config.matrix_viewports.len(), 2);
+        assert_eq!(config.matrix_emulations.len(), 4);
+        assert!(
+            config
+                .matrix_emulations
+                .iter()
+                .any(|profile| profile.get("pointer").is_some_and(|v| v == "coarse"))
+        );
+        assert!(config.matrix_emulations.iter().any(|profile| {
+            profile
+                .get("prefers-color-scheme")
+                .is_some_and(|v| v == "dark")
+        }));
     }
 
     #[test]

@@ -26,8 +26,10 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use sniff_core::config::{Action, OutputFormat, parse_categories, parse_wait_strategy};
+use sniff_core::config::{Action, AttrPreset, OutputFormat, parse_categories, parse_wait_strategy};
 use sniff_core::{ElementFilter, OutputConfig, SniffConfig, SniffError, Viewport, WaitStrategy};
+use sniff_css_check::ModernOptions;
+use sniff_css_diff::baseline_document;
 use sniff_engine::write_output;
 
 use crate::browser::ChromePool;
@@ -288,6 +290,18 @@ pub struct SniffPageRequest {
     /// later captures to keep the login alive across browser restarts.
     #[serde(default)]
     pub save_storage_state: Option<String>,
+    /// Additional matrix viewports as `WxH,WxH`. Each entry becomes one
+    /// capture state on top of the base `viewport` (offline matrix checks).
+    #[serde(default)]
+    pub viewport_matrix: Option<String>,
+    /// Curated per-node DOM attribute set: `none|forms|media|platform|modern|all`.
+    /// Defaults to `modern`; explicit `attributes` are added on top.
+    #[serde(default)]
+    pub attrs_preset: Option<String>,
+    /// Emulated media features as `K=V` (e.g. `prefers-color-scheme=dark`).
+    /// Repeated keys: last wins.
+    #[serde(default)]
+    pub emulate: Vec<String>,
 }
 
 /// Parameters for the `sniff_flutter_page` tool (Flutter/Dart backend).
@@ -410,6 +424,9 @@ pub struct CheckRequest {
     /// Run the derived rule checks (contrast, target size, focus, alt).
     #[serde(default = "default_true")]
     pub rules: bool,
+    /// Run the v0.6 modern opportunity checks (facet-aware, class=opportunity).
+    #[serde(default = "default_true")]
+    pub modern: bool,
     /// Tolerance for numeric uniformity deviations (same unit).
     #[serde(default = "default_tolerance")]
     pub tolerance: f64,
@@ -802,9 +819,7 @@ impl SniffMcpServer {
         let outcome = sniff_engine::extractor::SniffOutcome {
             snapshots: roots,
             global_css_variables: None,
-            ax_tree: None,
-            actions: None,
-            screenshot: None,
+            ..Default::default()
         };
         let mut buf = Vec::new();
         write_output(&mut buf, &outcome, &config.output)
@@ -963,14 +978,16 @@ impl SniffMcpServer {
             "snapshot",
         )
         .map_err(|e| ErrorData::invalid_params(e, None))?;
+        let baseline = baseline_document(&nodes);
 
         let mut buf = Vec::new();
         let mut rule_count = 0usize;
         let mut uniformity_instances = 0usize;
         let mut uniformity_outliers = 0usize;
+        let mut modern_count = 0usize;
 
         if request.rules {
-            let lines = sniff_css_check::rules::run_rules(&nodes.nodes, nodes.viewport);
+            let lines = sniff_css_check::rules::run_rules(&baseline.nodes, baseline.viewport);
             rule_count = lines.len();
             let (pass, warn, fail) = sniff_css_check::rules::summarize(&lines);
             sniff_css_check::rules::write_checks(&mut buf, &lines)
@@ -980,7 +997,7 @@ impl SniffMcpServer {
 
         if request.uniform {
             let report =
-                sniff_css_check::uniformity::check_uniformity(&nodes.nodes, request.tolerance);
+                sniff_css_check::uniformity::check_uniformity(&baseline.nodes, request.tolerance);
             uniformity_instances = report.instances;
             uniformity_outliers = report.outliers.len();
             for outlier in &report.outliers {
@@ -1011,11 +1028,22 @@ impl SniffMcpServer {
             }
         }
 
+        if request.modern {
+            let lines = sniff_css_check::modern::run_modern_checks_for(
+                &nodes,
+                &baseline,
+                &ModernOptions::default(),
+            );
+            modern_count = lines.len();
+            sniff_css_check::rules::write_checks(&mut buf, &lines)
+                .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        }
         let summary = serde_json::json!({
             "__check_summary": {
                 "uniformity_instances": uniformity_instances,
                 "uniformity_outliers": uniformity_outliers,
                 "rules": rule_count,
+                "modern": modern_count,
             }
         });
         serde_json::to_writer(&mut buf, &summary)
@@ -1150,9 +1178,44 @@ fn build_sniff_config_with(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?
     };
+    let facet_defaults = SniffConfig::default();
     let categories = parse_categories(&request.categories).map_err(|e| e.to_string())?;
     let format = OutputFormat::parse_cli(&request.format).map_err(|e| e.to_string())?;
     let viewport = Viewport::parse_cli(&request.viewport).map_err(|e| e.to_string())?;
+    let matrix_viewports = request
+        .viewport_matrix
+        .as_deref()
+        .map(|spec| {
+            spec.split(',')
+                .map(|part| Viewport::parse_cli(part.trim()).map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_else(|| facet_defaults.matrix_viewports.clone());
+    let attr_preset = request
+        .attrs_preset
+        .as_deref()
+        .map(|spec| {
+            AttrPreset::parse(spec).ok_or_else(|| {
+                format!(
+                    "invalid attrs_preset `{spec}` — expected none|forms|media|platform|modern|all"
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or(AttrPreset::Modern);
+    let mut emulate = BTreeMap::new();
+    for spec in &request.emulate {
+        let (key, value) = spec
+            .split_once('=')
+            .ok_or_else(|| format!("invalid emulate `{spec}` — expected K=V"))?;
+        if key.trim().is_empty() || value.trim().is_empty() {
+            return Err(format!(
+                "invalid emulate `{spec}` — key and value must be non-empty"
+            ));
+        }
+        emulate.insert(key.trim().to_string(), value.trim().to_string());
+    }
     let actions = request
         .actions
         .iter()
@@ -1179,7 +1242,11 @@ fn build_sniff_config_with(
         depth: request.depth,
         categories,
         custom_properties: Vec::new(),
-        pseudo_elements: request.pseudo.clone(),
+        pseudo_elements: if request.pseudo.is_empty() {
+            facet_defaults.pseudo_elements
+        } else {
+            request.pseudo.clone()
+        },
         wait,
         filter: ElementFilter {
             visible: !request.include_invisible,
@@ -1217,6 +1284,10 @@ fn build_sniff_config_with(
         headers,
         storage_state_path,
         save_storage_state: request.save_storage_state.clone(),
+        attr_preset,
+        matrix_viewports,
+        emulate,
+        ..SniffConfig::default()
     })
 }
 
@@ -1275,8 +1346,19 @@ fn action_from_input(input: &ActionInput) -> Result<Action, String> {
                 settle_ms,
             })
         }
+        "key" => {
+            let key = input
+                .text
+                .clone()
+                .ok_or_else(|| "key action requires `text` (the CDP key name)".to_string())?;
+            Ok(Action::Key {
+                key,
+                timeout_ms,
+                settle_ms,
+            })
+        }
         other => Err(format!(
-            "unknown action type `{other}` (expected click | hover | type | upload)"
+            "unknown action type `{other}` (expected click | hover | type | upload | key)"
         )),
     }
 }
@@ -1344,6 +1426,7 @@ fn flutter_sniff_config(url: &str, selector: &str) -> SniffConfig {
         headers: Vec::new(),
         storage_state_path: None,
         save_storage_state: None,
+        ..SniffConfig::default()
     }
 }
 
@@ -1411,6 +1494,9 @@ mod tests {
             headers: None,
             storage_state: None,
             save_storage_state: None,
+            viewport_matrix: None,
+            attrs_preset: None,
+            emulate: Vec::new(),
         }
     }
 

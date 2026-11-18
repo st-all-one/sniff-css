@@ -118,6 +118,7 @@ fn golden_config(url: &str, selector: &str, depth: usize) -> SniffConfig {
         headers: Vec::new(),
         storage_state_path: None,
         save_storage_state: None,
+        ..SniffConfig::default()
     }
 }
 

@@ -37,8 +37,9 @@ nem de CSSOM.
 
 **Escopo**
 
-  `matrix_viewports` (default vazio) e `minimal: bool`. `document_facet`,
-  `env_facet` e `attr_preset` entram **ligados** no v0.6.
+- `SniffConfig` ganha `document_facet`, `env_facet`, `attr_preset` (ligados no
+  v0.6), `declared_facet`, `declared_limit`, `emulate` e
+  `matrix_viewports` (default vazio) e `minimal: bool`.
 - `DocumentFacet`, `EnvFacet`, `DeclaredRule`, `MatrixTag` em `sniff-core`.
 - Presets de `attrs`; extensão do JS único do `extractor.rs`.
 - `DiffDocument` com os novos globais; parsers tolerantes.

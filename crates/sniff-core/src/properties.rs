@@ -284,6 +284,11 @@ const LAYOUT: &[&str] = &[
     "break-after",
     "break-inside",
     "box-decoration-break",
+    "container-type",
+    "container-name",
+    "will-change",
+    "anchor-name",
+    "position-anchor",
 ];
 
 const TYPOGRAPHY: &[&str] = &[
@@ -347,6 +352,10 @@ const TYPOGRAPHY: &[&str] = &[
     "text-overflow",
     "text-size-adjust",
     "hanging-punctuation",
+    "field-sizing",
+    "text-fit",
+    "text-box",
+    "text-box-trim",
 ];
 
 const VISUAL: &[&str] = &[
@@ -447,6 +456,10 @@ const ANIMATION: &[&str] = &[
     "view-timeline-axis",
     "view-timeline-inset",
     "view-transition-name",
+    "interpolate-size",
+    "view-transition-scope",
+    "view-transition-group",
+    "view-transition-class",
 ];
 
 const INTERACTION: &[&str] = &[
@@ -485,6 +498,9 @@ const INTERACTION: &[&str] = &[
     "resize",
     "accent-color",
     "appearance",
+    "scroll-initial-target",
+    "scroll-target-group",
+    "overscroll-behavior",
 ];
 
 const ACCESSIBILITY: &[&str] = &[

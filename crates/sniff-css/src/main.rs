@@ -9,5 +9,5 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    commands::run().await
+    Box::pin(commands::run()).await
 }

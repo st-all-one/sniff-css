@@ -4,6 +4,73 @@ Todos os lançamentos seguem [Semantic Versioning](https://semver.org/) e cada
 versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
+
+## [0.6.0] — 2026-11-17
+
+**Contrato v2 — oportunidades modernas e fatias capturadas com intenção.**
+O snapshot passa a `schema: 2` (v1 é promovido em memória) e `sniff check`
+passa a emitir oportunidades determinísticas por padrão, ao lado das regras
+de quebra e da uniformidade.
+
+### Added
+
+- **Fatias v2 no `__meta`** — `__document`, `__env`, `__declared`, matriz de
+  estados (`--viewport-matrix WxH,WxH`) e estatísticas de DOM. Cada família de
+  checks só emite quando a fatia que a sustenta foi capturada.
+- **`--attrs-preset none|forms|media|platform|modern|all`** (default `modern`;
+  `--no-attrs` vira alias de `none`). `--attrs` continua somando nomes
+  explícitos.
+- **`sniff check` moderno** — default = regras + uniformidade +
+  oportunidades (`class: opportunity`); `--modern` roda só oportunidades,
+  `--rules` só quebras, `--no-modern` preserva o perfil pré-v0.6. Novas
+  opções `--profile`, `--guide`, `--ignore`, `--responsive`.
+- **Famílias A–I de checks** (estrutura, plataforma, formulários, interações,
+  preferências, responsivo, performance, Web Components, segurança e CSS
+  visual) com ID estável, guia e `keepWhen` por check.
+- **MCP** — `sniff_page` expõe `viewport_matrix`/`attrs_preset`;
+  `sniff_check` expõe `modern` e reporta `modern` + `opportunities_by_class`
+  no resumo.
+
+### Changed
+
+- **`effective_background`** por nó e hashes de estilo passam a fazer parte
+  do contrato; fixtures golden regeneradas para o schema 2.
+- **Todas as famílias de checks modernos ativas por padrão**: `__declared`,
+  `::before`/`::after` e matriz de 3 viewports × 4 perfis (light/dark/reduce/
+  coarse) passam a ser capturados sem flags; `__actions` é emitida inclusive
+  vazia, `--responsive` é default e `--minimal` desliga o conjunto. Nova action
+  `key:<name>` (ex.: `key:Escape`) completa os checks dependentes de teclado.
+- **Protocolo v2** (`sniff init`/`sniff prime`/SKILL/llms): documenta as fatias
+  default, a leitura de `class`/`guide`/`evidence`, as heurísticas que exigem
+  confirmação humana e os falsos positivos já corrigidos.
+- `sniff check --output` separa `bug` (regras/uniformidade) de `opportunity`
+  (modernos) no resumo.
+- `rmcp` atualizado para 3.11.0 (advisory de limite de resposta); `chrono`
+  segue como dependência transitiva sem correção — exceção documentada em
+  `deny.toml`.
+
+### Fixed
+
+- Correções nas verificações de ordem visual, contraste de scrollbar e
+  accent-color limítrofe, atributos booleanos (`inert`, `controls`, `async`),
+  saltos de breakpoint entre estados e regiões `aria-live` pré-populadas.
+- Wiring das fatias v2 no pipeline de captura: `__document`/`__env`/
+  `__declared`, `attrs` do preset, emulação de mídia e matriz de viewports
+  agora são coletados na página e serializados (antes ficavam só na config).
+- `__document.origin` (`location.origin`) evita falsos positivos de SRI em
+  recursos mesma origem (incluindo `:443`/`:80` explícitos); `breakpoint-jump`
+  ignora reflow proporcional ao viewport e mudanças de altura.
+- `--profile strict` passou a elevar oportunidades a `fail` e a registrar o
+  perfil em `__check_summary.modern_profile` (antes era no-op).
+- `generated-content-alt` silencia `content:none`/`normal`: pseudo-elemento sem
+  conteúdo gerado não tem texto alternativo ausente.
+- Revisão profunda: `__ax_tree` preservado na matriz, ids por estado contíguos,
+  dedup por evidência, `breakpoint-jump` apenas entre viewports com a mesma
+  emulação, estados de matriz recortados por id, `--uniform` com regras,
+  `data.checks`/`__check_summary` no `--json`, SRI por origin completa
+  (scheme + porta), `--attrs-preset all` funcional e MCP com matriz/baseline/
+  action `key` alinhados à CLI.
+
 ## [0.5.1] — 2026-10-15
 
 **Superfície de API (entrada/saída estruturada).** Continuação direta da

@@ -403,6 +403,9 @@ pub fn diff(
         Value::String(action_kind(action).to_string()),
     );
     entry.insert("selector".into(), Value::String(action_selector(action)));
+    if let Action::Key { key, .. } = action {
+        entry.insert("key".into(), Value::String(key.clone()));
+    }
     entry.insert("timeout_ms".into(), Value::from(action_timeout_ms(action)));
     entry.insert("settle_ms".into(), Value::from(action_settle_ms(action)));
     let mut target_obj = Map::new();
@@ -945,6 +948,7 @@ fn action_kind(action: &Action) -> &'static str {
         Action::Hover { .. } => "hover",
         Action::Type { .. } => "type",
         Action::Upload { .. } => "upload",
+        Action::Key { .. } => "key",
     }
 }
 
@@ -954,6 +958,7 @@ fn action_selector(action: &Action) -> String {
         | Action::Hover { selector, .. }
         | Action::Type { selector, .. }
         | Action::Upload { selector, .. } => selector.clone(),
+        Action::Key { key, .. } => format!("key:{key}"),
     }
 }
 
@@ -962,7 +967,8 @@ fn action_timeout_ms(action: &Action) -> u64 {
         Action::Click { timeout_ms, .. }
         | Action::Hover { timeout_ms, .. }
         | Action::Type { timeout_ms, .. }
-        | Action::Upload { timeout_ms, .. } => *timeout_ms,
+        | Action::Upload { timeout_ms, .. }
+        | Action::Key { timeout_ms, .. } => *timeout_ms,
     }
 }
 
@@ -971,7 +977,8 @@ fn action_settle_ms(action: &Action) -> u64 {
         Action::Click { settle_ms, .. }
         | Action::Hover { settle_ms, .. }
         | Action::Type { settle_ms, .. }
-        | Action::Upload { settle_ms, .. } => *settle_ms,
+        | Action::Upload { settle_ms, .. }
+        | Action::Key { settle_ms, .. } => *settle_ms,
     }
 }
 

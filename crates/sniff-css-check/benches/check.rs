@@ -1,9 +1,11 @@
-//! Criterion benchmarks for the deterministic checks (`rules`, `uniformity`).
+//! Criterion benchmarks for the deterministic and modern opportunity checks.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use serde_json::json;
+use sniff_core::modern::{DocumentFacet, EnvFacet};
+use sniff_css_check::modern::{ModernOptions, run_modern_checks};
 use sniff_css_check::{check_uniformity, run_rules};
-use sniff_css_diff::DiffNode;
+use sniff_css_diff::{DiffDocument, DiffNode};
 use std::hint::black_box;
 
 /// A synthetic `span.badge` node with a small computed-style map.
@@ -31,6 +33,7 @@ fn badge(id: u64, color: &str) -> DiffNode {
         contrast: None,
         ax: None,
         attributes: None,
+        effective_background: None,
         children: Vec::new(),
     }
 }
@@ -46,6 +49,24 @@ fn siblings(count: u64) -> Vec<DiffNode> {
         .collect()
 }
 
+/// Minimal v2 document: the synthetic nodes expose styles, rect and attrs,
+/// and document/env facets enable the opportunity families.
+fn modern_doc(count: u64) -> DiffDocument {
+    let mut doc = DiffDocument {
+        nodes: siblings(count),
+        viewport: Some((1366.0, 768.0)),
+        document: Some(DocumentFacet::default()),
+        env: Some(EnvFacet::default()),
+        schema: 2,
+        ..Default::default()
+    };
+    for node in &mut doc.nodes {
+        node.attributes = Some(json!({"class": "badge"}));
+        node.aria = Some(json!({"focusable": false}));
+    }
+    doc
+}
+
 fn bench_checks(c: &mut Criterion) {
     for count in [10u64, 50, 200] {
         let nodes = siblings(count);
@@ -55,8 +76,16 @@ fn bench_checks(c: &mut Criterion) {
         c.bench_function(&format!("rules/{count}"), |b| {
             b.iter(|| black_box(run_rules(black_box(&nodes), Some((1366.0, 768.0)))));
         });
+        let modern = modern_doc(count);
+        c.bench_function(&format!("modern/{count}"), |b| {
+            b.iter(|| {
+                black_box(run_modern_checks(
+                    black_box(&modern),
+                    black_box(&ModernOptions::default()),
+                ))
+            });
+        });
     }
 }
-
 criterion_group!(benches, bench_checks);
 criterion_main!(benches);

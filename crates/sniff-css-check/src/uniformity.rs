@@ -8,6 +8,7 @@
 //! inconsistent and *in what*, deterministically.
 
 use serde_json::Value;
+use sniff_core::modern::Evidence;
 use sniff_css_diff::DiffNode;
 
 /// A single property where an instance deviates from the group norm.
@@ -131,6 +132,52 @@ pub fn check_uniformity(nodes: &[DiffNode], tolerance: f64) -> UniformityReport 
     UniformityReport {
         instances: count,
         outliers,
+    }
+}
+
+/// Build structured evidence for one uniformity outlier.
+///
+/// `report` contributes the instance count and `outlier` the deviating
+/// properties. The text lists deviations in their deterministic (sorted)
+/// order. When any deviation is numeric, the largest absolute magnitude is
+/// exposed as `evidence.observed` under the `uniformity_deviation` metric;
+/// categorical deviations keep the text-only form. `source` is `uniformity`.
+pub fn outlier_evidence(report: &UniformityReport, outlier: &Outlier) -> Evidence {
+    let mut parts = Vec::with_capacity(outlier.deviations.len());
+    let mut max_magnitude: Option<f64> = None;
+    for deviation in &outlier.deviations {
+        let mut part = format!("{} = {}", deviation.property, deviation.value);
+        if let Some(norm) = &deviation.norm {
+            part = format!("{part} (norm {norm})");
+        }
+        if let Some(magnitude) = deviation.magnitude {
+            part = format!("{part}; |delta| {magnitude:0.4}");
+            max_magnitude = Some(max_magnitude.map_or(magnitude, |best: f64| best.max(magnitude)));
+        }
+        parts.push(part);
+    }
+    let text = format!(
+        "{} of {} instances deviates from the group norm: {}",
+        outlier.selector,
+        report.instances,
+        parts.join("; ")
+    );
+    tracing::debug!(
+        instances = report.instances,
+        deviations = outlier.deviations.len(),
+        selector = %outlier.selector,
+        "uniformity outlier evidence built"
+    );
+    match max_magnitude {
+        Some(magnitude) => Evidence::from_parts(
+            text,
+            "uniformity",
+            Some("uniformity_deviation".into()),
+            Some(serde_json::json!(magnitude)),
+            None,
+            None,
+        ),
+        None => Evidence::new(text, "uniformity"),
     }
 }
 
@@ -290,6 +337,7 @@ mod tests {
             pseudo: None,
             aria: None,
             contrast: None,
+            effective_background: None,
             ax: None,
             attributes: None,
             children: vec![],

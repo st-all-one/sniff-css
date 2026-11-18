@@ -102,3 +102,74 @@ fn cli_rules_only_flag_skips_uniformity() {
     );
     drop(std::fs::remove_dir_all(path.parent().unwrap()));
 }
+
+const MODERN_SNAPSHOT: &str = r#"{"id":1,"tag":"DIV","selector":"div.fake-checkbox","depth":0,"is_user_noticeable":{"display_visible":true,"accessibility_grade":"AAA"},"rect":{"x":0,"y":0,"width":24,"height":24},"attrs":{"role":"checkbox"},"aria":{"role":"checkbox","aria_checked":"false","focusable":true},"styles":{"box_model":{"width":"24px","height":"24px"}},"children":[]}
+"#;
+
+#[test]
+fn cli_v2_default_runs_modern_and_flags_are_exclusive() {
+    let path = write_snapshot("modern.jsonl", MODERN_SNAPSHOT);
+    let arg = path.to_str().unwrap();
+
+    let (stdout, _) = run_cli(&["--input", arg]);
+    assert!(
+        stdout.contains("\"check\":\"native-checkbox-reimplemented\""),
+        "v2 default must emit modern opportunities: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"modern\":1") || stdout.contains("\"modern\":2"),
+        "modern count in summary: {stdout}"
+    );
+
+    let (stdout, _) = run_cli(&["--input", arg, "--no-modern"]);
+    assert!(
+        !stdout.contains("native-checkbox-reimplemented"),
+        "--no-modern must silence opportunities: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"opportunity\":0"),
+        "opportunity class must be zero: {stdout}"
+    );
+
+    let (stdout, _) = run_cli(&["--input", arg, "--rules"]);
+    assert!(
+        !stdout.contains("native-checkbox-reimplemented"),
+        "--rules must silence opportunities: {stdout}"
+    );
+
+    let (stdout, _) = run_cli(&["--input", arg, "--modern"]);
+    assert!(
+        stdout.contains("native-checkbox-reimplemented"),
+        "--modern must emit opportunities: {stdout}"
+    );
+    assert!(
+        !stdout.contains("\"check\":\"contrast-aa\""),
+        "--modern must silence derived rules: {stdout}"
+    );
+    drop(std::fs::remove_dir_all(path.parent().unwrap()));
+}
+
+#[test]
+fn cli_matrix_snapshot_runs_node_rules_only_on_baseline_state() {
+    use std::fmt::Write as _;
+
+    let mut second_state = String::new();
+    for (id, y) in [(4, 0), (5, 120), (6, 240)] {
+        writeln!(
+            second_state,
+            "{{\"id\":{id},\"tag\":\"DIV\",\"selector\":\"div.card:nth-child({})\",\"depth\":0,\"rect\":{{\"x\":0,\"y\":{y},\"width\":300,\"height\":120}},\"styles\":{{\"typography\":{{\"font-size\":\"16px\"}}}},\"children\":[]}}",
+            id - 3
+        )
+        .unwrap();
+    }
+    let content = format!(
+        "{{\"__meta\":{{\"schema\":2,\"matrix\":[{{\"index\":0,\"total\":2,\"emulation\":{{}},\"node_id_start\":1,\"node_id_end\":3}},{{\"index\":1,\"total\":2,\"emulation\":{{}},\"node_id_start\":4,\"node_id_end\":6}}]}}}}\n{SNAPSHOT}{second_state}"
+    );
+    let path = write_snapshot("matrix.jsonl", &content);
+    let (_, stderr) = run_cli(&["--input", path.to_str().unwrap(), "--rules"]);
+    assert!(
+        stderr.contains("rules: 6 pass"),
+        "3 baseline nodes x 2 contrast rules expected (not 12 across states): {stderr}"
+    );
+    drop(std::fs::remove_dir_all(path.parent().unwrap()));
+}

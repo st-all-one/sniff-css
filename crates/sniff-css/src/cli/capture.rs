@@ -1,7 +1,11 @@
 //! Argumentos de `sniff capture`.
 
+use std::collections::BTreeMap;
+
 use clap::Args;
-use sniff_core::config::{OutputFormat, parse_action, parse_categories, parse_wait_strategy};
+use sniff_core::config::{
+    AttrPreset, OutputFormat, parse_action, parse_categories, parse_wait_strategy,
+};
 use sniff_core::{
     ElementFilter, OutputConfig, SniffConfig, SniffError, SniffResult, Viewport, WaitStrategy,
 };
@@ -65,8 +69,8 @@ pub(crate) struct CaptureArgs {
     #[arg(long, value_delimiter = ',')]
     pub props: Vec<String>,
 
-    /// Pseudo-elements to capture (`::before`, `::after`).
-    #[arg(long, value_delimiter = ',')]
+    /// Pseudo-elements to capture. ON by default (`::before,::after`).
+    #[arg(long, value_delimiter = ',', default_value = "::before,::after")]
     pub pseudo: Vec<String>,
 
     /// Wait strategy, repeatable. Format:
@@ -81,12 +85,14 @@ pub(crate) struct CaptureArgs {
     /// Interaction action, repeatable and ORDERED. Format:
     ///   click:<selector>[:<`timeout_ms`>[:<`settle_ms`>]] |
     ///   hover:<selector>[:<`timeout_ms`>[:<`settle_ms`>]] |
-    ///   type:<selector>:<text>
+    ///   type:<selector>:<text> | upload:<selector>:<files> |
+    ///   key:<name>[:<`timeout_ms`>[:<`settle_ms`>]]
     /// Reveals elements that only exist after an action (modals, dropdowns,
-    /// hover menus, type-ahead suggestions). Each action waits for its own
-    /// target to appear; the wait pipeline then runs after the actions,
-    /// targeting the post-interaction DOM. Prefer this over --click/--hover/
-    /// --type when mixing action kinds in a specific order.
+    /// hover menus, type-ahead suggestions). `key:Escape` requests native
+    /// dialog dismissal. Each action waits for its own target to appear;
+    /// the wait pipeline then runs after the actions, targeting the
+    /// post-interaction DOM. Prefer this over --click/--hover/--type when
+    /// mixing action kinds in a specific order.
     #[arg(long = "action", action = clap::ArgAction::Append)]
     pub actions: Vec<String>,
 
@@ -378,6 +384,61 @@ pub(crate) struct CaptureArgs {
     /// --no-ax`). Equivalent to the pre-AI-default behavior.
     #[arg(long, default_value_t = false)]
     pub full: bool,
+
+    // ---- Contrato v2 (flags de contexto) -----------------------------
+    /// Minimal profile: disables the default `__document`, `__env` and
+    /// attribute preset while preserving explicitly requested `--attrs`.
+    #[arg(long, default_value_t = false)]
+    #[serde(default)]
+    pub minimal: bool,
+
+    /// Omit the global `__document` facet (on by default in v0.6).
+    #[arg(long = "no-document", default_value_t = false)]
+    #[serde(default)]
+    pub no_document: bool,
+
+    /// Omit the global `__env` facet (on by default in v0.6).
+    #[arg(long = "no-env", default_value_t = false)]
+    #[serde(default)]
+    pub no_env: bool,
+
+    /// Collect declared CSS origin (`__declared`). ON by default: it runs
+    /// CSSOM matching inside the page and is bounded by `--declared-limit`.
+    #[arg(long, default_value_t = true)]
+    #[serde(default = "default_true")]
+    pub declared: bool,
+
+    /// Maximum number of CSSOM rules collected with `--declared` (default 200).
+    #[arg(long, value_name = "N")]
+    #[serde(default)]
+    pub declared_limit: Option<usize>,
+
+    /// Emulated media feature, repeatable as `K=V` (e.g.
+    /// `--emulate prefers-color-scheme=dark`). Repeated keys: last wins.
+    #[arg(long, value_name = "K=V", action = clap::ArgAction::Append)]
+    #[serde(default)]
+    pub emulate: Vec<String>,
+
+    /// Additional matrix viewports as `WxH,WxH`. ON by default
+    /// (`360x800,768x1024`), plus the base `--viewport`.
+    #[arg(
+        long = "viewport-matrix",
+        value_name = "WxH,WxH",
+        default_value = "360x800,768x1024"
+    )]
+    #[serde(default = "default_matrix_viewports")]
+    pub viewport_matrix: Option<String>,
+
+    /// Curated per-node attribute set: `none|forms|media|platform|modern|all`.
+    /// Defaults to `modern`; sums with explicit `--attrs` names.
+    #[arg(long = "attrs-preset", value_name = "PRESET")]
+    #[serde(default)]
+    pub attrs_preset: Option<String>,
+
+    /// [deprecated] Alias of `--attrs-preset none`.
+    #[arg(long = "no-attrs", default_value_t = false)]
+    #[serde(default)]
+    pub no_attrs: bool,
 }
 
 impl CaptureArgs {
@@ -513,13 +574,48 @@ impl CaptureArgs {
             exclude_selectors: self.exclude,
         };
 
+        let requested_emulate = parse_emulate_specs(&self.emulate)?;
+        let matrix_emulations = if requested_emulate.is_empty() {
+            SniffConfig::default().matrix_emulations
+        } else {
+            vec![requested_emulate]
+        };
+        let emulate = matrix_emulations.first().cloned().unwrap_or_default();
+        let matrix_viewports = parse_matrix_viewports(self.viewport_matrix.as_deref())?;
+        let attr_preset = parse_attr_preset(self.attrs_preset.as_deref(), self.no_attrs)?;
+        let declared_limit = self.declared_limit.unwrap_or(200);
+        let (pseudo_elements, declared_facet, matrix_viewports, matrix_emulations, emulate) =
+            if self.minimal {
+                (Vec::new(), false, Vec::new(), Vec::new(), BTreeMap::new())
+            } else {
+                (
+                    self.pseudo.clone(),
+                    self.declared,
+                    matrix_viewports,
+                    matrix_emulations,
+                    emulate,
+                )
+            };
+        tracing::debug!(
+            minimal = self.minimal,
+            document = !self.no_document,
+            env = !self.no_env,
+            declared = declared_facet,
+            declared_limit,
+            emulate_count = emulate.len(),
+            matrix_total = (matrix_viewports.len().saturating_add(1))
+                .saturating_mul(matrix_emulations.len().max(1)),
+            attr_preset = ?attr_preset,
+            "capture v2 context resolved"
+        );
+
         Ok(SniffConfig {
             url,
             selector,
             depth: self.depth,
             categories: parse_categories(&self.categories)?,
             custom_properties: self.props,
-            pseudo_elements: self.pseudo,
+            pseudo_elements,
             wait,
             filter,
             output,
@@ -530,18 +626,38 @@ impl CaptureArgs {
             stabilize,
             ax_tree: self.ax_tree,
             actions,
-            effects: self.effects && !self.no_effects,
+            effects: self.effects && !self.no_effects && !self.minimal,
             effects_limit: self.effects_limit,
             screenshot: self.screenshot.is_some(),
             screenshot_full_page: self.fullpage_screenshot,
             headers,
             storage_state_path: self.storage_state,
             save_storage_state: self.save_storage_state,
+            document_facet: !self.no_document,
+            env_facet: !self.no_env,
+            attr_preset,
+            declared_facet,
+            declared_limit,
+            emulate,
+            matrix_viewports,
+            matrix_emulations,
+            minimal: self.minimal,
         })
     }
 }
 
-/// Desserializa `persist` aceitando `true` (store gerenciado), `false`/`null`
+fn default_true() -> bool {
+    true
+}
+
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "o campo serde é Option<String>; ausência e valor padrão são distintos na CLI"
+)]
+fn default_matrix_viewports() -> Option<String> {
+    Some("360x800,768x1024".to_string())
+}
+
 /// (desligado) ou `"PATH"` (arquivo explícito) — ergonomia do JSON.
 fn de_persist<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -608,6 +724,75 @@ fn merge_headers(
     Ok(headers)
 }
 
+/// Parse repeatable `--emulate K=V` specs into a deterministic key map.
+///
+/// Later repetitions of the same key win; keys are kept in sorted order by
+/// [`BTreeMap`] so the engine applies a stable precedence.
+fn parse_emulate_specs(specs: &[String]) -> SniffResult<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for spec in specs {
+        let (key, value) = spec.split_once('=').ok_or_else(|| {
+            SniffError::Other(format!(
+                "invalid --emulate `{spec}` — expected `K=V` (e.g. `prefers-color-scheme=dark`)"
+            ))
+        })?;
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            return Err(SniffError::Other(format!(
+                "invalid --emulate `{spec}` — key and value must be non-empty"
+            )));
+        }
+        out.insert(key.to_string(), value.to_string());
+    }
+    tracing::debug!(count = out.len(), "emulated media features parsed");
+    Ok(out)
+}
+
+/// Parse `--viewport-matrix WxH,WxH` into additional capture states.
+fn parse_matrix_viewports(spec: Option<&str>) -> SniffResult<Vec<Viewport>> {
+    let Some(spec) = spec else {
+        return Ok(Vec::new());
+    };
+    if spec.trim().is_empty() {
+        return Err(SniffError::Other(
+            "invalid --viewport-matrix — expected at least one `WxH` (e.g. `360x800,768x1024`)"
+                .into(),
+        ));
+    }
+    let mut out = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(SniffError::Other(
+                "invalid --viewport-matrix — empty viewport between commas".into(),
+            ));
+        }
+        out.push(Viewport::parse_cli(part)?);
+    }
+    tracing::debug!(
+        states = out.len().saturating_add(1),
+        "viewport matrix parsed"
+    );
+    Ok(out)
+}
+
+/// Resolve `--attrs-preset` and the deprecated `--no-attrs` alias.
+fn parse_attr_preset(spec: Option<&str>, no_attrs: bool) -> SniffResult<AttrPreset> {
+    if no_attrs {
+        tracing::warn!("--no-attrs is deprecated; use --attrs-preset none");
+        return Ok(AttrPreset::None);
+    }
+    let Some(spec) = spec else {
+        return Ok(AttrPreset::Modern);
+    };
+    AttrPreset::parse(spec).ok_or_else(|| {
+        SniffError::Other(format!(
+            "invalid --attrs-preset `{spec}` — expected {}",
+            AttrPreset::ALL_VALUES.join("|")
+        ))
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;

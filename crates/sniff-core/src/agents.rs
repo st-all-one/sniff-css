@@ -15,7 +15,7 @@ pub const MARKER_END: &str = "<!-- sniff:end -->";
 /// Prefix of the protocol version marker.
 pub const VERSION_PREFIX: &str = "<!-- sniff:version:";
 /// Protocol version embedded in the block.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// File the block is written to.
 pub const FILE: &str = "AGENTS.md";
 
@@ -48,24 +48,38 @@ pub fn protocol_block() -> String {
          # sniff — computed styles for LLMs\n\
          \n\
          `sniff capture` is the source of truth for layout/style — never guess CSS, capture it.\n\
-         Cycle: `sniff capture` → `sniff check` → `sniff diff`; the AI reads only the delta.\n\
+         Cycle: `capture` → `check` → `diff`; the AI reads only evidence/delta.\n\
          \n\
          - Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`\n\
-           (default `summary`, token-lean). Diff/check need `--no-summary` JSONL snapshots.\n\
-         - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]` (deterministic, offline).\n\
-         - Checks: `sniff check <SNAP> [--rules] [--uniform]` (contrast, target size, focus, alt).\n\
-         - Batch/params: `--params '<json>'` (one op) or `--batch file.jsonl` (one op per line);\n\
-           `-` reads stdin, so `sniff capture … --no-summary | sniff check -` works.\n\
-         - Protocol: `sniff prime` (`--long` = full); `sniff self` = setup/completions/upgrade.\n\
+           (default `summary`; `--no-summary` = full JSONL for diff/check). Default v2 context:\n\
+           `__document`, `__env`, `__declared`, attrs preset and a 12-state matrix\n\
+           (3 viewports × light/dark/reduce/coarse). `--emulate K=V` reduces to one profile;\n\
+           `--minimal` removes all v2 facets.\n\
+         - Checks: `sniff check <SNAP>` runs bugs + modern opportunities by default.\n\
+           `--rules` = bugs only; `--modern` = opportunities only; `--no-modern` = 0.5 default;\n\
+           `--no-responsive` disables cross-state checks. Lines carry `class` (`bug`/`opportunity`),\n\
+           `guide`, typed `evidence` (`source`, optional `metric/observed/threshold`).\n\
+         - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]`, offline.\n\
+         - Batch: `--params '<json>'` / `--batch file.jsonl` (`-` = stdin);\n\
+           `sniff capture … --no-summary | sniff check -`.\n\
+         - Protocol: `sniff prime` (`--long` = full); `sniff init [DIR]` (`--force` overwrites AGENTS.md).\n\
+         \n\
+         Interpret:\n\
+         - `class:\"bug\"` with `status:\"fail\"/\"warn\"` = measured failure; act on it.\n\
+         - `class:\"opportunity\"` = heuristic platform debt; read `evidence.source` + `guide` first.\n\
+           `breakpoint-jump`, `dark-mode-ignored`, `inline-nontrivial-style` and transition-absence\n\
+           checks need human confirmation — they are not bugs. Suppress with `--ignore CHECK` only\n\
+           after checking the documented `keepWhen`; never auto-fix from the line alone.\n\
+         - `contrast.aa:\"unknown\"` = manual review, not pass. Facet absent ⇒ check silent.\n\
+           Never paste full JSONL into the model — diff/check first.\n\
          \n\
          Common cases:\n\
-         - Self-signed TLS: add `--ignore-certificate-errors` (or set `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).\n\
-         - Auth: `--header \"Name: Value\"` on every request; persist a login with `--storage-state FILE`\n\
-           (write it once with `--save-storage-state FILE`).\n\
-         - Action-only UI (modal/dropdown): `--click SEL`, or ordered `--action \"click:SEL:5000\"`.\n\
-         - Flutter/Dart app: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).\n\
-         - Persist a snapshot: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`
-(or `--persist PATH` for an explicit file).\n\
+         - Self-signed TLS: `--ignore-certificate-errors` (or `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).\n\
+         - Auth: `--header \"Name: Value\"`; login via `--storage-state FILE` / `--save-storage-state FILE`.\n\
+         - Action-only UI: `--click SEL` or ordered `--action \"click:SEL:5000\"`;\n\
+           `key:Escape` dispatches a real key event.\n\
+         - Flutter: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).\n\
+         - Persist: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.\n\
          \n\
          Contract: stdout = data (JSONL), stderr = logs; `--json` = \
          {{success, command, data?, error{{code,message,retryable}}, warnings?}}.\n\
@@ -254,12 +268,12 @@ mod tests {
     #[test]
     fn upsert_replaces_existing_block_and_keeps_surroundings() {
         let block = protocol_block();
-        let original = format!("before\n{MARKER_BEGIN}\nold\n{MARKER_END}\nafter\n");
+        let original = format!("before\n{MARKER_BEGIN}\nOLD_SENTINEL\n{MARKER_END}\nafter\n");
         let updated = upsert(&original, MARKER_BEGIN, MARKER_END, Some(&block));
         assert!(updated.starts_with("before\n"));
         assert!(updated.ends_with("after\n"));
         assert!(updated.contains("sniff capture"));
-        assert!(!updated.contains("old"));
+        assert!(!updated.contains("OLD_SENTINEL"));
     }
 
     #[test]

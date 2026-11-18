@@ -97,17 +97,17 @@ sniff check - < snap.jsonl
 | `--depth N` | Níveis de filhos (0 = só o elemento) | `0` |
 | `-c, --categories` | Lista separada por vírgula | `all` |
 | `--props a,b` | Propriedades custom adicionais | — |
-| `--pseudo ::before,::after` | Pseudo-elementos | — |
+| `--pseudo ::before,::after` | Pseudo-elementos | **`::before,::after`** |
 | `--wait spec` | Estratégias de espera (repetível) | pipeline padrão |
 | `--click sel[:t[:settle]]` | Clique real no centro de `sel` antes de capturar (repetível) — revela modais/dropdowns | — |
 | `--hover sel[:t[:settle]]` | `mouseMoved` para `sel` antes de capturar (repetível) — revela menus de `:hover` | — |
 | `--type sel:text` | Foca `sel` e digita `text` antes de capturar (repetível) — revela type-ahead | — |
 | `--upload sel:file1,file2` | Anexa arquivos locais a um `<input type=file>` antes de capturar (repetível) — funciona em inputs ocultos; o browser dispara `change` sozinho, então handlers reais (cropper do CMS) rodam | — |
-| `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` · `upload:<sel>:<file1,file2>` (repetível) | — |
+| `--action spec` | Forma **ordenada** p/ fluxos mistos: `click:<sel>[:t[:settle]]` · `hover:<sel>[:t[:settle]]` · `type:<sel>:<text>` · `upload:<sel>:<file1,file2>` · `key:<name>[:t[:settle]]` (repetível; `key:Escape` pede dispensa nativa de `<dialog>`) | — |
 | `--header "Name: Value"` | Header HTTP extra aplicado a **todo** request da sessão (repetível), ex. `X-CMS-AI-Token` para auth stateless de CMS; `SNIFF_DEFAULT_HEADERS` (JSON) é mesclado antes, e `--header` explícito vence na colisão | — |
 | `--storage-state PATH` | Restaura estado de sessão persistido (cookies + `localStorage`, JSON storageState do Playwright) **antes** da navegação — login prévio sobrevive a este capture | — |
-| `--save-storage-state PATH` | Exporta cookies + `localStorage` da origem atual ao fim do pipeline — paire com `--storage-state` nas capturas seguintes para o login sobreviver a restarts | — |
-| `--effects` | Emitir a linha `__actions` com o mapa de efeito de UI por interação (o que apareceu/sumiu/mudou e onde) | **`on` com ações** (use `--no-effects`) |
+
+| `--effects` | Emitir a linha `__actions` com o mapa de efeito de UI por interação (o que apareceu/sumiu/mudou e onde) | **on** (inclusive vazia, use `--no-effects`) |
 | `--effects-limit N` | Cap de elementos por lista em cada entrada `__actions` (em `changed`, mudanças semânticas vêm antes das de posição; demais listas por área) | `10` |
 | `--no-visible` | Incluir elementos invisíveis | — |
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
@@ -119,6 +119,15 @@ sniff check - < snap.jsonl
 | `--fullpage-screenshot` | Com `--screenshot`: capturar o documento inteiro em vez da viewport | `off` |
 | `--persist` | Espelha o store do MCP: grava o snapshot em `sniff/[domain]/[UTC]-[path]-[selector].<ext>` no CWD (ou `SNIFF_SNAPSHOT_DIR`), no formato de `--output` selecionado; a pasta ganha um `.gitignore` com `*` e nunca é rastreada pelo git. A saída continua indo para o stdout. | `off` |
 | `--attrs a,b` | Capturar atributos DOM verbatim por nó (`getAttribute`), repetível ou comma-separated; emitidos sob `attrs` (ex.: validar `name` de forms) | — |
+| `--attrs-preset forms\|media\|platform\|modern\|all` | Preset curado de atributos DOM por nó, somado aos nomes explícitos de `--attrs`. `modern` (≈20 nomes: forms + media + platform, sem duplicar o facet `aria`) é o **default**; `all` lê `getAttributeNames()` e é diagnóstico, nunca default | `modern` |
+| `--no-attrs` | Desliga o preset default de atributos (`--attrs-preset none`); nomes passados em `--attrs` continuam valendo | — |
+| `--no-document` | Desliga a linha global `__document` (title, lang, doctype, meta, links, scripts e style sheets com `blocked`) | **on** |
+| `--no-env` | Desliga a linha global `__env` (preferências normalizadas, emulação aplicada e device) | **on** |
+| `--declared` | Emite `__declared` (regras CSSOM casadas com `origin`/`href`/`index`, `at_rules`, `blocked_sheets`, `truncated`) | **on** (use `--minimal` para desligar) |
+| `--declared-limit N` | Teto de regras em `__declared`; ordem estável por `(href, index, selector)` | `200` |
+| `--emulate K=V` | Força uma feature de mídia na captura (repetível), ex.: `prefers-color-scheme=dark`, `pointer=coarse`. Emulação explícita vence a estabilização e reduz a matriz a um perfil | — |
+| `--viewport-matrix WxH,WxH` | Repete a captura por viewport e perfil de emulação (um bloco com `__meta.matrix` por estado) | **`360x800,768x1024`** × 4 perfis (light, dark, reduce, coarse) |
+| `--minimal` | Perfil enxuto: remove `__document`, `__env`, `__declared`, `__actions`, pseudo-elementos, preset de `attrs` e a matriz; distinto de `--full` (que troca o conjunto de propriedades) | off |
 | `--compact` | Modo compacto (ver abaixo) | **`on`** (use `--no-compact`) |
 | `--custom-props` | Capturar todas as variáveis CSS (`--*`) | **`on`** (use `--no-custom-props`) |
 | `--stabilize` | Congelar animações/transições (snapshot determinístico) | **`on`** (use `--no-stabilize`) |
@@ -138,6 +147,54 @@ sniff check - < snap.jsonl
 | `--ignore-certificate-errors` | Ignora erros de certificado TLS/HTTPS (dev server com self-signed). No launch passa `--ignore-certificate-errors` ao Chromium; com `--connect` aplica via CDP (`Security.setIgnoreCertificateErrors`) antes da navegação | env `SNIFF_IGNORE_CERTIFICATE_ERRORS` |
 | `--viewport WxH` | Viewport emulado: web usa `Emulation.setDeviceMetricsOverride` (afeta `%`, `vh`, media queries); Flutter aplica `adb shell wm size WxH` no device (afeta o `MediaQuery`/layout) e restaura ao final | `1366x768` (web) / device (flutter) |
 | `--stable-key attr` | Atributo âncora nos `selector`/`path` (ex.: `data-testid`), preferido ao `id` | — |
+
+> **Atenção:** cookies de `--storage-state`/`--save-storage-state` usam o jar
+> inteiro do browser (não um contexto isolado). Com `--connect` ou no MCP
+> concorrente, isso pode misturar sessões de abas/URLs diferentes. Prefira um
+> browser dedicado por tarefa. URLs e CSP em `evidence` podem conter tokens
+> em query/nonce — trate o relatório como dado sensível.
+
+### Contexto global no default (`__document`, `__env`, `attrs`)
+
+O snapshot passa a carregar `__meta.schema: 2` e, por default, uma linha
+`__document`, uma linha `__env` e o mapa `attrs` em cada nó com o preset
+`modern`. Globais são **uma linha por captura** (fora do hoist de
+`__meta.style_defaults`), então não inflam o custo por nó; o preset de
+atributos é curado justamente para limitar o custo por nó. Isso dá ao agente
+contexto para distinguir um `font-size:16px` explícito do default do browser,
+ver `autocomplete`/`loading`/`width`/`height` e saber se dark mode, reduced
+motion ou text scale foram optados — sem depender de quem chamou a CLI saber
+quais flags ligar. `__dom_stats` **não** vai no snapshot: é derivado offline em
+`sniff check` a partir da floresta.
+
+```jsonl
+{"__meta":{"schema":2,"viewport":{"width":1366,"height":768}}}
+{"__document":{"title":"Dashboard | Exemplo","lang":"pt-BR","doctype":"html","meta":{"viewport":"width=device-width, initial-scale=1"},"links":[{"rel":"manifest","href":"/manifest.webmanifest"}],"scripts":[{"src":"/app.js","type":"module","defer":true}],"style_sheets":[{"href":"/app.css","media":"all","blocked":false}]}}
+{"__env":{"media":{"prefers-color-scheme":"dark","prefers-reduced-motion":"no-preference","pointer":"fine"},"emulated":{"prefers-reduced-motion":"reduce"},"device":{"dpr":2,"width":1366,"height":768}}}
+{"id":1,"tag":"IMG","selector":"main > img.hero","attrs":{"alt":"...","loading":"lazy","width":"1200","height":"630"},"styles":{...}}
+```
+
+`__env.media` só usa chaves e valores canônicos fechados, em ordem alfabética;
+`__env.emulated` registra **o que a CLI pediu**, não o que o browser reporta —
+é isso que permite separar "usuário prefere reduce" de "nós emulamos reduce".
+`__document.style_sheets[].blocked` marca folha cross-origin (não é erro); um
+atributo ausente simplesmente não aparece em `attrs`.
+
+`__declared`, pseudo-elementos e a matriz estão **ligados por default** para que
+todas as famílias de checks tenham evidência: o CSSOM é percorrido por seletor
+capturado (limitado por `--declared-limit`) e a matriz combina viewports com
+quatro perfis de emulação (light, dark, reduce, coarse). `--emulate` reduz a
+matriz a um único perfil; `--minimal` desliga todas essas fatias de uma vez.
+A ordem dos estados é a da configuração e `__meta.matrix.total` permite ao
+`check` detectar matriz incompleta. Em captures com N>1 estados, o envelope
+`--json` avisa em `warnings`.
+
+**Escape hatches:** `--no-document`, `--no-env`, `--no-attrs` e
+`--attrs-preset` desligam facets específicos; `--minimal` desliga os três de
+uma vez para token budget extremo (os checks que deles dependem silenciam em
+vez de inventar um resultado). Snapshots antigos (schema 1) continuam sendo
+lidos: o loader sobe para v2 em memória com facets vazias. A migração e o
+bump do golden estão em [`golden-run.md`](golden-run.md).
 
 ### Backend Flutter/Dart (`--backend flutter`)
 

@@ -6,7 +6,11 @@
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # Transitivo de rmcp/schemars (MCP): sem versão corrigida; o mantenedor
+    # upstream comunicou o fim da manutenção. Revisar ao trocar de runtime MCP.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; no fixed release; transitive via rmcp/schemars" },
+]
 
 [licenses]
 version = 2

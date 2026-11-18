@@ -52,5 +52,5 @@ fn low_contrast_snapshot_fails_contrast_aa() {
     let lines = run_rules(&[third], None);
     let aa = lines.iter().find(|l| l.check == "contrast-aa").unwrap();
     assert_eq!(aa.status, RuleStatus::Fail);
-    assert!(aa.evidence.contains("ratio"));
+    assert!(aa.evidence.text.contains("ratio"));
 }

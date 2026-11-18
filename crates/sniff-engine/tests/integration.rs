@@ -112,6 +112,7 @@ fn base_config(url: &str, selector: &str) -> SniffConfig {
         headers: Vec::new(),
         storage_state_path: None,
         save_storage_state: None,
+        ..SniffConfig::default()
     }
 }
 
@@ -1045,5 +1046,64 @@ async fn summary_and_screenshot_are_produced_on_demand() -> SniffResult<()> {
     assert_eq!(root["tag"], "DIV");
     assert!(root.get("styles").is_none(), "summary omits styles");
     assert_eq!(root["rect"]["width"].as_f64(), Some(332.0));
+    Ok(())
+}
+
+/// The v2 config fields must reach the in-page extractor and the JSONL
+/// writer — a flag that only lands in `SniffConfig` is not an implementation.
+#[tokio::test]
+async fn v2_facets_reach_the_extractor_and_the_serialized_snapshot() -> SniffResult<()> {
+    let Some(opts) = require_chrome() else {
+        eprintln!("skipping: no Chrome binary found");
+        return Ok(());
+    };
+    let sniffer = launch_with_retry(&opts).await?;
+    let _slot = acquire_browser_slot().await;
+
+    let mut config = base_config(&fixture_path("forms.html"), "form#sucesu-form");
+    config.depth = 2;
+    config.attr_preset = sniff_core::config::AttrPreset::Forms;
+    config.declared_facet = true;
+    config
+        .emulate
+        .insert("prefers-color-scheme".to_string(), "dark".to_string());
+
+    let outcome = sniffer.sniff(&config).await?;
+    let document = outcome.document_facet.as_ref().expect("__document facet");
+    assert_eq!(document.doctype.as_deref(), Some("html"));
+    assert_eq!(
+        document.meta.get("charset").map(String::as_str),
+        Some("utf-8")
+    );
+    let env = outcome.env_facet.as_ref().expect("__env facet");
+    assert_eq!(
+        env.media.get("prefers-color-scheme").map(String::as_str),
+        Some("dark")
+    );
+    assert_eq!(
+        env.emulated.get("prefers-color-scheme").map(String::as_str),
+        Some("dark")
+    );
+    assert!(outcome.declared_facet.is_some(), "__declared facet");
+    assert!(
+        outcome.snapshots[0]
+            .attributes
+            .as_ref()
+            .is_some_and(|attrs| !attrs.is_empty()),
+        "curated attrs preset must reach the nodes"
+    );
+
+    let mut buf = Vec::new();
+    write_output(&mut buf, &outcome, &config.output)?;
+    let text = String::from_utf8(buf).expect("utf8");
+    let value: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(value["__meta"]["schema"].as_u64(), Some(2));
+    for key in ["__document", "__env", "__declared"] {
+        assert!(
+            text.lines()
+                .any(|line| line.contains(&format!("\"{key}\""))),
+            "{key} line missing: {text}"
+        );
+    }
     Ok(())
 }
