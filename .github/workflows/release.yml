@@ -48,9 +48,10 @@ jobs:
             os: ubuntu-latest
             cmd: cross
           - target: aarch64-apple-darwin
-            # Only one macOS binary (Apple Silicon, the current/latest macOS
-            # hardware). Intel macs (x86_64-apple-darwin) are not published.
-            os: macos-14
+            # Apple Silicon (arm64). `macos-14` was retired on 2026-11-02;
+            # `macos-15` is the pinned supported arm64 image (macos-latest is
+            # a moving alias, currently macos-26).
+            os: macos-15
             cmd: cargo
           - target: x86_64-pc-windows-msvc
             os: windows-latest

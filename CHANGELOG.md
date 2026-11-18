@@ -70,6 +70,9 @@ de quebra e da uniformidade.
   `data.checks`/`__check_summary` no `--json`, SRI por origin completa
   (scheme + porta), `--attrs-preset all` funcional e MCP com matriz/baseline/
   action `key` alinhados à CLI.
+- Release: runner macOS do matrix trocado de `macos-14` (retirado em
+  2026-11-02, causa de `configuration ... is not supported`) para `macos-15`,
+  imagem arm64 ainda suportada e pinada.
 
 ## [0.5.1] — 2026-10-15
 
