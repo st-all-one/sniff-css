@@ -7,12 +7,13 @@ licenciada.
 
 ## 1. Princípios
 
-1. **Necessidade:** nenhuma dependência sem uso real. `cargo machete` roda no
-   CI e falha se houver dep não usada; toda dep nova exige justificativa no PR.
+1. **Necessidade:** nenhuma dependência sem uso real. `cargo machete` roda
+   localmente antes do tag e aponta dep não usada; toda dep nova exige
+   justificativa no PR.
 2. **Minimalismo de features:** `default-features = false` + features explícitas
    onde reduz árvore (ex.: `tokio-tungstenite` só com `connect`/`handshake`).
-3. **MSRV:** Rust **1.99** (`rust-version` + `clippy.toml::msrv`). Toda versão
-   escolhida precisa rodar em 1.99.
+3. **MSRV:** Rust **1.100** (`rust-version` + `clippy.toml::msrv`). Toda versão
+   escolhida precisa rodar em 1.100.
 4. **Determinismo:** dependências não podem introduzir iteração não
    determinística na saída (ver `docs/golden-run.md`).
 5. **Licenças:** só o conjunto permitido em `deny.toml` (MIT/Apache-2.0/BSD/
@@ -46,7 +47,7 @@ licenciada.
 | `criterion` | 0.8.2 | micro-benchmarks (`benches/`, `harness = false`) |
 | `libfuzzer-sys` | 0.4 | alvos de fuzz (`fuzz/`, crate standalone, nightly) |
 
-Ferramentas de CI (não são deps do crate): `cargo-deny`, `cargo-audit`,
+Ferramentas de gate local (não são deps do crate): `cargo-deny`, `cargo-audit`,
 `cargo-machete`, `typos`, `cargo-fuzz`, Miri.
 
 ## 4. Como revisar
@@ -82,4 +83,4 @@ mexe no parser/saída, comparação com `docs/benchmarks.md` e o golden
   (transitivas) — `multiple-versions = "warn"`, sem ação.
 - **Licenças/advisories:** `cargo deny check` e `cargo audit` limpos.
 
-Próxima revisão: a cada ciclo de release (ou quando o CI apontar advisory).
+Próxima revisão: a cada ciclo de release (ou quando uma auditoria apontar advisory).

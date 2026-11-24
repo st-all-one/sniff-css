@@ -1292,11 +1292,9 @@ fn build_sniff_config_with(
 /// Prepend the `SNIFF_BASE_URL` to relative URLs; absolute URLs pass through.
 fn resolve_url(url: &str, base: Option<&str>) -> String {
     match base {
-        Some(base) if !url.contains("://") => format!(
-            "{}/{}",
-            base.trim_end_matches('/'),
-            url.trim_start_matches('/')
-        ),
+        Some(base) if !url.contains("://") => {
+            format!("{}/{}", base.trim_suffix('/'), url.trim_prefix('/'))
+        }
         _ => url.to_string(),
     }
 }

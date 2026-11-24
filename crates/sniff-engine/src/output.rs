@@ -278,10 +278,7 @@ fn compact_group(props: &[ComputedProperty]) -> Vec<ComputedProperty> {
                 return false;
             }
             // Default/noise suppression (skip allow-listed properties).
-            if !KEEP_DEFAULTS.contains(&p.name.as_str()) && is_noise_value(p.value.trim()) {
-                return false;
-            }
-            true
+            KEEP_DEFAULTS.contains(&p.name.as_str()) || !is_noise_value(p.value.trim())
         })
         .cloned()
         .collect()

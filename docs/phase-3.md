@@ -75,7 +75,7 @@ assegurado por porta/injeção.
 | C2 | `unsafe` proibido no núcleo | `unsafe_code` + `#![forbid(unsafe_code)]` | 14 | ✅ `forbid` nos roots de `sniff-core` (lib), `sniff-css-diff` (lib+bin) e `sniff-css-check` (lib+bin). |
 | C3 | Concorrência | `await_holding_lock`, `await_holding_refcell_ref` (deny) | 11, 12 | ✅ Auditoria: só `tokio::sync::Mutex` (async-aware) cruza `.await` (`sink`); `std::sync::Mutex` (`pending`) e locks de stdout têm escopo curto, sem `.await` junto. Lints em `deny`. |
 | C4 | Verificação dinâmica | Miri + fuzz | 14 | ✅ `sniff-core/tests/miri_smoke.rs` (3 testes, Miri verde, sem UB); crate de fuzz standalone com `jsonl_decode` e `jsonrpc_decode`; o decoder JSON-RPC virou `decode_incoming` (puro/total, testável). |
-| C5 | Supply chain | `cargo deny` + `cargo audit` | 16 | ✅ `deny.toml` + `cargo audit` e `cargo machete` no CI (`.github/workflows/ci.yml`); deps não usadas removidas (`sniff-engine`, `sniff-flutter`, `sniff-css`). |
+| C5 | Supply chain | `cargo deny` + `cargo audit` | 16 | ✅ `deny.toml` + `cargo audit` e `cargo machete` executados localmente antes da tag; deps não usadas removidas (`sniff-engine`, `sniff-flutter`, `sniff-css`). O antigo CI de push/PR foi removido; ver `docs/release.md`. |
 
 **Aceite:** `unsafe` documentado/isolado, `forbid` no núcleo, Miri smoke verde,
 fuzz build verde, `cargo deny` verde.
@@ -105,7 +105,7 @@ justificativa; lints de performance de `pedantic`/`nursery` em `deny`.
 5. **B5 + B6** (portas `Env`/`Clock`, stdout como dado).
 6. **D2 + D3 + D5** (alocação/buffers/benchmarks).
 7. **A3** (`pedantic`/`nursery`/`cargo`).
-8. **C4 + C5** (Miri/fuzz/audit no CI).
+8. **C4 + C5** (Miri/fuzz/audit — gates locais; o CI de push/PR foi removido na 0.6.4).
 
 ## 4. Orçamento de `unwrap`/`expect` (produção)
 
@@ -454,18 +454,14 @@ Auditoria dos primitivos de sincronização:
   testável (é o que o alvo exercita).
 - Observação: o `cargo fuzz build` local exige um compilador C++ (runtime do
   libFuzzer); nesta máquina só há `gcc` (sem `cc1plus`) e sem `sudo`, então a
-  construção é validada no CI (`ubuntu-latest` tem `build-essential`).
+  construção é validada localmente antes da tag (`docs/release.md` §2).
 
-### C5 — supply chain + CI
+### C5 — supply chain (gates locais)
 
-Novo `.github/workflows/ci.yml` com quatro jobs:
-
-| Job | Comandos |
-|---|---|
-| `check` | `fmt --check`, `clippy --all-targets -D warnings`, `test --workspace` |
-| `supply-chain` | `cargo deny check`, `cargo audit`, `cargo machete`, `typos` |
-| `miri` | `cargo miri setup` + smoke de `sniff-core` |
-| `fuzz` | `cargo fuzz build` + 30 s por alvo |
+Os gates de `fmt`/`clippy`/`test`/`deny`/`audit`/`machete`/Miri/fuzz rodam
+localmente antes do tag de release. O workflow de push/PR
+`.github/workflows/ci.yml` existiu nesta fase, mas foi removido — hoje o único
+workflow é o de release por tag (`docs/release.md` §3).
 
 `cargo machete` apontou deps realmente não usadas, removidas:
 `futures-util`/`serde`/`thiserror`/`tracing` (`sniff-engine`), `serde`

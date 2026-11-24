@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "before": "/tmp/sniff-ab-before-target/release/sniff",
+  "after": "target/release/sniff",
+  "samples": 15,
+  "warmup": 1,
+  "stdout_identical": true,
+  "verbs": [
+    {"verb": "diff",
+      "before": {"min_ns":2651524,"median_ns":2889962,"p95_ns":3891556},
+      "after": {"min_ns":2682743,"median_ns":2900997,"p95_ns":3194331},
+      "stdout_bytes": 824,
+      "stdout_fnv1a64": "6b01f89955fdac0e"
+    },
+    {"verb": "check",
+      "before": {"min_ns":4459575,"median_ns":4864934,"p95_ns":5578503},
+      "after": {"min_ns":4211010,"median_ns":4892172,"p95_ns":5545677},
+      "stdout_bytes": 23201,
+      "stdout_fnv1a64": "b086f597cbf17d45"
+    }
+  ],
+  "profiles": {
+    "before": null,
+    "after": "/tmp/ab-after.jsonl",
+    "functions": [
+      {"function": "diff_actions","before_median_ns": null,"after_median_ns": 1885},
+      {"function": "diff_trees","before_median_ns": null,"after_median_ns": 12711}
+    ]
+  }
+}

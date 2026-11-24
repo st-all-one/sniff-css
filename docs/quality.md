@@ -6,8 +6,8 @@ atual da adoção e o caminho até o padrão final.
 
 ## 1. Toolchain e MSRV
 
-- **Rust 1.99** (Edition 2024), fixado em `rust-toolchain.toml`.
-- `rust-version = "1.99"` no `[workspace.package]` e `msrv = "1.99"` no
+- **Rust 1.100** (Edition 2024), fixado em `rust-toolchain.toml`.
+- `rust-version = "1.100"` no `[workspace.package]` e `msrv = "1.100"` no
   `clippy.toml` **devem casar** — senão a lint `incompatible_msrv` fica
   inconsistente.
 - `resolver = "3"` (resolver MSRV-aware da Edition 2024).
@@ -32,8 +32,10 @@ cargo test --workspace                                       # testes (doc-tests
 cargo deny check                                             # supply chain
 ```
 
-O CI roda os mesmos comandos (mais `typos`, Miri e fuzz — ver
-[`release.md`](release.md) §2–3). A toolchain é 1.99; Miri/fuzz usam nightly.
+Os comandos abaixo são executados **localmente** antes do tag de release (ver
+[`release.md`](release.md) §2). O único workflow do repositório é o de release,
+disparado por tag `v*`; não há validação automática em push/PR.
+Toolchain 1.100; Miri/fuzz usam nightly quando executados localmente.
 
 ## 4. Formatação — `rustfmt.toml`
 
@@ -174,10 +176,10 @@ os lints de alocação (`redundant_clone`, `needless_collect`, `str_to_string`,
 `unnecessary_to_owned`, `needless_pass_by_value`) estão em `0`, e a serialização
 já usa `BufWriter` + `serde_json::to_writer` sem `format!` intermediário.
 
-## 11. Verificação dinâmica e CI
+## 11. Verificação dinâmica (local)
 
-Além do gate estático (`fmt`/`clippy`/`test`/`deny`), o CI
-(`.github/workflows/ci.yml`) roda:
+Além do gate estático (`fmt`/`clippy`/`test`/`deny`), as verificações locais
+antes da tag incluem:
 
 - **`cargo audit`** — vulnerabilidades conhecidas (advisory database);
 - **`cargo machete`** — dependências não usadas;

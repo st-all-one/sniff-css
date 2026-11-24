@@ -10,12 +10,12 @@ pub(crate) mod snapshots;
 
 use std::process::ExitCode;
 
+use crate::cli::{Cli, Command};
+use crate::output::{self, AppError, ErrorCode, Output};
 use clap::Parser;
 use clap::error::ErrorKind as ClapErrorKind;
 use tracing_subscriber::EnvFilter;
-
-use crate::cli::{Cli, Command};
-use crate::output::{self, AppError, ErrorCode, Output};
+use tracing_subscriber::prelude::*;
 
 /// Ponto de entrada: parseia argv e roda o verbo pedido.
 pub(crate) async fn run() -> ExitCode {
@@ -78,11 +78,18 @@ fn init_tracing(cli: &Cli) {
     } else {
         cli.log_level.as_str()
     };
-    if let Err(error) = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(level))
+    let filter = EnvFilter::new(level);
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
-        .try_init()
-    {
+        .with_filter(filter);
+    let profile_path = sniff_core::env::var("SNIFF_PROFILE").map(std::path::PathBuf::from);
+    let profile_layer = profile_path
+        .as_deref()
+        .and_then(crate::profile::ProfileLayer::at);
+    let registry = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(profile_layer);
+    if let Err(error) = registry.try_init() {
         output::warn(&format!("tracing subscriber not installed: {error}"));
     }
 }

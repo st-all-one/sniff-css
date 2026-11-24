@@ -1,4 +1,4 @@
-# Release e CI/CD
+# Release
 
 A documentação de referência da
 superfície de verbos fica em [`cli-surface.md`](cli-surface.md); aqui só vivem
@@ -15,7 +15,7 @@ versão, gates, artefatos e o procedimento de tag.
 - `CHANGELOG.md` é a fonte de verdade do que mudou. `README.md`, `SKILL.md`,
   `llms.txt` e `docs/` não usam marcadores de versão em texto de referência.
 
-## 2. Gates antes da tag
+## 2. Gates locais antes da tag
 
 ```bash
 cargo fmt --all -- --check
@@ -27,17 +27,18 @@ MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p sniff-core --test
 cargo build --release --workspace --bins
 ```
 
-`_typos.toml` registra o vocabulário pt-BR legítimo; o CI usa a action
-`crate-ci/typos`, que lê o mesmo arquivo. `typos` reprovava palavras como
+`_typos.toml` registra o vocabulário pt-BR legítimo; a ferramenta `typos`
+(quando usada localmente) lê o mesmo arquivo. `typos` reprovava palavras como
 `erro`, `fase`, `seletor` e `credencial` — corrigir o texto para inglês
 quebraria a documentação; a solução é o dicionário de exceções.
 
+Os gates acima são **locais**: o único workflow do repositório é o de release,
+disparado por tag `v*`. Não há validação automática em push/PR contra a `main`.
+
 ## 3. Workflows
 
-- **`.github/workflows/ci.yml`** — em push/PR: `fmt`/`clippy`/`test`,
-  `deny`/`audit`/`machete`/`typos`, Miri (`sniff-core`, smoke) e fuzz
-  (`jsonl_decode`/`jsonrpc_decode`, 30 s por alvo, nightly).
-- **`.github/workflows/release.yml`** — em `push` de tag `v*`: 6 targets
+- **`.github/workflows/release.yml`** — em `push` de tag `v*` (ou disparo
+  manual via `workflow_dispatch`): 6 targets
   (linux gnu/musl × x86_64/aarch64, macOS arm64, Windows x86_64), 2 binários
   por target, `sha256sums.txt` agregado, GitHub Release e imagem Docker
   multi-arch (`stallonels/sniffcss:<tag>` + `:latest`).
@@ -50,15 +51,15 @@ quebraria a documentação; a solução é o dicionário de exceções.
   zip, 6 checksums e `sha256sums.txt`) e runner `macos-15`. O job `release`
   e `check` passaram; `supply-chain`, `miri` e `fuzz` falharam naquela
   execução (typos em pt-BR sem config, setup do toolchain nightly).
-- **`v0.6.2` (publicada)** — tag assinada em 2026-11-23 (`10a66df`): summary
-  enxuto, protocolo v3, `_typos.toml`, gates de versão e documentação
-  atualizada. A validação em páginas reais encontrou os defeitos corrigidos
-  na 0.6.3.
-- **`v0.6.3` (em andamento, sem tag)** — workspace, lockfile, README, SKILL e
-  CHANGELOG já apontam para esta versão; correções de `--ax-tree`/`--minimal`,
-  rejeição de `summary` em `check`/`diff`, curadoria de regras e contagem de
-  40 props. O job `check` do CI agora executa `fmt`/`clippy`/`test` de fato.
-  Publicar após os gates da §2 com `git tag -s v0.6.3` + `git push origin v0.6.3`.
+- **`v0.6.3` (publicada)** — tag assinada em 2026-11-23: correções de
+  `--ax-tree`/`--minimal`, rejeição de `summary` em `check`/`diff`, curadoria
+  de regras e contagem de 40 props. O job `check` do CI passou a executar
+  `fmt`/`clippy`/`test` de fato.
+- **`v0.6.4` (em andamento, sem tag)** — workspace, lockfile, README, SKILL e
+  CHANGELOG já apontam para esta versão; upgrade da MSRV para Rust 1.100,
+  lints nativos do Cargo 1.100, instrumentação por função (`SNIFF_PROFILE`)
+  e bancada A/B global. Publicar após os gates da §2 com
+  `git tag -s v0.6.4` + `git push origin v0.6.4`.
 
 ## 4. Publicar
 

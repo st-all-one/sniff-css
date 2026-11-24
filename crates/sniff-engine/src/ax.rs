@@ -258,12 +258,11 @@ fn build_subtree(ax_id: &str, full_tree: &AxTreeIndex) -> Option<Value> {
     let children: Vec<Value> = node
         .get("childIds")
         .and_then(Value::as_array)
-        .map(|ids| {
+        .map_or_default(|ids| {
             ids.iter()
                 .filter_map(|id| id.as_str().and_then(|i| build_subtree(i, full_tree)))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
 
     let mut out = Map::new();
     if let Some(role) = ax_str(node, "role") {

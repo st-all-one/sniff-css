@@ -152,6 +152,7 @@ const INTERACTIVE_TAGS: &[&str] = &["BUTTON", "INPUT", "SELECT", "TEXTAREA", "SU
 /// Per-node checks run over every node; the `occluded` check runs once over
 /// the whole forest so cross-subtree coverage (e.g. a page-level overlay over
 /// a deeply nested button) is reported exactly once.
+#[tracing::instrument(name = "profile", skip_all, fields(function = "run_rules"))]
 pub fn run_rules(nodes: &[DiffNode], viewport: Option<(f64, f64)>) -> Vec<CheckLine> {
     let mut out = Vec::new();
     for node in nodes {

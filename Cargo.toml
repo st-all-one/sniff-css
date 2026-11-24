@@ -15,13 +15,11 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 publish = false
-repository = "https://github.com/st-all-one/sniff-css"
-homepage = "https://github.com/st-all-one/sniff-css"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "net"] }
@@ -43,6 +41,12 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 # o débito legado que exige refatoração ampla está em `allow` com TODO e será
 # promovido a `deny` conforme for pago. Toda exceção `#[allow]` exige `reason`.
 # ---------------------------------------------------------------------------
+[workspace.lints.cargo]
+# Cargo 1.100: dependência declarada e nunca usada é erro de rigor (R43).
+unused_dependencies = "deny"
+# Cargo 1.100: homepage == repository é ruído no manifesto.
+redundant_homepage = "deny"
+
 [workspace.lints.rust]
 # Fase 2 (aplicado): documentação e qualificação.
 unsafe_code = "deny"

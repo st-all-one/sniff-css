@@ -76,6 +76,7 @@ pub struct DiffStats {
 }
 
 /// Diff two snapshot forests (pre-order deterministic output).
+#[tracing::instrument(name = "profile", skip_all, fields(function = "diff_trees"))]
 pub fn diff_trees(
     base: &[DiffNode],
     head: &[DiffNode],
@@ -95,6 +96,7 @@ pub fn diff_trees(
 /// `ACTION_CHANGED` line per action whose effect/where data differs, so the
 /// same "what/where happened" can be regression-tested across deploys
 /// (e.g. "the modal still opened, but now 352px below the fold").
+#[tracing::instrument(name = "profile", skip_all, fields(function = "diff_actions"))]
 pub fn diff_actions(
     base: &[Value],
     head: &[Value],

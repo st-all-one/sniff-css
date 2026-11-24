@@ -246,20 +246,18 @@ fn parse_node(v: &Value) -> ElementSnapshot {
         pseudo: v
             .get("pseudo")
             .and_then(Value::as_object)
-            .map(|obj| {
+            .map_or_default(|obj| {
                 obj.iter()
                     .map(|(name, styles)| PseudoStyles {
                         name: name.clone(),
                         styles: parse_styles(styles),
                     })
                     .collect()
-            })
-            .unwrap_or_default(),
+            }),
         children: v
             .get("children")
             .and_then(Value::as_array)
-            .map(|arr| arr.iter().map(parse_node).collect())
-            .unwrap_or_default(),
+            .map_or_default(|arr| arr.iter().map(parse_node).collect()),
     }
 }
 
@@ -335,17 +333,14 @@ fn parse_styles(v: &Value) -> ComputedStyles {
     let groups = obj
         .iter()
         .map(|(key, props)| {
-            let props = props
-                .as_object()
-                .map(|p| {
-                    p.iter()
-                        .map(|(name, value)| ComputedProperty {
-                            name: name.clone(),
-                            value: value.as_str().unwrap_or_default().to_string(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let props = props.as_object().map_or_default(|p| {
+                p.iter()
+                    .map(|(name, value)| ComputedProperty {
+                        name: name.clone(),
+                        value: value.as_str().unwrap_or_default().to_string(),
+                    })
+                    .collect()
+            });
             (category_from_key(key), props)
         })
         .collect();

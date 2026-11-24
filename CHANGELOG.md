@@ -5,6 +5,39 @@ versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
 
+## [0.6.4] — 2026-11-24
+
+### Changed
+
+- **Versão 0.6.4**: workspace, lockfile (8 crates), README, SKILL e docs
+  alinhados; `sniff self version` reporta a nova versão.
+- **CI/CD simplificado**: removido `.github/workflows/ci.yml` (validação em
+  push/PR). O único workflow é `.github/workflows/release.yml`, disparado por
+  tag `v*`; fmt/clippy/test/deny/audit/machete/Miri/fuzz ficam como gates
+  locais antes da tag (`docs/release.md` §2).
+- **MSRV/toolchain 1.100**: `rust-toolchain.toml`, `rust-version`,
+  `clippy.toml::msrv`, CI (check/release) e docs alinhados em 1.100 (Edição
+  2024). O gate `cargo clippy --workspace --all-targets -- -D warnings` está
+  limpo na 1.100: `map_unwrap_or` → `Option::map_or_default` em seis sites,
+  `needless_bool` resolvido e a lint nativa `unused_workspace_package_fields`
+  eliminada com a remoção de campos não usados do manifesto.
+- **Lints Cargo 1.100**: `[workspace.lints.cargo]` com `unused_dependencies`
+  e `redundant_homepage` em `deny`; `.cargo/config.toml` com cooldown de
+  `min-publish-age = "7 days"` (inspirado em `knudge`).
+- **`str::trim_prefix`/`trim_suffix`** (1.100) em `resolve_url` do MCP,
+  preservando o comportamento; dev-dependency morta removida de `sniff-cdp`.
+
+### Added
+
+- **Instrumentação por função opt-in**: `SNIFF_PROFILE=<arquivo>` faz o
+  subscriber `tracing` gravar `{"function":…,"elapsed_ns":…}` por span
+  instrumentado (`diff_trees`, `diff_actions`, `run_rules`,
+  `check_uniformity`). Caminho normal intacto: stdout continua sendo dado.
+- **Bancada A/B global** em `bench/` (crate standalone, zero deps): compara
+  dois binários `sniff` nos verbos offline `diff`/`check`, exige stdout
+  idêntico, reporta min/mediana/p95 e tabela de perfis por função
+  (`bench/README.md`).
+
 ## [0.6.3] — 2026-11-23
 
 **Release de correção dos defeitos observados na validação da 0.6.2.**

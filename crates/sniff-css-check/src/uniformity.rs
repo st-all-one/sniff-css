@@ -52,6 +52,7 @@ type Instance<'a> = (&'a DiffNode, Vec<(String, Option<String>)>);
 /// `tolerance` mirrors `sniff diff`: numeric differences below it (in the
 /// same unit) are considered equal. With fewer than 2 instances the check
 /// reports zero outliers (`instances <= 1`).
+#[tracing::instrument(name = "profile", skip_all, fields(function = "check_uniformity"))]
 pub fn check_uniformity(nodes: &[DiffNode], tolerance: f64) -> UniformityReport {
     let instances: Vec<Instance<'_>> = nodes.iter().map(|n| (n, flat_props(n))).collect();
     let count = instances.len();

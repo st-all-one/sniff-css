@@ -80,8 +80,7 @@ impl DiffNode {
         let children = v
             .get("children")
             .and_then(Value::as_array)
-            .map(|a| a.iter().map(Self::from_value).collect())
-            .unwrap_or_default();
+            .map_or_default(|a| a.iter().map(Self::from_value).collect());
         Self {
             id: v.get("id").and_then(Value::as_u64).unwrap_or(0),
             parent_id: v.get("parent_id").and_then(Value::as_u64),
@@ -143,14 +142,11 @@ fn build_forest(flat: &[FlatEntry]) -> Vec<DiffNode> {
     fn build(i: usize, flat: &[FlatEntry], children: &[Vec<usize>]) -> Option<DiffNode> {
         let entry = flat.get(i)?;
         let mut node = entry.2.clone();
-        node.children = children
-            .get(i)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|&c| build(c, flat, children))
-                    .collect()
-            })
-            .unwrap_or_default();
+        node.children = children.get(i).map_or_default(|ids| {
+            ids.iter()
+                .filter_map(|&c| build(c, flat, children))
+                .collect()
+        });
         Some(node)
     }
 

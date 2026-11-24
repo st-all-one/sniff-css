@@ -181,7 +181,7 @@ MCP team defaults: `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-# pinned: ... | VERSION=v0.6.3 sh
+# pinned: ... | VERSION=v0.6.4 sh
 sniff init          # upsert managed AGENTS.md block
 sniff init --force  # overwrite AGENTS.md (destructive)
 ```
@@ -196,7 +196,7 @@ v2 inline, `return:"reference"` for a path handle. Never set `format:"summary"`.
 macOS release binary is built on the `macos-15` runner.
 Docker: `stallonels/sniffcss` ([docs/docker.md](docs/docker.md)).
 Release trigger: `git tag vX.Y.Z && git push origin vX.Y.Z` →
-`.github/workflows/release.yml`. MSRV 1.99. History: [`CHANGELOG.md`](CHANGELOG.md).
+`.github/workflows/release.yml`. MSRV 1.100. History: [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

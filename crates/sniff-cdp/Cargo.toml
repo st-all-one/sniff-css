@@ -17,8 +17,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 base64 = "0.23"
 
-[dev-dependencies]
-sniff-core = { path = "../sniff-core" }
-
 [lints]
 workspace = true

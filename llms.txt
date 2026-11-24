@@ -51,8 +51,8 @@ Things to remember when using sniff:
 - `sniff check snap.jsonl` (default: uniformity + bug rules + modern opportunities; `--responsive` on) emits PASS/WARN/FAIL + `__check_summary` with `bug`/`opportunity` counts and `modern_profile`. `--rules` / `--modern` / `--no-modern` / `--no-responsive` select subsets; `--profile strict` escalates opportunities to `fail`, `--ignore CHECK` suppresses one id. `class:"bug"` is actionable; `class:"opportunity"` is heuristic platform debt — confirm `evidence.source` + `guide` and the documented `keepWhen` before acting. `breakpoint-jump`, `dark-mode-ignored` and transition-absence checks need human confirmation.
 - MCP tools over stdio: `sniff_page`, `sniff_flutter_page`, `sniff_diff`, `sniff_check`, `sniff_snapshots`, `sniff_categories`. `sniff_page` default `return:"summary"` gives a lean digest while persisting full JSONL; `return:"jsonl"` gives full v2 inline, `return:"reference"` a path handle. NEVER set `format:"summary"` (it persists a faceless digest) — keep `format:"jsonl"`. Snapshots persist to `sniff/[domain]/[UTC]-[path]-[selector].jsonl` (git-ignored); diff/check run path-first so full JSONL never enters the LLM context.
 - Embedded resources: `sniff://prompts/eval`, `sniff://schemas/eval`, `sniff://guides/golden`.
-- Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.99.
-- Quality: Rust 1.99 / Edition 2024, `clippy` pedantic+nursery (zero warnings), determinism as a contract, zero `unsafe`; CI runs `cargo deny`/`audit`, Miri and fuzz.
+- Install: `curl ... | sh` (`install.sh`), binaries per GitHub Release; Docker Hub image `stallonels/sniffcss` (multi-arch). MSRV 1.100.
+- Quality: Rust 1.100 / Edition 2024, `clippy` pedantic+nursery (zero warnings), determinism as a contract, zero `unsafe`; `cargo deny`/`audit`, Miri and fuzz run as local gates before tagging. The only GitHub workflow is the tag-triggered release.
 
 ## Examples
 

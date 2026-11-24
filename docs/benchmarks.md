@@ -56,3 +56,27 @@ gerados no próprio bench (sem I/O), para medir só o algoritmo.
 
 Os números absolutos variam por máquina; o contrato é a **comparação relativa**
 antes/depois de uma mudança na mesma máquina.
+
+## A/B global (upgrade Rust 1.99 → 1.100)
+
+Bancada standalone em [`bench/`](../bench/README.md), 15 amostras (+1
+warm-up) por verbo, mesmos binários compilados em release (`lto=fat`,
+`codegen-units=1`) com `cargo +1.100`. Antes = `HEAD` pré-upgrade; depois =
+workspace em 1.100 com instrumentação opt-in. Relatório completo em
+[`bench/AB.md`](../bench/AB.md) e [`bench/AB.json`](../bench/AB.json).
+
+| Verbo | Antes mediana | Depois mediana | Δ | stdout |
+|---|---:|---:|---:|---|
+| `sniff diff` | 2.889 ms | 2.900 ms | +0,38% | idêntico (824 B) |
+| `sniff check` | 4.864 ms | 4.892 ms | +0,55% | idêntico (23.201 B) |
+
+O delta está dentro do ruído de execução numa máquina de desenvolvimento:
+**nenhuma regressão de performance mensurável** no upgrade. O p95 do `diff`
+melhorou de 3.891 ms para 3.194 ms na mesma série.
+
+Instrumentação por função (`SNIFF_PROFILE=<arquivo>`, custo zero quando
+desligada) no `diff` da carga A/B: `diff_trees` 12.711 ns (mediana),
+`diff_actions` 1.885 ns. O tempo de árvore domina; o custo das ações é
+desprezível neste fixture. Outros spans instrumentados: `run_rules` e
+`check_uniformity` no caminho do `check`.
+

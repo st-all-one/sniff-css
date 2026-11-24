@@ -79,7 +79,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.99
+          toolchain: 1.100
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}

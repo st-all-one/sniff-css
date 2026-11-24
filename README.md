@@ -5,9 +5,9 @@
 Computed styles reais e árvore de widgets Flutter, determinísticos, para agentes de IA — captura → diff → checks.
 
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b3a42?style=for-the-badge)](./LICENSE-MIT)
-[![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.100%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
-[![Version](https://img.shields.io/badge/version-0.6.3-009739?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.4-009739?style=for-the-badge)](CHANGELOG.md)
 
 </div>
 
@@ -35,7 +35,7 @@ curl --proto '=https' \
   | sh
 ```
 
-Versão fixa: `... | VERSION=v0.6.3 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Versão fixa: `... | VERSION=v0.6.4 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
 No Linux o instalador escolhe `*-unknown-linux-gnu` em glibc (Fedora, Ubuntu…)
 e `*-unknown-linux-musl` só em Alpine/musl; para forçar use
 `SNIFF_TARGET=x86_64-unknown-linux-gnu` ou `sniff self upgrade --target TRIPLE`.
@@ -115,7 +115,7 @@ de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 | Contrato de determinismo (padrão ouro) | [`docs/golden-run.md`](docs/golden-run.md) |
 | Prompt de avaliação semântica por IA | [`docs/eval-prompt.md`](docs/eval-prompt.md) |
 | Arquitetura interna | [`docs/architecture.md`](docs/architecture.md) |
-| Política de qualidade (lints, toolchain, CI) | [`docs/quality.md`](docs/quality.md) |
+| Política de qualidade (lints, toolchain, gates locais) | [`docs/quality.md`](docs/quality.md) |
 | Revisão de dependências | [`docs/dependencies.md`](docs/dependencies.md) |
 | Baseline de desempenho (`criterion`) | [`docs/benchmarks.md`](docs/benchmarks.md) |
 | Guia ativo para agentes | [`SKILL.md`](SKILL.md) |
@@ -123,7 +123,7 @@ de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 | Plano de modernização (detecção de oportunidades) | [`docs/modernization/README.md`](docs/modernization/README.md) |
 | Histórico de mudanças | [`CHANGELOG.md`](CHANGELOG.md) |
 | Contribuição | [`AGENTS.md`](AGENTS.md) |
-| Release e CI/CD (gates, tag, artefatos) | [`docs/release.md`](docs/release.md) |
+| Release (gates, tag, artefatos) | [`docs/release.md`](docs/release.md) |
 
 ## Licença
 

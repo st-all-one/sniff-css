@@ -24,7 +24,7 @@ Workspace: `crates/sniff-core` · `sniff-cdp` · `sniff-engine` · `sniff-flutte
 (**bibliotecas**; verbos `sniff diff`/`sniff check`) · `sniff-css-mcp`
 (binário **`sniff-mcp`**).
 
-- **MSRV/toolchain: Rust 1.99** (`rust-toolchain.toml`, `rust-version` e
+- **MSRV/toolchain: Rust 1.100** (`rust-toolchain.toml`, `rust-version` e
   `clippy.toml::msrv` devem casar).
 - Alvo de qualidade: fmt/clippy limpos + testes passando + `cargo deny check` ok.
 - Política de lints, `clippy.toml`/`deny.toml` e o **débito da adoção em fases**
