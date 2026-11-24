@@ -130,7 +130,7 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 
 | Cenário | Ajuste |
 |---|---|
-| Acessibilidade a11y | já ON (`contrast` + `ax` por nó); para a subárvore AX completa adicione `--ax-tree`. |
+| Acessibilidade a11y | em `--output jsonl`, `contrast` + `ax` por nó já ON; para a subárvore AX completa use `--ax-tree` (também preserva AX no summary). |
 | Página animada (jitter) | já congelada (`--stabilize` default); se o jitter persistir, suba `--tolerance` ou amplie `--ignore-props`. |
 | Full-fidelity | `--full` nos dois lados (nunca misturar com o default). |
 | Feed/lista com contagem variável | `--no-structural` no diff (só CHANGED). |
@@ -138,7 +138,7 @@ O MCP segue o mesmo pipeline, mas o snapshot fica no disco
 | Conteúdo que some após load | capture a subárvore estável: `--selector footer --depth 2` ou `--wait delay:N`. |
 | Elementos revelados por ação (modal/dropdown/menu) | `--click "#open"` (ou `--hover`/`--type`; no MCP, `actions`). O mesmo alvo `display:none` falha com timeout de `element-ready` sem a ação. |
 | Conteúdo oculto por animação (WOW.js) | `--no-visible --wait "delay:3000"` (inclui o invisível + espera fixa) ou `--no-stabilize --wait "delay:3000"`; no MCP `include_invisible:true` + `wait:["delay:3000"]`. |
-| Volumetria / contexto DOM barato | `--summary` (ou MCP `return:"summary"`) — esqueleto token-lean; o JSONL completo continua persistido para diff/check por path. |
+| Volumetria / contexto DOM barato | `--output summary` (default; ou MCP `return:"summary"`) — esqueleto token-lean de 1 estado. Para diff/check, capture com `--output jsonl`; no MCP o `return:"summary"` persiste o JSONL completo automaticamente. |
 | Prova visual (olho humano) | `--screenshot out.png` (+ `--fullpage-screenshot`); no MCP `screenshot:true` → `screenshot_path` no `__sniff`. |
 | Validar reindexação de forms / atributos DOM | `--attrs name,value` (ou MCP `attributes:["name","value"]`) → mapa `attrs` por nó; o diff compara `attrs` por chave. |
 | Regressão de UI entre deploys | `sniff diff` compara os blocos `__actions` quando ambos os lados têm ações → deltas `ACTION_CHANGED` (o modal abriu fora da tela? `onscreen: false`?) + `actions_changed` no resumo. Os arrays compactos (`css_*_values`) são reidratados no diff, então o delta usa nomes de props (`appeared[0].css_after.display`). |

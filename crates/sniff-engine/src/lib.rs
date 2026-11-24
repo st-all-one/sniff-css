@@ -8,6 +8,7 @@
 pub mod declared;
 pub mod document;
 pub mod env;
+pub mod js;
 
 pub mod action;
 pub mod ax;
@@ -20,4 +21,5 @@ pub mod waiter;
 pub use output::write_output;
 pub use sniffer::{
     Phase, Sniffer, sniff_matrix_with_progress, sniff_session, sniff_session_with_progress,
+    trim_for_summary,
 };

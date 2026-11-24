@@ -180,11 +180,12 @@ async fn run_web(args: &CaptureArgs) -> Result<Captured, AppError> {
     let screenshot_path = args.screenshot.clone();
     let persist = args.persist.clone();
     let ignore_certificate_errors = args.ignore_certificate_errors;
-    let config = args
+    let mut config = args
         .clone()
         .into_config()
         .context("invalid configuration")
         .map_err(AppError::from)?;
+    sniff_engine::trim_for_summary(&mut config);
 
     let outcome = if let Some(endpoint) = &connect {
         let sniffer = Sniffer::connect(endpoint)

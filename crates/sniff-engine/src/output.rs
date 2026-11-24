@@ -19,52 +19,7 @@ use crate::extractor::SniffOutcome;
 /// the emitted `css_variables` is byte-identical across runs.
 type GlobalVars = std::collections::BTreeMap<String, String>;
 
-/// Curated property allow-list for the summary (`--summary`/`--output slim`)
-/// digest: the props that answer "what does this look like / is it laid out"
-/// without the full computed-style payload.
-const SLIM_PROPS: &[&str] = &[
-    "display",
-    "position",
-    "z-index",
-    "flex-direction",
-    "flex-wrap",
-    "gap",
-    "align-items",
-    "justify-content",
-    "width",
-    "height",
-    "min-width",
-    "min-height",
-    "max-width",
-    "max-height",
-    "padding",
-    "padding-top",
-    "padding-bottom",
-    "margin",
-    "border-radius",
-    "box-sizing",
-    "overflow-x",
-    "overflow-y",
-    "font-family",
-    "font-size",
-    "font-weight",
-    "font-style",
-    "line-height",
-    "text-align",
-    "color",
-    "background-color",
-    "opacity",
-    "visibility",
-    "transform",
-    "transform-origin",
-    "cursor",
-    "pointer-events",
-    "animation-name",
-    "animation-duration",
-    "transition-property",
-    "transition-duration",
-];
-
+use sniff_core::properties::SUMMARY_PROPS as SLIM_PROPS;
 /// Render a snapshot (with its subtree) as a JSON object.
 pub fn snapshot_to_json(
     snap: &ElementSnapshot,
@@ -529,11 +484,12 @@ pub fn write_output<W: Write>(
     // omitted from each node's `styles`, slashing the JSONL by ~80% while
     // the diff/check tools merge the defaults back in (lossless). Only for
     // the grouped tree formats where the emission is per-category.
-    let defaults = if config.compact && config.group_by_category {
-        compute_style_defaults(outcome, config)
-    } else {
-        Map::new()
-    };
+    let defaults =
+        if config.compact && config.group_by_category && config.format != OutputFormat::Summary {
+            compute_style_defaults(outcome, config)
+        } else {
+            Map::new()
+        };
 
     match config.format {
         OutputFormat::JsonLines => {

@@ -127,29 +127,40 @@ fn upgrade(args: &UpgradeArgs) -> Result<Output, AppError> {
         Some(script) => format!("sh {script}"),
         None => format!("curl --proto '=https' --tlsv1.2 -sSf {INSTALL_URL} | sh"),
     };
-    let plan = format!("VERSION={version} {command}");
+    let target = args.target.as_deref();
+    let plan = match target {
+        Some(target) => format!("VERSION={version} SNIFF_TARGET={target} {command}"),
+        None => format!("VERSION={version} {command}"),
+    };
 
     if args.dry_run {
         return Ok(Output::new(
             format!("plano (não executado):\n  {plan}\n"),
-            json!({ "dry_run": true, "version": version, "script": args.script }),
+            json!({
+                "dry_run": true, "version": version, "target": target,
+                "script": args.script,
+            }),
         ));
     }
 
-    let status = match &args.script {
-        Some(script) => std::process::Command::new("sh")
-            .arg(script)
-            .env("VERSION", version)
-            .status(),
-        None => std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!(
+    let mut command = std::process::Command::new("sh");
+    match &args.script {
+        Some(script) => {
+            command.arg(script);
+        }
+        None => {
+            command.arg("-c").arg(format!(
                 "curl --proto '=https' --tlsv1.2 -sSf {INSTALL_URL} | sh"
-            ))
-            .env("VERSION", version)
-            .status(),
+            ));
+        }
     }
-    .map_err(|error| AppError::io(format!("não foi possível rodar o instalador: {error}")))?;
+    command.env("VERSION", version);
+    if let Some(target) = target {
+        command.env("SNIFF_TARGET", target);
+    }
+    let status = command
+        .status()
+        .map_err(|error| AppError::io(format!("não foi possível rodar o instalador: {error}")))?;
 
     if !status.success() {
         return Err(AppError::io(format!(

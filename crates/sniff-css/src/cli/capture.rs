@@ -608,7 +608,6 @@ impl CaptureArgs {
             attr_preset = ?attr_preset,
             "capture v2 context resolved"
         );
-
         Ok(SniffConfig {
             url,
             selector,

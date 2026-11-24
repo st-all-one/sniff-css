@@ -129,24 +129,26 @@ Antes de fechar um ciclo de documentação ou release, **revise as dependências
   `.github/workflows/release.yml`).
 
 <!-- sniff:start -->
-<!-- sniff:version: 2 -->
+<!-- sniff:version: 3 -->
 # sniff — computed styles for LLMs
 
 `sniff capture` is the source of truth for layout/style — never guess CSS, capture it.
 Cycle: `capture` → `check` → `diff`; the AI reads only evidence/delta.
 
 - Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`
-(default `summary`; `--no-summary` = full JSONL for diff/check). Default v2 context:
+(default `summary`: single-state digest with curated CSS/contrast/aria; NO matrix,
+NO `__document`/`__env`/`__declared`, NO AX/pseudo/vars/attrs/`__actions`).
+For full v2 evidence use `--output jsonl` (legacy alias `--no-summary`):
 `__document`, `__env`, `__declared`, attrs preset and a 12-state matrix
 (3 viewports × light/dark/reduce/coarse). `--emulate K=V` reduces to one profile;
-`--minimal` removes all v2 facets.
+`--minimal` removes v2 facets in full mode; `--ax-tree` keeps AX even in summary.
 - Checks: `sniff check <SNAP>` runs bugs + modern opportunities by default.
 `--rules` = bugs only; `--modern` = opportunities only; `--no-modern` = 0.5 default;
 `--no-responsive` disables cross-state checks. Lines carry `class` (`bug`/`opportunity`),
 `guide`, typed `evidence` (`source`, optional `metric/observed/threshold`).
 - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]`, offline.
 - Batch: `--params '<json>'` / `--batch file.jsonl` (`-` = stdin);
-`sniff capture … --no-summary | sniff check -`.
+`sniff capture … --output jsonl | sniff check -`.
 - Protocol: `sniff prime` (`--long` = full); `sniff init [DIR]` (`--force` overwrites AGENTS.md).
 
 Interpret:
@@ -156,7 +158,7 @@ Interpret:
 checks need human confirmation — they are not bugs. Suppress with `--ignore CHECK` only
 after checking the documented `keepWhen`; never auto-fix from the line alone.
 - `contrast.aa:"unknown"` = manual review, not pass. Facet absent ⇒ check silent.
-Never paste full JSONL into the model — diff/check first.
+Never paste full JSONL into the model — diff/check first. Always feed them full JSONL.
 
 Common cases:
 - Self-signed TLS: `--ignore-certificate-errors` (or `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).
@@ -164,8 +166,13 @@ Common cases:
 - Action-only UI: `--click SEL` or ordered `--action "click:SEL:5000"`;
 `key:Escape` dispatches a real key event.
 - Flutter: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).
+- MCP tools: `sniff_page` (not `sniff_capture`); `return:"summary"` (default) = lean
+digest, `return:"jsonl"` = full v2 snapshot, `return:"reference"` = path handle.
+- Upgrade: `sniff self upgrade --target TRIPLE` forces a published artifact (gnu/musl);
+auto-detect uses glibc→gnu, Alpine/musl→musl.
 - Persist: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.
 
 Contract: stdout = data (JSONL), stderr = logs; `--json` = {success, command, data?, error{code,message,retryable}, warnings?}.
 Exit: 2 invalid, 3 not_found, 5 io, 70 internal.
 <!-- sniff:end -->
+

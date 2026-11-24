@@ -168,16 +168,20 @@ jq -e 'has("status") and has("score_change") and (.changes_evaluated|length)>0' 
 Exponha `sniff-mcp` como servidor MCP (stdio) para agentes. O servidor
 mantém um Chrome headless compartilhado e oferece 6 tools; os defaults já são
 os otimizados (`compact`, `custom_props`, `stabilize`, `contrast`,
-`include_ax`). Por padrão cada `sniff_page` **persiste** o snapshot em
-`sniff/[domain]/[UTC]-[path]-[selector].jsonl` e responde o **digest
-summary**; `return:"reference"` devolve só a linha `{"__sniff": {...}}`
-(~200 tokens) e `return:"jsonl"` o JSONL completo inline (`persist:false`
-desativa a gravação; `return:"reference"` exige persist). Durante a execução
-envia `notifications/progress` por fase.
+`include_ax`). Por padrão cada `sniff_page` **persiste o snapshot v2 completo**
+em `sniff/[domain]/[UTC]-[path]-[selector].jsonl` e responde o **digest
+summary** (`return:"summary"`); `return:"reference"` devolve só a linha
+`{"__sniff": {...}}` (~200 tokens) e `return:"jsonl"` o JSONL completo inline
+(`persist:false` desativa a gravação; `return:"reference"` exige persist).
+Diferente da CLI, o MCP **não** corta a matriz quando responde summary: a
+captura completa acontece e só a resposta é enxuta. **Nunca use
+`format:"summary"`**: isso persiste um digest sem `__meta.matrix`/facets e
+faz `check`/`diff` silenciarem. Use `format:"jsonl"` (default). Durante a
+execução envia `notifications/progress` por fase.
 
 | Tool | Uso |
 |---|---|
-| `sniff_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format, stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**). Para elementos que só existem após uma ação, passe `actions` (array **ordenado** de `{type, selector, text?, files?, timeout_ms?, settle_ms?}`); upload via `{"type":"upload","selector":"#file","files":["/tmp/x.png"]}` roda handlers reais. Com `actions`, o snapshot carrega a linha `__actions` (default ON; `effects:false` omite). |
+| `sniff_page` | Captura (url, selector, depth, categories, compact, custom_props, stable_key, **attributes**, pseudo, wait, **actions**, viewport, format (use `jsonl`), stabilize, contrast, include_ax, ax_tree, **effects**, **effects_limit**, **include_invisible**, **exclude**, **min_width**, **min_height**, **screenshot**, **screenshot_full_page**, full, persist, return, **headers**, **storage_state**, **save_storage_state**, **viewport_matrix**, **attrs_preset**, **emulate**). Matrix padrão: 3 viewports × 4 perfis; `emulate:["prefers-color-scheme=dark"]` reduz a 1 perfil. `return:"summary"` = digest enxuto, `return:"jsonl"` = full v2 inline, `return:"reference"` = handle por path. Para elementos pós-ação, `actions` ordenados; upload roda handlers reais; `__actions` vem por padrão (`effects:false` omite). |
 | `sniff_flutter_page` | Captura a árvore de widgets de um app Flutter/Dart nativo (emulador/device, build **debug**) no **mesmo modelo JSONL** — (device, avd, project, target, attach, depth, selector, persist, return, screenshot, **viewport**, **actions**). `viewport` (`WxH`) aplica `adb shell wm size` e restaura; `actions` (mesmos `ActionInput` do web: `{type, selector, text?, timeout_ms?, settle_ms?}`) dirigem o app pela extensão Flutter Driver antes do freeze/extract — `type:"click"|"type"`; `hover`/`upload` falham (web-only) e exigem `enableFlutterDriverExtension()` no app. Retorna o `__sniff` handle por padrão; os mesmos `sniff_diff`/`sniff_check` funcionam por path. `return:"jsonl"` traz o snapshot inline. |
 | `sniff_snapshots` | Lista os snapshots persistidos (domain/target/path/created_at/size), novos primeiro; filtros `domain`, `target`, `limit`. Use para escolher o par base/head. |
 | `sniff_diff` | Diff determinístico — **base_path/head_path** (o modo otimizado) ou base_jsonl/head_jsonl, tolerance, ignore_props, ignore_structural → delta + `__diff_summary`. Quando os dois lados carregam `__actions`, eles também são comparados (`ACTION_CHANGED`/`ACTION_ADDED`/`ACTION_REMOVED` + `actions_changed`). |
@@ -191,12 +195,14 @@ aplicados a **todo** request; `headers` por chamada sobrescreve por chave),
 relativa, ex. `cms/dashboard` → `http://localhost:10011/cms/dashboard`).
 
 > **Fluxo low-token (recomendado):** cada captura salva no disco. No CLI
-> (preferido quando há shell), `sniff ... --no-summary --persist` grava o
-> snapshot completo e emite o digest summary; `sniff diff <base> <head>` e
-> `sniff check <head>` leem os arquivos. No MCP, cada `sniff_page`
-> salva e responde o summary; depois `sniff_diff base_path/head_path` e
+> (preferido quando há shell), `sniff ... --output summary --persist` emite o
+> digest enxuto (padrão); `sniff ... --output jsonl --persist` grava/emite o
+> snapshot completo necessário para `diff`/`check` (alias `--no-summary`).
+> No MCP, `sniff_page` responde o summary por default (`return:"summary"`),
+> persiste o JSONL completo e `sniff_diff base_path/head_path` /
 > `sniff_check path` leem os arquivos — o snapshot completo **nunca** entra
-> no contexto do LLM (nem no retorno, nem nos argumentos).
+> no contexto do LLM (nem no retorno, nem nos argumentos). Não use
+> `format:"summary"` no MCP: isso persiste um digest sem facets.
 
 Recursos embutidos: `sniff://prompts/eval` (prompt),
 `sniff://schemas/eval` (schema) e `sniff://guides/golden` — leia-os em vez

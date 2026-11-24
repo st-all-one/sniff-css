@@ -211,7 +211,10 @@ pub struct SniffPageRequest {
     /// Emulated viewport as `WxH`.
     #[serde(default = "default_viewport")]
     pub viewport: String,
-    /// Output format: `jsonl` (tree), `jsonl-flat`, or `json`.
+    /// Format for the PERSISTED snapshot and return="jsonl": `jsonl` (tree,
+    /// default), `jsonl-flat`, or `json`. NEVER use `summary`/`slim` here:
+    /// that persists a faceless digest and offline check/diff comparisons
+    /// silently skip. Use the default `return:"summary"` for a lean response.
     #[serde(default = "default_format")]
     pub format: String,
     /// Freeze animations/transitions before capture for deterministic
@@ -266,12 +269,12 @@ pub struct SniffPageRequest {
     /// to `true` so diff/check can run on paths instead of inline JSONL.
     #[serde(default = "default_true")]
     pub persist: bool,
-    /// What to return: `summary` (default) returns the token-lean per-node
-    /// digest (structural skeleton + curated css subset + contrast + aria)
-    /// while still persisting the full snapshot for later diff/check by
-    /// path; `reference` returns only a tiny `{"__sniff": {path, url,
-    /// selector, nodes}}` line — the most token-efficient capture handle;
-    /// `jsonl` returns the full snapshot inline.
+    /// What to return: `summary` (default) = token-lean per-node digest with
+    /// curated 42-prop css + contrast + aria; it EXCLUDES matrix/facets/pseudo/
+    /// ax/attrs/variables/effects from the response, but the FULL v2 JSONL is
+    /// still persisted for diff/check by path. `reference` = tiny __sniff
+    /// handle (requires persist:true). `jsonl` = full schema-2 snapshot inline
+    /// (use only when you truly need matrix/facets in context; prefer paths).
     #[serde(default = "default_return_mode", rename = "return")]
     pub return_mode: String,
     /// Extra HTTP headers applied to every request of this session (e.g.
@@ -290,8 +293,11 @@ pub struct SniffPageRequest {
     /// later captures to keep the login alive across browser restarts.
     #[serde(default)]
     pub save_storage_state: Option<String>,
-    /// Additional matrix viewports as `WxH,WxH`. Each entry becomes one
-    /// capture state on top of the base `viewport` (offline matrix checks).
+    /// Additional matrix viewports as `WxH,WxH` (default 360x800,768x1024).
+    /// Each entry becomes one capture state on top of base `viewport` and the
+    /// four emulation profiles (light, dark, reduce, coarse) => 12 states.
+    /// Together with `emulate` (K=V, one profile) this controls cross-state
+    /// checks; `return:"summary"` still persists the whole matrix to disk.
     #[serde(default)]
     pub viewport_matrix: Option<String>,
     /// Curated per-node DOM attribute set: `none|forms|media|platform|modern|all`.
@@ -299,7 +305,8 @@ pub struct SniffPageRequest {
     #[serde(default)]
     pub attrs_preset: Option<String>,
     /// Emulated media features as `K=V` (e.g. `prefers-color-scheme=dark`).
-    /// Repeated keys: last wins.
+    /// Repeated keys: last wins; setting any feature reduces the matrix to
+    /// one profile.
     #[serde(default)]
     pub emulate: Vec<String>,
 }
@@ -478,41 +485,33 @@ impl SniffMcpServer {
     /// Capture computed styles from a live page as JSONL.
     #[tool(
         name = "sniff_page",
-        description = "Capture the real computed CSS styles of elements on a page. By default the snapshot \
-                        is persisted to disk as sniff/[domain]/[UTC]-[path]-[selector].jsonl and the \
-                        tool returns the token-lean per-node summary digest (structural skeleton + \
-                        curated css subset + contrast + aria) — pass return=\"reference\" for only a tiny \
-                        __sniff handle (path, url, selector, node count), or return=\"jsonl\" for the full \
-                        snapshot inline. Feed two persisted captures to sniff_diff via \
-                        base_path/head_path (or sniff_check via path) so the full snapshot never \
-                        enters the LLM context. Each node carries readable fields (tag, \
-                        selector, path, rect, metrics, styles grouped by category) plus \
-                        is_user_noticeable and computed_style_hash. The AI-optimized defaults are \
-                         already ON: compact (dedup, ~55% fewer tokens), custom_props (CSS variables), \
-                         stabilize (freeze animations for deterministic snapshots), contrast (measured \
-                         WCAG ratio) and include_ax (browser accessibility node). Pass full=true to \
-                         capture full-fidelity output (disables all five at once), or set any flag to \
-                         false to opt out individually. Add stable_key (e.g. data-testid) for selectors \
-                         that stay matchable across deploys. For elements that only exist after an \
-                         interaction, pass actions=[{type:\"click\", selector:\"#open-modal\"}, ...] \
-                         (click/hover/type/upload, ordered — chains like modal → mini-modal → input just \
-                         list each step's selector) to reveal modals, dropdowns, hover menus and \
-                         type-ahead panels before the wait pipeline runs and capture happens; \
-                         upload actions ({type:\"upload\", selector:\"#file\", files:[\"/tmp/x.png\"]}) \
-                         attach local files to a file input (hidden inputs ok) and run the real \
-                         upload handler. When actions are set, the snapshot also carries a __actions \
-                         UI-effect map (default ON; effects:false to omit): per action, what \
-                         appeared/disappeared/changed and where — rect, on-screen flag, out-of-view \
-                         offset, distance from the action point — plus a no_effect marker when the \
-                         interaction changed nothing. Extra \
-                         evidence: attributes=[\"name\"] captures verbatim DOM attributes per node under \
-                         attrs (e.g. form field reindexing); include_invisible=true (+ wait:[\"delay:...\"]) \
-                         captures content hidden by scroll-reveal animations (WOW.js); screenshot=true \
-                         (+ screenshot_full_page) persists a PNG beside the snapshot and adds \
-                         screenshot_path to the __sniff reference. For restricted areas pass \
-                         headers={\"X-CMS-AI-Token\":\"<token>\"} (applied to every request; server \
-                         SNIFF_DEFAULT_HEADERS merged per-key) and storage_state/save_storage_state \
-                         to round-trip a login (cookies + localStorage) across restarts."
+        description = "Capture the real computed CSS styles of elements on a page. There is NO MCP tool \
+                        named sniff_capture: use sniff_page. By default the FULL schema-2 snapshot is \
+                        persisted as sniff/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns a \
+                        token-lean digest (return=\"summary\"): per node {id,parent_id,tag,selector,path,\
+                        depth,rect,visible,grade,contrast{ratio,aa,aaa},aria{role,name,focusable},css} \
+                        plus a leading __meta{style_defaults,viewport}; `css` is a curated 42-prop \
+                        allow-list. The RESPONSE deliberately excludes the 12-state matrix, \
+                        __document/__env/__declared, ax, pseudo, attrs, css_variables and __actions — \
+                        but those facets ARE captured and persisted for later diff/check by path. \
+                        return=\"reference\" gives only a tiny __sniff handle (path,url,selector,nodes); \
+                        return=\"jsonl\" gives the full v2 snapshot inline (use only when you truly need \
+                        matrix/facets in context). NEVER set format=\"summary\": it persists a faceless \
+                        digest and offline checks silently skip — keep format=\"jsonl\" (default). \
+                        Defaults: persist=true, compact=true, custom_props=true, stabilize=true, \
+                        contrast=true, include_ax=true, effects=true, full=false, viewport=1366x768, \
+                        categories=all, depth=0, pseudo=[::before,::after], attrs_preset=modern, \
+                        viewport_matrix=360x800,768x1024 x 4 profiles (light/dark/reduce/coarse) = \
+                        12 states. Pass emulate=[\"prefers-color-scheme=dark\"] for one profile; \
+                        attrs_preset=none|forms|media|platform|modern|all picks the curated DOM attrs; \
+                        viewport_matrix changes matrix viewports. full=true disables compact, \
+                        custom_props, stabilize, contrast and include_ax at once. Add stable_key \
+                        (e.g. data-testid) for matchable selectors. For action-only UI pass ordered \
+                        actions=[{type:\"click\",selector:\"#open-modal\"}, ...] (click/hover/type/upload); \
+                        the snapshot then carries a __actions UI-effect map (effects:false omits). \
+                        attributes=[\"name\"] captures verbatim DOM attrs; include_invisible=true \
+                        (+ wait:[\"delay:...\"]) catches scroll-reveal content; screenshot=true persists \
+                        a PNG. For restricted areas pass headers or storage_state/save_storage_state."
     )]
     pub async fn sniff_css_page(
         &self,
@@ -893,17 +892,14 @@ impl SniffMcpServer {
     /// Deterministically diff two JSONL snapshots.
     #[tool(
         name = "sniff_diff",
-        description = "Deterministically diff two sniff_page snapshots and return only what changed: \
-                       CHANGED nodes with before/after values per property (styles, pseudo, aria, \
-                       contrast, ax, rect, metrics, is_user_noticeable), ADDED/REMOVED nodes with \
-                       their full snapshot, plus a final __diff_summary line. When both snapshots carry \
-                       a __actions UI-effect map (captures with actions), it is also compared: \
-                       ACTION_CHANGED/ACTION_ADDED/ACTION_REMOVED lines surface interaction regressions \
-                       (effect, appeared rect/onscreen/out-of-view, distance from the action point) and \
-                       actions_changed counts them in the summary. Snapshots are best \
-                       passed as persisted base_path/head_path (from a sniff_page __sniff reference) \
-                       so the full JSONL stays out of the tool call; base_jsonl/head_jsonl inline \
-                       strings still work. tolerance ignores subpixel jitter in the same unit; \
+        description = "Deterministically diff two FULL sniff_page snapshots (persisted base_path/head_path \
+                       preferred; inline jsonl works) and return only what changed: CHANGED nodes with \
+                       before/after per property (styles, pseudo, aria, contrast, ax, rect, metrics), \
+                       ADDED/REMOVED nodes, plus __diff_summary. Both sides must come from the same full \
+                       capture mode — never mix summary and full. When both carry __actions, interaction \
+                       regressions appear as ACTION_CHANGED/ADDED/REMOVED with rect/on-screen/out-of-view \
+                       context and actions_changed in the summary. Never set format=summary when capturing: \
+                       it persists a faceless digest diff cannot compare. tolerance ignores subpixel jitter; \
                        ignore_props skips volatile props (e.g. transform); ignore_structural \
                        suppresses ADDED/REMOVED for variable-count lists. Use this delta as the \
                        input to your evaluation prompt instead of the full snapshots."
@@ -959,12 +955,14 @@ impl SniffMcpServer {
     /// Run deterministic offline checks over a snapshot.
     #[tool(
         name = "sniff_check",
-        description = "Deterministic offline UI checks over a sniff_page snapshot: uniformity \
-                       (finds the odd sibling instance against the group norm — the 'odd card \
-                       out') and derived rules (measured WCAG contrast, 24x24 target size, visible \
-                       focus indicator, hidden focusables, empty alt on large images). Prefer a \
-                       persisted snapshot path (from a sniff_page __sniff reference); inline jsonl \
-                       still works. No LLM involved: use the results as evidence in the eval prompt."
+        description = "Deterministic offline UI checks over a FULL sniff_page snapshot (persisted path \
+                       preferred; inline jsonl works): uniformity (odd card out), bug rules (WCAG \
+                       contrast, 24x24 targets, visible focus, hidden focusables, empty alt, occluded \
+                       = element covered by another via rect + z-index/DOM order) and facet-aware modern \
+                       opportunities (class:opportunity with evidence.source + guide). Defaults: \
+                       uniform=true, rules=true, modern=true, tolerance=0.5. Facet-dependent checks \
+                       (__document/__env/__declared/__meta.matrix) silently skip on a summary capture \
+                       — always run against full JSONL persisted with format=jsonl."
     )]
     pub async fn sniff_css_check(
         &self,

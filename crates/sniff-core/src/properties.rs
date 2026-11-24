@@ -160,6 +160,53 @@ pub fn properties_for(categories: &[StyleCategory], custom: &[String]) -> Vec<St
     out
 }
 
+/// Curated property allow-list for `sniff capture --output summary`: the
+/// values the digest actually emits, shared with the extractor so a summary
+/// capture does not ask the browser for ~370 properties it will discard.
+/// Keep in sync with the serializer's allow-list in `sniff-engine`.
+pub const SUMMARY_PROPS: &[&str] = &[
+    "display",
+    "position",
+    "z-index",
+    "flex-direction",
+    "flex-wrap",
+    "gap",
+    "align-items",
+    "justify-content",
+    "width",
+    "height",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "padding",
+    "padding-top",
+    "padding-bottom",
+    "margin",
+    "border-radius",
+    "box-sizing",
+    "overflow-x",
+    "overflow-y",
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "line-height",
+    "text-align",
+    "color",
+    "background-color",
+    "opacity",
+    "visibility",
+    "transform",
+    "transform-origin",
+    "cursor",
+    "pointer-events",
+    "animation-name",
+    "animation-duration",
+    "transition-property",
+    "transition-duration",
+];
+
 const BOX_MODEL: &[&str] = &[
     "width",
     "min-width",

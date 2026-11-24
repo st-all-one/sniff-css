@@ -5,6 +5,62 @@ versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
 
+## [0.6.2] — 2026-11-23
+
+**Release de correção e clareza de protocolo.** O snapshot completo continua
+em `schema: 2`; o que muda é o default da CLI (agora um digest enxuto) e a
+forma como agentes e o instalador recebem essa informação.
+
+### Added
+
+- **`sniff self upgrade --target TRIPLE`** força o artefato publicado,
+  equivalente a `SNIFF_TARGET` no instalador. A detecção automática agora
+  escolhe `*-unknown-linux-gnu` em glibc (Fedora, Ubuntu, Debian…) e
+  `*-unknown-linux-musl` apenas em Alpine/musl — antes Fedora x86_64 recebia
+  o binário musl errado.
+- **Protocolo v3** em `sniff init`/`AGENTS.md` e `sniff prime`: explicita os
+  dois modos de captura, o nome real da tool MCP (`sniff_page`), o campo
+  `format:"jsonl"` e a exigência de JSONL completo para `check`/`diff`.
+- **`--ax-tree`** preserva a subárvore AX, inclusive no `summary`, para
+  auditorias de acessibilidade que precisam da árvore completa.
+
+### Changed
+
+- **`--output summary` (default) emite só 1 estado**: esqueleto estrutural,
+  42 propriedades CSS curadas, `contrast` e `aria` por nó. Não emite matriz,
+  `__document`/`__env`/`__declared`, AX completa, pseudo-elementos,
+  variáveis, `attrs` do preset ou `__actions`. Antes essas fatias eram
+  capturadas e descartadas. Captura real caiu de ~16–29 s / 20,8 KB para
+  ~3,15 s / 2,3 KB (20 nós). `--output jsonl` (alias legado `--no-summary`)
+  mantém o contrato v2 completo: 12 estados, fatias e `__meta.schema=2`.
+- **`check`/`diff` exigem JSONL completo**; nunca rode sobre o `summary`.
+  No MCP, `return:"summary"` devolve o digest na resposta mas persiste o
+  JSONL completo; `return:"jsonl"`/`"reference"` são as alternativas.
+- **Documentação e superfícies IA alinhadas**: `docs/usage.md`,
+  `docs/cli-surface.md`, `docs/ai-usage.md`, `docs/golden-run.md`,
+  `README.md`, `SKILL.md`, `llms.txt` e as descrições das tools MCP agora
+  descrevem o modo padrão, o escape hatch e as flags de recuperação
+  (`--emulate`, `--minimal`, `--ax-tree`).
+- **Versionamento 0.6.2**: a tag `v0.6.1` já estava publicada quando o
+  protocolo v3 e as correções de summary/CI foram concluídos; por isso este
+  trabalho é publicado como `v0.6.2`. O workspace, o lockfile, o README, a
+  SKILL e o guia de release passam a apontar para a nova versão. O workflow
+  de release valida a tag contra a versão do workspace antes de compilar.
+
+### Fixed
+
+- **Schema MCP**: `emulate` ganhou `#[serde(default)]`; chamadas mínimas de
+  `sniff_page` não falhavam mais com `missing field emulate`.
+- **JS injetado modularizado** em `crates/sniff-engine/js/*.js`, composto por
+  `concat!(include_str!…)` com teste de paridade byte a byte — o bundle
+  injetado é idêntico ao source versionado.
+
+## [0.6.1] — 2026-11-18
+
+Release publicada anteriormente (`ca27166`), com o runner macOS `macos-15`
+e os checks de sumário em verde. A tag já existe no GitHub, com 13 assets;
+as mudanças de protocolo/CI descritas na 0.6.2 vieram depois dela.
+
 ## [0.6.0] — 2026-11-17
 
 **Contrato v2 — oportunidades modernas e fatias capturadas com intenção.**
@@ -73,6 +129,20 @@ de quebra e da uniformidade.
 - Release: runner macOS do matrix trocado de `macos-14` (retirado em
   2026-11-02, causa de `configuration ... is not supported`) para `macos-15`,
   imagem arm64 ainda suportada e pinada.
+- Instalador: Linux agora detecta libc (gnu por padrão; musl só em Alpine/
+  musl), corrigindo a escolha de `x86_64-unknown-linux-musl` em Fedora x86_64;
+  `sniff self upgrade --target TRIPLE` força o artefato.
+- Performance: `--output summary` (default) deixou de pagar matriz de 12
+  estados, `__declared`, AX por nó, pseudo-elementos, variáveis, attrs e
+  ~330 propriedades CSS descartadas pelo serializador; JS injetado dividido em
+  módulos sourceados por `include_str!` com teste de paridade byte a byte.
+  Para recuperar o contrato v2 completo use `--output jsonl` (alias legado
+  `--no-summary`); `--emulate K=V` reduz a um perfil e `--ax-tree` preserva AX
+  mesmo no summary. `sniff prime`/`sniff init` (protocolo v3), `SKILL.md`,
+  `llms.txt`, `docs/ai-usage.md` e as descrições das tools MCP passam a
+  documentar explicitamente os dois modos. No MCP mantenha `format:"jsonl"`
+  (padrão) e escolha `return:"summary"|"jsonl"|"reference"` — `format:"summary"`
+  persiste um digest sem facets e faz check/diff silenciarem.
 
 ## [0.5.1] — 2026-10-15
 

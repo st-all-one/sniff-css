@@ -15,7 +15,7 @@ pub const MARKER_END: &str = "<!-- sniff:end -->";
 /// Prefix of the protocol version marker.
 pub const VERSION_PREFIX: &str = "<!-- sniff:version:";
 /// Protocol version embedded in the block.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// File the block is written to.
 pub const FILE: &str = "AGENTS.md";
 
@@ -51,17 +51,19 @@ pub fn protocol_block() -> String {
          Cycle: `capture` → `check` → `diff`; the AI reads only evidence/delta.\n\
          \n\
          - Capture: `sniff capture <URL> -s <CSS> [--depth N] [--output summary|jsonl|json]`\n\
-           (default `summary`; `--no-summary` = full JSONL for diff/check). Default v2 context:\n\
+           (default `summary`: single-state digest with curated CSS/contrast/aria; NO matrix,\n\
+           NO `__document`/`__env`/`__declared`, NO AX/pseudo/vars/attrs/`__actions`).\n\
+           For full v2 evidence use `--output jsonl` (legacy alias `--no-summary`):\n\
            `__document`, `__env`, `__declared`, attrs preset and a 12-state matrix\n\
            (3 viewports × light/dark/reduce/coarse). `--emulate K=V` reduces to one profile;\n\
-           `--minimal` removes all v2 facets.\n\
+           `--minimal` removes v2 facets in full mode; `--ax-tree` keeps AX even in summary.\n\
          - Checks: `sniff check <SNAP>` runs bugs + modern opportunities by default.\n\
            `--rules` = bugs only; `--modern` = opportunities only; `--no-modern` = 0.5 default;\n\
            `--no-responsive` disables cross-state checks. Lines carry `class` (`bug`/`opportunity`),\n\
            `guide`, typed `evidence` (`source`, optional `metric/observed/threshold`).\n\
          - Diff: `sniff diff <BASE> <HEAD> [--tolerance 0.5] [--stats-only]`, offline.\n\
          - Batch: `--params '<json>'` / `--batch file.jsonl` (`-` = stdin);\n\
-           `sniff capture … --no-summary | sniff check -`.\n\
+           `sniff capture … --output jsonl | sniff check -`.\n\
          - Protocol: `sniff prime` (`--long` = full); `sniff init [DIR]` (`--force` overwrites AGENTS.md).\n\
          \n\
          Interpret:\n\
@@ -71,7 +73,7 @@ pub fn protocol_block() -> String {
            checks need human confirmation — they are not bugs. Suppress with `--ignore CHECK` only\n\
            after checking the documented `keepWhen`; never auto-fix from the line alone.\n\
          - `contrast.aa:\"unknown\"` = manual review, not pass. Facet absent ⇒ check silent.\n\
-           Never paste full JSONL into the model — diff/check first.\n\
+           Never paste full JSONL into the model — diff/check first. Always feed them full JSONL.\n\
          \n\
          Common cases:\n\
          - Self-signed TLS: `--ignore-certificate-errors` (or `SNIFF_IGNORE_CERTIFICATE_ERRORS=1`).\n\
@@ -79,6 +81,10 @@ pub fn protocol_block() -> String {
          - Action-only UI: `--click SEL` or ordered `--action \"click:SEL:5000\"`;\n\
            `key:Escape` dispatches a real key event.\n\
          - Flutter: `flutter://<device>` as `<URL>` + `--project DIR --depth N` (debug build only).\n\
+         - MCP tools: `sniff_page` (not `sniff_capture`); `return:\"summary\"` (default) = lean\n\
+           digest, `return:\"jsonl\"` = full v2 snapshot, `return:\"reference\"` = path handle.\n\
+         - Upgrade: `sniff self upgrade --target TRIPLE` forces a published artifact (gnu/musl);\n\
+           auto-detect uses glibc→gnu, Alpine/musl→musl.\n\
          - Persist: `--persist` writes `sniff/[domain]/[UTC]-[path]-[selector].jsonl`.\n\
          \n\
          Contract: stdout = data (JSONL), stderr = logs; `--json` = \

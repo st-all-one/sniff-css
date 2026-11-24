@@ -164,6 +164,30 @@ impl Sniffer {
     }
 }
 
+/// Strip work that `OutputFormat::Summary` never emits. The summary is a
+/// single-state structural digest: matrix states, CSSOM origins, AX facets
+/// and pseudo-element styles are paid in full today but discarded at write
+/// time. Explicit toggles (e.g. `--ax-tree`) still win.
+pub fn trim_for_summary(config: &mut SniffConfig) {
+    if config.output.format != sniff_core::OutputFormat::Summary {
+        return;
+    }
+    config.matrix_viewports.clear();
+    config.matrix_emulations.clear();
+    config.declared_facet = false;
+    config.pseudo_elements.clear();
+    if !config.ax_tree {
+        config.output.include_ax = false;
+    }
+    config.include_custom_properties = false;
+    config.effects = false;
+    config.attr_preset = sniff_core::AttrPreset::None;
+    // `OutputFormat::Summary` never calls `emit_v2_facet_lines`, so these
+    // facets are paid for but discarded — skip them too.
+    config.document_facet = false;
+    config.env_facet = false;
+}
+
 /// Run the pipeline on an existing session.
 pub async fn sniff_session(
     session: &CdpSession,
@@ -519,4 +543,45 @@ fn chain_error(index: usize, failed: &Action, chain: &[Action], cause: &SniffErr
             prior
         },
     ))
+}
+
+#[cfg(test)]
+mod summary_trim_tests {
+    use super::*;
+    use sniff_core::OutputFormat;
+
+    #[test]
+    fn summary_trim_drops_facets_the_digest_never_emits() {
+        let mut cfg = SniffConfig::default();
+        cfg.output.format = OutputFormat::Summary;
+        cfg.ax_tree = false;
+        trim_for_summary(&mut cfg);
+        assert!(cfg.matrix_viewports.is_empty());
+        assert!(cfg.matrix_emulations.is_empty());
+        assert!(!cfg.declared_facet);
+        assert!(!cfg.output.include_ax);
+        assert!(!cfg.document_facet);
+        assert!(!cfg.env_facet);
+        assert!(!cfg.include_custom_properties);
+        assert!(!cfg.effects);
+        assert_eq!(cfg.attr_preset, sniff_core::AttrPreset::None);
+    }
+
+    #[test]
+    fn summary_trim_keeps_ax_tree_override_and_ignores_full_formats() {
+        let mut cfg = SniffConfig::default();
+        cfg.output.format = OutputFormat::Summary;
+        cfg.ax_tree = true;
+        trim_for_summary(&mut cfg);
+        assert!(cfg.output.include_ax, "--ax-tree must win over the trim");
+
+        let mut full = SniffConfig::default();
+        full.output.format = OutputFormat::JsonLines;
+        let before = full.clone();
+        trim_for_summary(&mut full);
+        assert_eq!(
+            full, before,
+            "full JSONL must keep the complete v2 contract"
+        );
+    }
 }

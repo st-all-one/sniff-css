@@ -29,34 +29,37 @@ sniff capture → sniff check → sniff diff → AI interprets only evidence/del
 ```
 
 `sniff init` writes the managed protocol into the project's `AGENTS.md`;
-`sniff prime` prints the same protocol (static, `--long` for the full contract).
+`sniff prime` prints a complementary static protocol (`--long` for full contract).
 Everything before the AI is deterministic and offline after capture.
 
 ### Defaults that matter
 
 | Area | Default | Escape hatch |
 |---|---|---|
-| Output | `summary` digest (token-lean) | `--no-summary` → full JSONL for diff/check/jq |
-| v2 context | `__document`, `__env`, `__declared`, attrs preset `modern` | `--no-document`, `--no-env`, `--no-attrs`, `--minimal` |
-| Pseudo styles | `::before`,`::after` | `--pseudo ...` |
-| Matrix | 3 viewports (1366×768, 360×800, 768×1024) × 4 profiles (light, dark, reduce, coarse) = **12 states** | `--emulate K=V` → one profile; `--minimal` → no matrix |
-| Actions map | `__actions` emitted even when empty | `--no-effects` |
+| Output | `summary` digest (token-lean, 1 state, curated 42-prop CSS + contrast + aria) | `--output jsonl` (legacy `--no-summary`) → full JSONL for diff/check/jq |
+| v2 context (`--output jsonl` only) | `__document`, `__env`, `__declared`, attrs preset `modern`, pseudo `::before,::after` | `--no-document`, `--no-env`, `--no-attrs`, `--minimal`; `--ax-tree` keeps AX even in summary |
+| Matrix (`--output jsonl` only) | 3 viewports (1366×768, 360×800, 768×1024) × 4 profiles (light, dark, reduce, coarse) = **12 states** | `--emulate K=V` → one profile; `--minimal` → no matrix |
+| Actions map (`--output jsonl` only) | `__actions` emitted even when empty | `--no-effects` |
 | `sniff check` | uniformity + bug rules + modern opportunities, `--responsive` on | `--rules`, `--modern`, `--no-modern`, `--no-responsive` |
-| Node checks | first matrix state only; cross-state checks use all states | — |
+| Node checks | first matrix state only; cross-state checks use all states (full JSONL) | — |
 | Stabilization | animations frozen, reduce emulated unless overridden | `--no-stabilize`, `--emulate prefers-reduced-motion=no-preference` |
 | Profile | opportunities are `warn` | `--profile strict` → `fail` for CI |
 
-Cost note: the 12-state capture is intentionally heavier (~20–30 s, hundreds of
-KB). Use `--emulate` or `--minimal` when the question does not need the matrix.
+**Capture modes.** `--output summary` (default) is a single-state digest:
+`css` (42 curated props), `contrast`, `aria`, structure. It deliberately drops
+the 12-state matrix, `__declared`, per-node `ax`, pseudo styles, variables,
+attrs preset and `__actions`. Ask for those explicitly with `--output jsonl`.
+Cost note: the 12-state full JSONL is intentionally heavier (~20–30 s, hundreds
+of KB); use `--emulate` or stay on default summary when the question does not need it.
 
 ### Quick reference
 
 | Action | Command |
 |---|---|
 | Capture (default digest) | `sniff capture URL -s SEL --depth N` |
-| Full snapshot (diff/check input) | `sniff capture URL -s SEL --depth N --no-summary` |
-| Full-fidelity capture | `sniff capture URL -s SEL --depth N --no-summary --full` |
-| Accessibility subtree | `sniff capture URL -s SEL --no-summary --ax-tree` |
+| Full snapshot (diff/check input) | `sniff capture URL -s SEL --depth N --output jsonl` |
+| Full-fidelity capture | `sniff capture URL -s SEL --depth N --output jsonl --full` |
+| Accessibility subtree | `sniff capture URL -s SEL --output jsonl --ax-tree` |
 | Reveal action-only UI | `sniff capture URL -s ".modal" --click "#open"` |
 | Ordered mixed flow | `sniff capture URL -s SEL --action "click:#open:5000" --action "type:#q:shoes"` |
 | Real key event | `sniff capture URL -s "dialog" --action "key:Escape"` |
@@ -66,7 +69,7 @@ KB). Use `--emulate` or `--minimal` when the question does not need the matrix.
 | Diff / CI scale | `sniff diff base.jsonl head.jsonl --tolerance 0.5` · `--stats-only` |
 | Checks | `sniff check snap.jsonl` · `--rules` · `--modern` · `--no-modern` |
 | One structured call / batch | `--params '<json>'` · `--batch file.jsonl` (`-` = stdin) |
-| Piping | `sniff capture URL -s SEL --no-summary \| sniff check -` |
+| Piping | `sniff capture URL -s SEL --output jsonl \| sniff check -` |
 | Persist / list | `--persist [PATH]` · `sniff snapshots` |
 | Onboard / protocol | `sniff init [DIR]` (`--force` overwrites `AGENTS.md`) · `sniff prime [--long]` |
 | Flutter (debug build) | `sniff capture flutter://emulator-5554 --project DIR --depth N` |
@@ -178,13 +181,19 @@ MCP team defaults: `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-# pinned: ... | VERSION=v0.6.0 sh
+# pinned: ... | VERSION=v0.6.2 sh
 sniff init          # upsert managed AGENTS.md block
 sniff init --force  # overwrite AGENTS.md (destructive)
 ```
 
 Binaries: Linux glibc/musl (x86_64/aarch64), macOS (arm64), Windows; checksums
 per GitHub Release; installed to `~/.local/bin` (legacy `sniffCSS*` removed).
+Linux target follows libc (gnu on glibc, musl only on musl hosts); override with
+`SNIFF_TARGET` or `sniff self upgrade --target TRIPLE`.
+MCP: `sniff_page` tool (not `sniff_capture`); default `return:"summary"` is a
+lean response while the full snapshot is persisted; `return:"jsonl"` for full
+v2 inline, `return:"reference"` for a path handle. Never set `format:"summary"`.
+macOS release binary is built on the `macos-15` runner.
 Docker: `stallonels/sniffcss` ([docs/docker.md](docs/docker.md)).
 Release trigger: `git tag vX.Y.Z && git push origin vX.Y.Z` →
 `.github/workflows/release.yml`. MSRV 1.99. History: [`CHANGELOG.md`](CHANGELOG.md).

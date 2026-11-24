@@ -32,7 +32,8 @@ cargo test --workspace                                       # testes (doc-tests
 cargo deny check                                             # supply chain
 ```
 
-O CI (quando habilitado) roda os mesmos comandos.
+O CI roda os mesmos comandos (mais `typos`, Miri e fuzz — ver
+[`release.md`](release.md) §2–3). A toolchain é 1.99; Miri/fuzz usam nightly.
 
 ## 4. Formatação — `rustfmt.toml`
 

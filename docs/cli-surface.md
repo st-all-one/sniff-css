@@ -63,10 +63,10 @@ O conteúdo de `data` é aditivo:
 - `warnings[]` — capturas com matriz (`N>1` estados) avisam que o snapshot
   contém blocos `__meta.matrix`; o campo é o mesmo canal de avisos do envelope.
 - `__document` / `__env` / `__declared` / `__meta.matrix` e `__meta.schema=2`
-  aparecem como linhas/payload no payload de `capture` e são aceitos por
-  `diff`/`check` (schema 1 é promovido em memória). A semântica das facetas e
-  das flags de captura está em [`usage.md`](usage.md#contexto-global-no-default-document-env-attrs);
-  a das flags de `check` em [`diff-checks.md`](diff-checks.md).
+  aparecem **somente em captures de payload completo** (`--output jsonl`,
+  `jsonl-flat` ou `json`); o `summary` padrão é um digest de 1 estado sem
+  `__meta.schema` nem linhas `__*`. `diff`/`check` devem consumir o completo.
+  Semântica em [`usage.md`](usage.md#formatos) e [`diff-checks.md`](diff-checks.md).
 - `sniff-mcp` não ganha tool nova: os mesmos parâmetros viram campos opcionais
   nas tools existentes de capture/check e a resposta é aditiva.
 
@@ -106,7 +106,7 @@ Regra única: **`-` é stdin** em qualquer canal de entrada (operando de arquivo
 stdin**; ausente + TTY → exit 2.
 
 ```bash
-sniff capture https://x -s body --no-summary | sniff check -   # pipe
+sniff capture https://x -s body --output jsonl | sniff check -   # pipe
 sniff check - < snap.jsonl
 sniff diff base.jsonl - < head.jsonl
 sniff check - <<'EOF'          # heredoc (o shell entrega o EOF)
@@ -148,8 +148,9 @@ EOF
 ## 6. Saída e registro
 
 - `--output <summary|jsonl|jsonl-flat|json>`: modo explícito do payload de
-  `capture` (default `summary`). `--no-summary`/`--summary` são aliases ocultos
-  de `--output jsonl`/`summary`.
+  `capture` (default `summary`, digest de 1 estado). `--output jsonl` é a forma
+  canônica de pedir matrix/facets de volta; `--no-summary`/`--summary` são
+  aliases ocultos e depreciados.
 - `--persist [PATH]`: registra o JSONL completo. Sem valor → store gerenciado
   (`sniff/[domínio]/[UTC]-[path]-[selector].jsonl`); com `PATH` → arquivo
   indicado. Não afeta o stdout. No `--batch`, cada item persiste antes da linha
@@ -164,11 +165,13 @@ sniff capture [OPTIONS] <URL> [--output MODO] [--persist [PATH]]
 ```
 
 Captura estilos computados de uma página (web) ou a árvore de widgets de um app
-Flutter. O default é otimizado para IA (`compact`, `custom-props`, `stabilize`,
-`contrast`, `ax` ligados) e inclui **todas as fatias v2**: `__document`,
-`__env`, `__declared`, attrs do preset `modern`, `::before`/`::after` e matriz
-de 12 estados (3 viewports × light/dark/reduce/coarse). `--emulate K=V`
-reduz a um perfil; `--minimal` desliga as fatias v2. O selector vem de
+Flutter. O default é o digest `summary`: 1 estado, `css` curado (42 props),
+`contrast` e `aria` por nó — sem matriz, `__declared`, AX, pseudo, variáveis,
+attrs ou `__actions`. Para o snapshot v2 completo (12 estados = 3 viewports ×
+light/dark/reduce/coarse; `__document`, `__env`, `__declared`, attrs do preset
+`modern`, `::before`/`::after`), use `--output jsonl` (alias antigo:
+`--no-summary`). `--emulate K=V` reduz a um perfil; `--minimal` desliga as
+fatias v2; `--ax-tree` preserva AX mesmo no summary. O selector vem de
 `-s/--selector`; `flutter://<device>` ativa o backend Flutter (selector default
 `root`).
 
@@ -223,11 +226,12 @@ sessão persistente, ações, Flutter, persist).
 sniff prime [--long]
 sniff self setup <claude|cursor|codex|pi>
 sniff self completions <bash|zsh|fish>
-sniff self upgrade [--dry-run] [--version TAG] [--script PATH]
+sniff self upgrade [--dry-run] [--version TAG] [--target TRIPLE] [--script PATH]
 sniff self version
 ```
 
 `prime` é a "ajuda da IA": compacto por padrão, byte-idêntico por versão.
 `self setup` grava a recipe em `.sniff/setup/<cliente>.json` e a imprime;
 `self upgrade` roda o instalador oficial (`install.sh`), verificável com
-`--dry-run`.
+`--dry-run`; `--target TRIPLE` força o artefato (equivalente a `SNIFF_TARGET`)
+quando a detecção automática de libc não serve.

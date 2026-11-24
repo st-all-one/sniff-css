@@ -112,22 +112,22 @@ sniff check - < snap.jsonl
 | `--no-visible` | Incluir elementos invisíveis | — |
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
-| `--output jsonl\|jsonl-flat\|json\|summary` | Formato de saída | **`summary`** (digest intermediário) |
-| `--summary` | Atalho para `--output summary` (o padrão): digest de 1 linha por nó (estrutura + `css` curado + `contrast` + `aria`) | `off` |
-| `--no-summary` | Emitir o snapshot completo não-sumarizado (`--output jsonl`) em vez do digest padrão | `off` |
+| `--output jsonl\|jsonl-flat\|json\|summary` | Formato de saída. `summary` (default) = digest de **1 estado**, sem facets v2; `jsonl`/`json` = snapshot completo com matriz e facets | **`summary`** |
+| `--summary` | Atalho deprecado para `--output summary` (o padrão): digest de 1 linha por nó (estrutura + 42 props `css` curadas + `contrast` + `aria`) | `off` |
+| `--no-summary` | Atalho deprecado para `--output jsonl`: snapshot completo não-sumarizado (com matriz/facets), não o digest | `off` |
 | `--screenshot PATH` | Salvar PNG da página no estado final (pós-stabilize, pós-interação) | — |
 | `--fullpage-screenshot` | Com `--screenshot`: capturar o documento inteiro em vez da viewport | `off` |
 | `--persist` | Espelha o store do MCP: grava o snapshot em `sniff/[domain]/[UTC]-[path]-[selector].<ext>` no CWD (ou `SNIFF_SNAPSHOT_DIR`), no formato de `--output` selecionado; a pasta ganha um `.gitignore` com `*` e nunca é rastreada pelo git. A saída continua indo para o stdout. | `off` |
 | `--attrs a,b` | Capturar atributos DOM verbatim por nó (`getAttribute`), repetível ou comma-separated; emitidos sob `attrs` (ex.: validar `name` de forms) | — |
-| `--attrs-preset forms\|media\|platform\|modern\|all` | Preset curado de atributos DOM por nó, somado aos nomes explícitos de `--attrs`. `modern` (≈20 nomes: forms + media + platform, sem duplicar o facet `aria`) é o **default**; `all` lê `getAttributeNames()` e é diagnóstico, nunca default | `modern` |
+| `--attrs-preset forms\|media\|platform\|modern\|all` | Preset curado de atributos DOM por nó, somado aos nomes explícitos de `--attrs`. `modern` (≈20 nomes) é o default **em `--output jsonl`**; `all` lê `getAttributeNames()` e é diagnóstico | `modern` (full) |
 | `--no-attrs` | Desliga o preset default de atributos (`--attrs-preset none`); nomes passados em `--attrs` continuam valendo | — |
-| `--no-document` | Desliga a linha global `__document` (title, lang, doctype, meta, links, scripts e style sheets com `blocked`) | **on** |
-| `--no-env` | Desliga a linha global `__env` (preferências normalizadas, emulação aplicada e device) | **on** |
-| `--declared` | Emite `__declared` (regras CSSOM casadas com `origin`/`href`/`index`, `at_rules`, `blocked_sheets`, `truncated`) | **on** (use `--minimal` para desligar) |
+| `--no-document` | Desliga a linha global `__document` (title, lang, doctype, meta, links, scripts e style sheets) — apenas em `--output jsonl` | **on** (full) |
+| `--no-env` | Desliga a linha global `__env` (preferências normalizadas, emulação, device) — apenas em `--output jsonl` | **on** (full) |
+| `--declared` | Emite `__declared` (regras CSSOM casadas com `origin`/`href`/`index`) — apenas em `--output jsonl` | **on** (full) |
 | `--declared-limit N` | Teto de regras em `__declared`; ordem estável por `(href, index, selector)` | `200` |
-| `--emulate K=V` | Força uma feature de mídia na captura (repetível), ex.: `prefers-color-scheme=dark`, `pointer=coarse`. Emulação explícita vence a estabilização e reduz a matriz a um perfil | — |
-| `--viewport-matrix WxH,WxH` | Repete a captura por viewport e perfil de emulação (um bloco com `__meta.matrix` por estado) | **`360x800,768x1024`** × 4 perfis (light, dark, reduce, coarse) |
-| `--minimal` | Perfil enxuto: remove `__document`, `__env`, `__declared`, `__actions`, pseudo-elementos, preset de `attrs` e a matriz; distinto de `--full` (que troca o conjunto de propriedades) | off |
+| `--emulate K=V` | Força uma feature de mídia (repetível), ex.: `prefers-color-scheme=dark`. Emulação explícita reduz a matriz a um perfil | — |
+| `--viewport-matrix WxH,WxH` | Repete a captura por viewport e perfil com `__meta.matrix` por estado — apenas em `--output jsonl` | **`360x800,768x1024`** × 4 perfis (full) |
+| `--minimal` | Perfil enxuto em `--output jsonl`: remove `__document`, `__env`, `__declared`, `__actions`, pseudo, attrs e matriz | off |
 | `--compact` | Modo compacto (ver abaixo) | **`on`** (use `--no-compact`) |
 | `--custom-props` | Capturar todas as variáveis CSS (`--*`) | **`on`** (use `--no-custom-props`) |
 | `--stabilize` | Congelar animações/transições (snapshot determinístico) | **`on`** (use `--no-stabilize`) |
@@ -154,9 +154,9 @@ sniff check - < snap.jsonl
 > browser dedicado por tarefa. URLs e CSP em `evidence` podem conter tokens
 > em query/nonce — trate o relatório como dado sensível.
 
-### Contexto global no default (`__document`, `__env`, `attrs`)
+### Contexto global no snapshot completo (`__document`, `__env`, `attrs`)
 
-O snapshot passa a carregar `__meta.schema: 2` e, por default, uma linha
+O snapshot **completo** (`--output jsonl`) passa a carregar `__meta.schema: 2` e,
 `__document`, uma linha `__env` e o mapa `attrs` em cada nó com o preset
 `modern`. Globais são **uma linha por captura** (fora do hoist de
 `__meta.style_defaults`), então não inflam o custo por nó; o preset de
@@ -180,11 +180,13 @@ quais flags ligar. `__dom_stats` **não** vai no snapshot: é derivado offline e
 `__document.style_sheets[].blocked` marca folha cross-origin (não é erro); um
 atributo ausente simplesmente não aparece em `attrs`.
 
-`__declared`, pseudo-elementos e a matriz estão **ligados por default** para que
-todas as famílias de checks tenham evidência: o CSSOM é percorrido por seletor
-capturado (limitado por `--declared-limit`) e a matriz combina viewports com
-quatro perfis de emulação (light, dark, reduce, coarse). `--emulate` reduz a
-matriz a um único perfil; `--minimal` desliga todas essas fatias de uma vez.
+Em `--output jsonl`, `__declared`, pseudo-elementos e a matriz estão **ligados
+por default** para que todas as famílias de checks tenham evidência: o CSSOM é
+percorrido por seletor capturado (limitado por `--declared-limit`) e a matriz
+combina viewports com quatro perfis de emulação (light, dark, reduce, coarse).
+`--emulate` reduz a matriz a um único perfil; `--minimal` desliga todas essas
+fatias. No `summary` padrão elas são cortadas antes da captura (1 estado,
+sem `__declared`/AX/pseudo/variáveis/attrs/`__actions`).
 A ordem dos estados é a da configuração e `__meta.matrix.total` permite ao
 `check` detectar matriz incompleta. Em captures com N>1 estados, o envelope
 `--json` avisa em `warnings`.
@@ -500,16 +502,15 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
 - `--output jsonl-flat`: um nó por linha, com `id`/`parent_id` (achatado).
 - `--output json`: array único (com `__meta` + `elements` no compact+custom-props).
 - `--output summary` / `--summary` (alias `slim`): **formato padrão**. Digest
-  intermediário de 1 linha por nó — esqueleto estrutural
-  (`tag/selector/path/depth/rect/visible`/`grade`) **mais** os facetos que
-  respondem perguntas reais sem o JSONL completo: `css` (subconjunto curado:
-  display, position, width/height, cores, font-size/weight, overflow, z-index),
+  de **1 estado** e 1 linha por nó: esqueleto estrutural
+  (`tag/selector/path/depth/rect/visible`/`grade`), `css` (42 props curadas),
   `contrast` (`ratio`/`aa`/`aaa`) e `aria` (`role`/`name`/`focusable`).
-  Constantes globais saem numa linha `__meta` inicial (`style_defaults`, mesma
-  dedup do compact) e ficam omitidas por nó. ~5-10x menor que o snapshot
-  completo.
-- `--output jsonl` (ou `--no-summary`): o snapshot completo não-sumarizado —
-  usado como entrada de `sniff diff`/`sniff check`/jq.
+  **Não contém** `__meta.schema`, matriz, `__document`/`__env`/`__declared`,
+  AX, pseudo, variáveis, attrs ou `__actions` — esses facets são cortados na
+  captura, não apenas omitidos no serializer. Use `--output jsonl` para tê-los.
+- `--output jsonl` (ou o alias deprecado `--no-summary`): snapshot v2 completo
+  (`schema:2`, `__meta.matrix`, linhas `__*`, 42→~370 props), usado como
+  entrada de `sniff diff`/`sniff check`/jq.
 - Com `--stable-key data-testid`, os seletores saem como `button[data-testid="submit"]`
   em vez de dependerem de `id` gerados (`react-aria-123`), mantendo o output
   **matchável entre deploys**.
@@ -606,9 +607,11 @@ ambiente: veja [`docker.md`](docker.md).
     | VERSION=v0.5.1 sh
   ```
 
-- **Arquiteturas**: Linux x86_64/aarch64 (glibc **e** musl estático — roda em
-  qualquer distro, incluindo Alpine), macOS Apple Silicon (aarch64), Windows
-  x86_64.
+- **Arquiteturas**: Linux x86_64/aarch64, macOS Apple Silicon (aarch64) e
+  Windows x86_64. O instalador escolhe `*-unknown-linux-gnu` em hosts glibc
+  (Fedora, Ubuntu, Debian…) e `*-unknown-linux-musl` somente em Alpine/outros
+  hosts musl. `SNIFF_TARGET=x86_64-unknown-linux-musl` (ou
+  `sniff self upgrade --target ...`) força outro artefato publicado.
 - **Imagem Docker**: `stallonels/sniffcss` (Docker Hub), multi-arch
   (linux/amd64 + linux/arm64), tag igual à do release (`latest` aponta para o
   último). Uso e integração em [`docker.md`](docker.md).

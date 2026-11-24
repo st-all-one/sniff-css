@@ -7,7 +7,7 @@ Computed styles reais e árvore de widgets Flutter, determinísticos, para agent
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b3a42?style=for-the-badge)](./LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
-[![Version](https://img.shields.io/badge/version-0.6.0-009739?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.2-009739?style=for-the-badge)](CHANGELOG.md)
 
 </div>
 
@@ -35,7 +35,10 @@ curl --proto '=https' \
   | sh
 ```
 
-Versão fixa: `... | VERSION=v0.6.0 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Versão fixa: `... | VERSION=v0.6.2 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+No Linux o instalador escolhe `*-unknown-linux-gnu` em glibc (Fedora, Ubuntu…)
+e `*-unknown-linux-musl` só em Alpine/musl; para forçar use
+`SNIFF_TARGET=x86_64-unknown-linux-gnu` ou `sniff self upgrade --target TRIPLE`.
 Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
 [`docs/docker.md`](docs/docker.md).
 
@@ -47,7 +50,8 @@ Imagem Docker (`stallonels/sniffcss`, multi-arch, Chromium embutido):
 # capture — computed styles de um elemento (default otimizado para IA)
 sniff capture https://example.net -s ".btn-primary"
 sniff capture https://example.net -s ".card" --depth 4 --categories box-model,typography
-# snapshot completo (entrada de diff/check/jq): --no-summary
+# snapshot completo (entrada de diff/check/jq; pede matrix/facets de volta): --output jsonl
+sniff capture https://example.net -s ".card" --output jsonl --emulate prefers-color-scheme=dark
 
 # capture — revelar elementos que só existem após uma ação (modal, dropdown, menu)
 sniff capture https://example.net -s ".modal" --click "#open-modal"
@@ -90,7 +94,7 @@ sniff init
 sniff capture --params '{"url":"https://example.net","selector":".btn","depth":2}'
 sniff check --params '{"input":"snap.jsonl","rules":true}'
 sniff capture --batch pages.jsonl        # uma página por linha (JSONL)
-sniff capture https://example.net -s body --no-summary | sniff check -
+sniff capture https://example.net -s body --output jsonl | sniff check -
 ```
 
 Auth por header, login persistente (`--storage-state`), uploads reais e o mapa
@@ -119,6 +123,7 @@ de efeito `__actions`: [`docs/usage.md`](docs/usage.md). Backend Flutter:
 | Plano de modernização (detecção de oportunidades) | [`docs/modernization/README.md`](docs/modernization/README.md) |
 | Histórico de mudanças | [`CHANGELOG.md`](CHANGELOG.md) |
 | Contribuição | [`AGENTS.md`](AGENTS.md) |
+| Release e CI/CD (gates, tag, artefatos) | [`docs/release.md`](docs/release.md) |
 
 ## Licença
 

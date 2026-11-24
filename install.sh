@@ -39,10 +39,30 @@ require() {
     command -v "$1" >/dev/null 2>&1 || err "Ferramenta necessária não encontrada: $1"
 }
 
-# ── detecção de OS/arquitetura → target triple ──────────────────────────────
+# ── detecção de OS/arquitetura/libc → target triple ─────────────────────────
+
+detect_libc() {
+    # Default to glibc: the actual `*-gnu` artifacts are published for every
+    # supported Linux architecture. musl is only selected on a real musl host.
+    if [ -f /etc/alpine-release ]; then
+        echo "musl"
+        return
+    fi
+    if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+        echo "musl"
+        return
+    fi
+    for loader in /lib/ld-musl-*.so.1 /lib64/ld-musl-*.so.1; do
+        if [ -e "$loader" ]; then
+            echo "musl"
+            return
+        fi
+    done
+    echo "gnu"
+}
 
 detect_target() {
-    local os arch
+    local os arch libc
     os="$(uname -s)"
     arch="$(uname -m)"
 
@@ -59,13 +79,22 @@ detect_target() {
         *) err "Arquitetura não suportada: $arch" ;;
     esac
 
+    if [ "$os" = "linux" ]; then
+        libc="$(detect_libc)"
+        case "$arch-$libc" in
+            x86_64-gnu)     echo "x86_64-unknown-linux-gnu" ;;
+            x86_64-musl)    echo "x86_64-unknown-linux-musl" ;;
+            aarch64-gnu)    echo "aarch64-unknown-linux-gnu" ;;
+            aarch64-musl)   echo "aarch64-unknown-linux-musl" ;;
+        esac
+        return
+    fi
+
     case "$os-$arch" in
-        linux-x86_64)  echo "x86_64-unknown-linux-musl" ;;
-        linux-aarch64) echo "aarch64-unknown-linux-musl" ;;
         darwin-aarch64) echo "aarch64-apple-darwin" ;;
         darwin-x86_64) err "Mac Intel não suportado: só é publicado o binário macOS (Apple Silicon / aarch64)" ;;
         windows-x86_64) echo "x86_64-pc-windows-msvc" ;;
-        windows-aarch64) echo "aarch64-pc-windows-msvc" ;;
+        windows-aarch64) err "Windows arm64 não é publicado neste release" ;;
         *) err "Sem binário publicado para $os/$arch" ;;
     esac
 }
