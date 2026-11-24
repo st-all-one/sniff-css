@@ -165,7 +165,7 @@ sniff capture [OPTIONS] <URL> [--output MODO] [--persist [PATH]]
 ```
 
 Captura estilos computados de uma página (web) ou a árvore de widgets de um app
-Flutter. O default é o digest `summary`: 1 estado, `css` curado (42 props),
+Flutter. O default é o digest `summary`: 1 estado, `css` curado (40 props),
 `contrast` e `aria` por nó — sem matriz, `__declared`, AX, pseudo, variáveis,
 attrs ou `__actions`. Para o snapshot v2 completo (12 estados = 3 viewports ×
 light/dark/reduce/coarse; `__document`, `__env`, `__declared`, attrs do preset

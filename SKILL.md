@@ -36,7 +36,7 @@ Everything before the AI is deterministic and offline after capture.
 
 | Area | Default | Escape hatch |
 |---|---|---|
-| Output | `summary` digest (token-lean, 1 state, curated 42-prop CSS + contrast + aria) | `--output jsonl` (legacy `--no-summary`) → full JSONL for diff/check/jq |
+| Output | `summary` digest (token-lean, 1 state, curated 40-prop CSS + contrast + aria) | `--output jsonl` (legacy `--no-summary`) → full JSONL for diff/check/jq |
 | v2 context (`--output jsonl` only) | `__document`, `__env`, `__declared`, attrs preset `modern`, pseudo `::before,::after` | `--no-document`, `--no-env`, `--no-attrs`, `--minimal`; `--ax-tree` keeps AX even in summary |
 | Matrix (`--output jsonl` only) | 3 viewports (1366×768, 360×800, 768×1024) × 4 profiles (light, dark, reduce, coarse) = **12 states** | `--emulate K=V` → one profile; `--minimal` → no matrix |
 | Actions map (`--output jsonl` only) | `__actions` emitted even when empty | `--no-effects` |
@@ -46,7 +46,7 @@ Everything before the AI is deterministic and offline after capture.
 | Profile | opportunities are `warn` | `--profile strict` → `fail` for CI |
 
 **Capture modes.** `--output summary` (default) is a single-state digest:
-`css` (42 curated props), `contrast`, `aria`, structure. It deliberately drops
+`css` (40 curated props), `contrast`, `aria`, structure. It deliberately drops
 the 12-state matrix, `__declared`, per-node `ax`, pseudo styles, variables,
 attrs preset and `__actions`. Ask for those explicitly with `--output jsonl`.
 Cost note: the 12-state full JSONL is intentionally heavier (~20–30 s, hundreds
@@ -181,7 +181,7 @@ MCP team defaults: `SNIFF_DEFAULT_HEADERS`, `SNIFF_STORAGE_STATE`,
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf \
   https://raw.githubusercontent.com/st-all-one/sniff-css/main/install.sh | sh
-# pinned: ... | VERSION=v0.6.2 sh
+# pinned: ... | VERSION=v0.6.3 sh
 sniff init          # upsert managed AGENTS.md block
 sniff init --force  # overwrite AGENTS.md (destructive)
 ```

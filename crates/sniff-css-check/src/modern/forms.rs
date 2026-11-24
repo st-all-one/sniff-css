@@ -1623,8 +1623,38 @@ fn interaction_state_feedback(
 }
 
 // ---------------------------------------------------------------------------
-// 16. persistent-bar-budget
-// ---------------------------------------------------------------------------
+/// Intersection of a rect with the viewport, as `(width, height)` clamped to
+/// non-negative values. Rectangles entirely outside the viewport have no
+/// measurable intersection (zero area).
+fn viewport_intersection(rect: (f64, f64, f64, f64), viewport: (f64, f64)) -> (f64, f64) {
+    let (x, y, width, height) = rect;
+    if width <= 0.0 || height <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let right = (x + width).min(viewport.0);
+    let bottom = (y + height).min(viewport.1);
+    (
+        (right - x.max(0.0)).max(0.0),
+        (bottom - y.max(0.0)).max(0.0),
+    )
+}
+
+/// A notice only occupies the viewport budget when it actually stays pinned
+/// there (fixed/sticky/overlay) and is not a modal dialog.
+fn is_viewport_notice(ctx: &ModernCtx<'_>, node: &DiffNode) -> bool {
+    let position = ctx
+        .style(node, "layout", "position")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(position.as_str(), "fixed" | "sticky") {
+        return true;
+    }
+    let role = ctx
+        .aria(node, "role")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(role.as_str(), "dialog" | "alertdialog") && has_attr(node, "open")
+}
 
 fn persistent_bar_budget(
     ctx: &ModernCtx<'_>,
@@ -1642,9 +1672,9 @@ fn persistent_bar_budget(
 
     for &node in &ctx.flat {
         let position = ctx.style(node, "layout", "position").unwrap_or_default();
-        let fixed =
+        let pinned =
             position.eq_ignore_ascii_case("fixed") || position.eq_ignore_ascii_case("sticky");
-        let Some((_x, _y, width, height)) = rect(node) else {
+        let Some(bounds) = rect(node) else {
             if ctx_tag_is(node, "DIALOG") && has_attr(node, "open") {
                 let text = format!(
                     "{} dialog[open] presente na captura sem ação do usuário — interrupção no load",
@@ -1654,47 +1684,65 @@ fn persistent_bar_budget(
             }
             continue;
         };
-        if fixed && height > 0.0 {
-            let ratio = (height / viewport_height * 1000.0).round() / 1000.0;
-            if ratio > 0.12 {
-                let text = format!(
-                    "{} position={position} rect.height={height:.0}px viewport.height={viewport_height:.0}px → {:.1}% > 12%",
-                    node.selector,
-                    ratio * 100.0
-                );
-                let evidence = Evidence::numeric(
-                    text,
-                    "styles+rect+__meta",
-                    "bar_height_viewport_ratio",
-                    json!(ratio),
-                    json!(0.12),
-                    "<=",
-                );
-                ctx.emit(out, spec, node, evidence);
-                continue;
+        if pinned && bounds.3 > 0.0 && bounds.1 < viewport_height && bounds.1 + bounds.3 > 0.0 {
+            let (visible_width, visible_height) =
+                viewport_intersection(bounds, (viewport_width, viewport_height));
+            let ratio_height = visible_height.min(viewport_height);
+            let ratio_width = visible_width.min(viewport_width);
+            if ratio_width > 0.0 && ratio_height > 0.0 {
+                let ratio = (ratio_height / viewport_height * 1000.0).round() / 1000.0;
+                if ratio > 0.12 {
+                    let text = format!(
+                        "{} position={position} visible rect {:.0}x{:.0}px / viewport {:.0}x{:.0}px → {:.1}% > 12%",
+                        node.selector,
+                        ratio_width,
+                        ratio_height,
+                        viewport_width,
+                        viewport_height,
+                        ratio * 100.0
+                    );
+                    let evidence = Evidence::numeric(
+                        text,
+                        "styles+rect+__meta",
+                        "bar_height_viewport_ratio",
+                        json!(ratio),
+                        json!(0.12),
+                        "<=",
+                    );
+                    ctx.emit(out, spec, node, evidence);
+                    continue;
+                }
             }
         }
+        // A pinned node already measured by the height budget must not also
+        // produce a coverage line for the same viewport intersection.
         let modal = ctx.aria(node, "role").is_some_and(|role| {
             role.eq_ignore_ascii_case("dialog") || role.eq_ignore_ascii_case("alertdialog")
         }) || has_attr(node, "open");
         let named = ctx.aria(node, "name").is_some() || aria_has_text(node);
-        if !modal && named && width > 0.0 && height > 0.0 {
-            let coverage = (width * height / area * 1000.0).round() / 1000.0;
-            if coverage > 0.15 {
-                let text = format!(
-                    "{} aviso não-modal cobre {:.1}% do viewport (> 15%) — usar barra compacta e dismissível",
-                    node.selector,
-                    coverage * 100.0
-                );
-                let evidence = Evidence::numeric(
-                    text,
-                    "rect+__meta+attrs",
-                    "notice_viewport_coverage",
-                    json!(coverage),
-                    json!(0.15),
-                    "<=",
-                );
-                ctx.emit(out, spec, node, evidence);
+        if !modal && named && is_viewport_notice(ctx, node) {
+            let (visible_width, visible_height) =
+                viewport_intersection(bounds, (viewport_width, viewport_height));
+            if visible_width > 0.0 && visible_height > 0.0 {
+                // Intersection can never exceed 1.0: raw area (e.g. a tall
+                // <section> spanning 593% of the viewport) is not coverage.
+                let coverage = (visible_width * visible_height / area * 1000.0).round() / 1000.0;
+                if coverage > 0.15 {
+                    let text = format!(
+                        "{} aviso não-modal cobre {:.1}% do viewport visível (> 15%) — usar barra compacta e dismissível",
+                        node.selector,
+                        coverage * 100.0
+                    );
+                    let evidence = Evidence::numeric(
+                        text,
+                        "rect+__meta+attrs",
+                        "notice_viewport_coverage",
+                        json!(coverage),
+                        json!(0.15),
+                        "<=",
+                    );
+                    ctx.emit(out, spec, node, evidence);
+                }
             }
         }
         if ctx_tag_is(node, "DIALOG") && has_attr(node, "open") {
@@ -2643,6 +2691,96 @@ mod tests {
             Vec::new(),
             Some((800.0, 640.0)),
         ));
+        assert!(!ids(&lines).contains(&"persistent-bar-budget"));
+    }
+
+    #[test]
+    fn persistent_bar_notice_uses_clamped_intersection_and_pinned_semantics() {
+        let viewport = Some((800.0, 640.0));
+        // Flow content with a raw area 5.9x the viewport (the W3C <section>):
+        // no fixed/sticky semantics, no measurable pinned notice → silence.
+        let huge_flow = rect(
+            aria(
+                node(1, "SECTION", "section.wcag-notice"),
+                &[("has_text", "true")],
+            ),
+            0.0,
+            0.0,
+            1200.0,
+            3800.0,
+        );
+        let lines = run_doc(&document(vec![huge_flow], None, Vec::new(), viewport));
+        assert!(
+            !ids(&lines).contains(&"persistent-bar-budget"),
+            "ordinary flow content must not be reported: {lines:?}"
+        );
+
+        // A fixed notice with a tall raw rect is still clamped to the viewport
+        // intersection and must not exceed 1.0 coverage.
+        let giant_fixed = rect(
+            aria(
+                style(node(2, "DIV", "div.notice"), "layout", "position", "fixed"),
+                &[("has_text", "true")],
+            ),
+            -100.0,
+            0.0,
+            1200.0,
+            3800.0,
+        );
+        let lines = run_doc(&document(vec![giant_fixed], None, Vec::new(), viewport));
+        // A pinned giant rect is already measured by the height budget, so
+        // only the clamped bar-height metric is expected here.
+        assert!(
+            !lines.iter().any(|line| {
+                line.check == "persistent-bar-budget"
+                    && line.evidence.metric.as_deref() == Some("notice_viewport_coverage")
+            }),
+            "giant pinned rect must not emit coverage"
+        );
+
+        // A small sticky notice with real pinned semantics does emit and is
+        // measured against its visible intersection (here 100% of the bar).
+        let small_notice = rect(
+            aria(
+                style(
+                    node(3, "DIV", "div.cookie-banner"),
+                    "layout",
+                    "position",
+                    "sticky",
+                ),
+                &[("has_text", "true")],
+            ),
+            0.0,
+            400.0,
+            800.0,
+            240.0,
+        );
+        let lines = run_doc(&document(vec![small_notice], None, Vec::new(), viewport));
+        assert!(
+            lines.iter().any(|line| {
+                line.check == "persistent-bar-budget"
+                    && line.evidence.metric.as_deref() == Some("bar_height_viewport_ratio")
+            }),
+            "a real small notice must still emit: {lines:?}"
+        );
+
+        // Off-screen content has no measurable intersection.
+        let offscreen = rect(
+            aria(
+                style(
+                    node(4, "DIV", "div.offscreen"),
+                    "layout",
+                    "position",
+                    "fixed",
+                ),
+                &[("has_text", "true")],
+            ),
+            0.0,
+            900.0,
+            800.0,
+            240.0,
+        );
+        let lines = run_doc(&document(vec![offscreen], None, Vec::new(), viewport));
         assert!(!ids(&lines).contains(&"persistent-bar-budget"));
     }
 

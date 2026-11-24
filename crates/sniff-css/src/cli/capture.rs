@@ -582,7 +582,11 @@ impl CaptureArgs {
         };
         let emulate = matrix_emulations.first().cloned().unwrap_or_default();
         let matrix_viewports = parse_matrix_viewports(self.viewport_matrix.as_deref())?;
-        let attr_preset = parse_attr_preset(self.attrs_preset.as_deref(), self.no_attrs)?;
+        let attr_preset = if self.minimal {
+            AttrPreset::None
+        } else {
+            parse_attr_preset(self.attrs_preset.as_deref(), self.no_attrs)?
+        };
         let declared_limit = self.declared_limit.unwrap_or(200);
         let (pseudo_elements, declared_facet, matrix_viewports, matrix_emulations, emulate) =
             if self.minimal {
@@ -598,8 +602,8 @@ impl CaptureArgs {
             };
         tracing::debug!(
             minimal = self.minimal,
-            document = !self.no_document,
-            env = !self.no_env,
+            document = !self.minimal && !self.no_document,
+            env = !self.minimal && !self.no_env,
             declared = declared_facet,
             declared_limit,
             emulate_count = emulate.len(),
@@ -632,8 +636,8 @@ impl CaptureArgs {
             headers,
             storage_state_path: self.storage_state,
             save_storage_state: self.save_storage_state,
-            document_facet: !self.no_document,
-            env_facet: !self.no_env,
+            document_facet: !self.minimal && !self.no_document,
+            env_facet: !self.minimal && !self.no_env,
             attr_preset,
             declared_facet,
             declared_limit,
@@ -1411,6 +1415,55 @@ mod tests {
         let cli = parse_capture(["sniff", "-u", "http://localhost:3000", "-s", "form"]).unwrap();
         let cfg = cli.into_config().unwrap();
         assert!(cfg.attributes.is_empty());
+    }
+
+    #[test]
+    fn minimal_disables_default_facets_and_attrs_preset() {
+        let cli = parse_capture([
+            "sniff",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--minimal",
+            "--attrs-preset",
+            "forms",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert!(cfg.minimal);
+        assert!(!cfg.document_facet);
+        assert!(!cfg.env_facet);
+        assert_eq!(cfg.attr_preset, AttrPreset::None);
+        assert!(
+            cfg.effective_attributes().is_empty(),
+            "minimal must drop the curated preset"
+        );
+        assert!(
+            cfg.attributes.is_empty(),
+            "minimal must not invent explicit attrs"
+        );
+    }
+
+    #[test]
+    fn minimal_preserves_explicit_attrs() {
+        let cli = parse_capture([
+            "sniff",
+            "-u",
+            "http://localhost:3000",
+            "-s",
+            "main",
+            "--minimal",
+            "--attrs",
+            "name,data-id",
+        ])
+        .unwrap();
+        let cfg = cli.into_config().unwrap();
+        assert_eq!(cfg.attr_preset, AttrPreset::None);
+        assert_eq!(
+            cfg.effective_attributes(),
+            vec!["name".to_string(), "data-id".to_string()]
+        );
     }
 
     #[test]

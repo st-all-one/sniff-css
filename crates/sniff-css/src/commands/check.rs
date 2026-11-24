@@ -241,15 +241,14 @@ fn compute(args: &CheckArgs) -> Result<Output, AppError> {
 }
 
 /// Lê um snapshot de um arquivo, de stdin (`-`) ou do pipe implícito.
+/// O digest `summary` é entrada inválida (exit 2), não erro de I/O (exit 5).
 fn load_doc(input: Option<&Path>) -> Result<DiffDocument, AppError> {
     let path = input.map(Path::to_path_buf);
-    match path.as_deref() {
-        Some(p) if !sniff_core::input::is_stdin(p) => {
-            sniff_css_diff::load_file_doc(p).map_err(AppError::from)
-        }
+    let result = match path.as_deref() {
+        Some(p) if !sniff_core::input::is_stdin(p) => sniff_css_diff::load_file_doc(p),
         Some(_) => {
             let text = sniff_core::input::read_stdin().map_err(AppError::from)?;
-            sniff_css_diff::load_str_doc(&text).map_err(AppError::from)
+            sniff_css_diff::load_str_doc(&text)
         }
         None => {
             if !sniff_core::input::stdin_is_piped() {
@@ -258,7 +257,11 @@ fn load_doc(input: Option<&Path>) -> Result<DiffDocument, AppError> {
                 ));
             }
             let text = sniff_core::input::read_stdin().map_err(AppError::from)?;
-            sniff_css_diff::load_str_doc(&text).map_err(AppError::from)
+            sniff_css_diff::load_str_doc(&text)
         }
-    }
+    };
+    result.map_err(|error| match error {
+        sniff_css_diff::DiffError::SummaryDigest => AppError::invalid(error.to_string()),
+        other => AppError::from(other),
+    })
 }

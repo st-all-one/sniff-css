@@ -213,8 +213,8 @@ pub struct SniffPageRequest {
     pub viewport: String,
     /// Format for the PERSISTED snapshot and return="jsonl": `jsonl` (tree,
     /// default), `jsonl-flat`, or `json`. NEVER use `summary`/`slim` here:
-    /// that persists a faceless digest and offline check/diff comparisons
-    /// silently skip. Use the default `return:"summary"` for a lean response.
+    /// that persists a faceless digest that offline check/diff reject.
+    /// Use the default `return:"summary"` for a lean response.
     #[serde(default = "default_format")]
     pub format: String,
     /// Freeze animations/transitions before capture for deterministic
@@ -270,7 +270,7 @@ pub struct SniffPageRequest {
     #[serde(default = "default_true")]
     pub persist: bool,
     /// What to return: `summary` (default) = token-lean per-node digest with
-    /// curated 42-prop css + contrast + aria; it EXCLUDES matrix/facets/pseudo/
+    /// curated 40-prop css + contrast + aria; it EXCLUDES matrix/facets/pseudo/
     /// ax/attrs/variables/effects from the response, but the FULL v2 JSONL is
     /// still persisted for diff/check by path. `reference` = tiny __sniff
     /// handle (requires persist:true). `jsonl` = full schema-2 snapshot inline
@@ -490,14 +490,14 @@ impl SniffMcpServer {
                         persisted as sniff/[domain]/[UTC]-[path]-[selector].jsonl and the tool returns a \
                         token-lean digest (return=\"summary\"): per node {id,parent_id,tag,selector,path,\
                         depth,rect,visible,grade,contrast{ratio,aa,aaa},aria{role,name,focusable},css} \
-                        plus a leading __meta{style_defaults,viewport}; `css` is a curated 42-prop \
+                        plus a leading __meta{style_defaults,viewport}; `css` is a curated 40-prop \
                         allow-list. The RESPONSE deliberately excludes the 12-state matrix, \
                         __document/__env/__declared, ax, pseudo, attrs, css_variables and __actions — \
                         but those facets ARE captured and persisted for later diff/check by path. \
                         return=\"reference\" gives only a tiny __sniff handle (path,url,selector,nodes); \
                         return=\"jsonl\" gives the full v2 snapshot inline (use only when you truly need \
                         matrix/facets in context). NEVER set format=\"summary\": it persists a faceless \
-                        digest and offline checks silently skip — keep format=\"jsonl\" (default). \
+                        digest and offline checks reject it — keep format=\"jsonl\" (default). \
                         Defaults: persist=true, compact=true, custom_props=true, stabilize=true, \
                         contrast=true, include_ax=true, effects=true, full=false, viewport=1366x768, \
                         categories=all, depth=0, pseudo=[::before,::after], attrs_preset=modern, \
@@ -961,7 +961,7 @@ impl SniffMcpServer {
                        = element covered by another via rect + z-index/DOM order) and facet-aware modern \
                        opportunities (class:opportunity with evidence.source + guide). Defaults: \
                        uniform=true, rules=true, modern=true, tolerance=0.5. Facet-dependent checks \
-                       (__document/__env/__declared/__meta.matrix) silently skip on a summary capture \
+                       (__document/__env/__declared/__meta.matrix) reject summary captures \
                        — always run against full JSONL persisted with format=jsonl."
     )]
     pub async fn sniff_css_check(

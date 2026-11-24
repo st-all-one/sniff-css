@@ -5,6 +5,36 @@ versão publicada recebe uma tag `vX.Y.Z` no GitHub. Os binários de cada
 arquitetura, o instalador e a imagem Docker são publicados a partir da mesma tag.
 
 
+## [0.6.3] — 2026-11-23
+
+**Release de correção dos defeitos observados na validação da 0.6.2.**
+
+### Fixed
+
+- **`--ax-tree` no `summary`**: a árvore AX capturada agora é serializada como
+  linha `__ax_tree` também no digest (antes era coletada e descartada).
+- **`--minimal`**: passa a suprimir de fato `__document`, `__env` e o preset de
+  `attrs` no snapshot completo; nomes passados explicitamente em `--attrs`
+  continuam sendo capturados.
+- **`check`/`diff` recusam `summary`**: entrada resumida agora falha com erro
+  de entrada inválida (exit 2) e mensagem explicando que é preciso `--output
+  jsonl`. Snapshots v1 completos (promovidos em memória) e v2 continuam
+  aceitos.
+- **Curadoria de regras**: `breakpoint-jump`, `persistent-bar-budget` e
+  `occluded` não produzem mais os falsos positivos observados em páginas reais
+  (W3C, Wikipedia, Google); a cobertura de barra fixa respeita o limite de
+  100% e a oclusão compara corretamente o nó com seus irmãos de navegação.
+- **Documentação e CI**: contagem correta de 40 propriedades CSS curadas (o
+  `SUMMARY_PROPS` tem 40, não 42) e o job `check` passou a executar
+  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`
+  e `cargo test --workspace`, além da verificação de versão.
+
+### Changed
+
+- **Versionamento 0.6.3**: workspace, lockfile, README, SKILL e
+  `docs/release.md` apontam para a nova versão; a tag `v0.6.2` já estava
+  publicada quando estes defeitos foram encontrados.
+
 ## [0.6.2] — 2026-11-23
 
 **Release de correção e clareza de protocolo.** O snapshot completo continua
@@ -27,7 +57,7 @@ forma como agentes e o instalador recebem essa informação.
 ### Changed
 
 - **`--output summary` (default) emite só 1 estado**: esqueleto estrutural,
-  42 propriedades CSS curadas, `contrast` e `aria` por nó. Não emite matriz,
+  40 propriedades CSS curadas, `contrast` e `aria` por nó. Não emite matriz,
   `__document`/`__env`/`__declared`, AX completa, pseudo-elementos,
   variáveis, `attrs` do preset ou `__actions`. Antes essas fatias eram
   capturadas e descartadas. Captura real caiu de ~16–29 s / 20,8 KB para

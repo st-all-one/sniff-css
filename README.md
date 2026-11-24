@@ -7,7 +7,7 @@ Computed styles reais e árvore de widgets Flutter, determinísticos, para agent
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-2b3a42?style=for-the-badge)](./LICENSE-MIT)
 [![Rust](https://img.shields.io/badge/rust-1.99%2B-DEA584?style=for-the-badge&logo=rust&logoColor=000)](https://www.rust-lang.org/)
 [![MCP](https://img.shields.io/badge/MCP-JSON--RPC%202.0-6E56CF?style=for-the-badge)](docs/ai-usage.md)
-[![Version](https://img.shields.io/badge/version-0.6.2-009739?style=for-the-badge)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.6.3-009739?style=for-the-badge)](CHANGELOG.md)
 
 </div>
 
@@ -35,7 +35,7 @@ curl --proto '=https' \
   | sh
 ```
 
-Versão fixa: `... | VERSION=v0.6.2 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
+Versão fixa: `... | VERSION=v0.6.3 sh`. Outro destino: `... | INSTALL_DIR=/usr/local/bin sh`.
 No Linux o instalador escolhe `*-unknown-linux-gnu` em glibc (Fedora, Ubuntu…)
 e `*-unknown-linux-musl` só em Alpine/musl; para forçar use
 `SNIFF_TARGET=x86_64-unknown-linux-gnu` ou `sniff self upgrade --target TRIPLE`.

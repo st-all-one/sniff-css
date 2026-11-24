@@ -32,6 +32,140 @@ fn run_cli(args: &[&str]) -> (String, String) {
     )
 }
 
+/// Runs `sniff diff` capturing the exit code (needed for invalid-input tests).
+fn run_cli_status(args: &[&str], stdin: Option<&str>) -> (i32, String, String) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let bin = env!("CARGO_BIN_EXE_sniff");
+    let mut child = Command::new(bin)
+        .arg("diff")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn sniff diff");
+    if let Some(text) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(text.as_bytes())
+            .expect("write stdin");
+    }
+    let out = child.wait_with_output().expect("wait sniff diff");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+fn write_snapshot(name: &str, content: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("sniff-diff-cli-summary-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+const SUMMARY_DIGEST: &str = concat!(
+    r##"{"__meta":{"style_defaults":{"visual":{"color":"#212529"}},"viewport":{"width":1366,"height":768}}}"##,
+    "\n",
+    r##"{"id":1,"tag":"DIV","selector":"div.card","depth":0,"visible":true,"grade":"AAA","css":{"width":"300px","color":"#212529"}}"##,
+    "\n",
+);
+
+const FULL_V1_SNAPSHOT: &str = concat!(
+    r#"{"__meta":{"viewport":{"width":1366,"height":768}}}"#,
+    "\n",
+    r#"{"id":1,"tag":"DIV","selector":"div","depth":0,"styles":{"box_model":{"width":"44px"}},"children":[]}"#,
+    "\n",
+);
+
+const FULL_V2_SNAPSHOT: &str = concat!(
+    r#"{"__meta":{"schema":2,"viewport":{"width":1366,"height":768}}}"#,
+    "\n",
+    r#"{"id":1,"tag":"DIV","selector":"div","depth":0,"styles":{"box_model":{"width":"40px"}},"children":[]}"#,
+    "\n",
+);
+
+fn assert_summary_rejected(code: i32, stderr: &str, stdout: &str) {
+    assert_eq!(code, 2, "summary digest must be invalid input: {stderr}");
+    let message = format!("{stderr}{stdout}");
+    assert!(
+        message.contains("summary snapshot is not valid input for check/diff")
+            && message.contains("--output jsonl"),
+        "actionable message expected: {message}"
+    );
+}
+
+#[test]
+fn cli_diff_rejects_summary_snapshot_as_base() {
+    let summary = write_snapshot("summary.jsonl", SUMMARY_DIGEST);
+    let (code, stdout, stderr) = run_cli_status(
+        &[
+            summary.to_str().unwrap(),
+            fixture("head.jsonl").to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_summary_rejected(code, &stderr, &stdout);
+    drop(std::fs::remove_dir_all(summary.parent().unwrap()));
+}
+
+#[test]
+fn cli_diff_rejects_summary_snapshot_as_head() {
+    let summary = write_snapshot("summary.jsonl", SUMMARY_DIGEST);
+    let (code, stdout, stderr) = run_cli_status(
+        &[
+            fixture("base.jsonl").to_str().unwrap(),
+            summary.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_summary_rejected(code, &stderr, &stdout);
+    drop(std::fs::remove_dir_all(summary.parent().unwrap()));
+}
+
+#[test]
+fn cli_diff_rejects_summary_snapshot_from_stdin() {
+    let (code, stdout, stderr) = run_cli_status(
+        &["-", fixture("head.jsonl").to_str().unwrap()],
+        Some(SUMMARY_DIGEST),
+    );
+    assert_summary_rejected(code, &stderr, &stdout);
+}
+
+#[test]
+fn cli_diff_accepts_full_v1_and_v2_snapshots() {
+    let v1 = write_snapshot("v1.jsonl", FULL_V1_SNAPSHOT);
+    let v2 = write_snapshot("v2.jsonl", FULL_V2_SNAPSHOT);
+    let (code, stdout, stderr) =
+        run_cli_status(&[v1.to_str().unwrap(), v2.to_str().unwrap()], None);
+    assert_eq!(code, 0, "v1 vs v2 diff must work: {stderr}");
+    assert!(stdout.contains("CHANGED"), "width drift expected: {stdout}");
+    drop(std::fs::remove_dir_all(v1.parent().unwrap()));
+    drop(std::fs::remove_dir_all(v2.parent().unwrap()));
+}
+
+#[test]
+fn cli_diff_accepts_full_snapshot_from_stdin() {
+    let (code, stdout, stderr) = run_cli_status(
+        &["-", fixture("head.jsonl").to_str().unwrap()],
+        Some(FULL_V2_SNAPSHOT),
+    );
+    assert_eq!(code, 0, "piped full snapshot must work: {stderr}");
+    assert!(
+        stdout.contains("\"status\""),
+        "delta lines expected: {stdout}"
+    );
+}
+
 #[test]
 fn cli_reports_delta_and_stats() {
     let (stdout, stderr) = run_cli(&[

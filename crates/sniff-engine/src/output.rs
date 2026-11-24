@@ -648,6 +648,10 @@ pub fn write_output<W: Write>(
                 .map_err(SniffError::from)?;
                 writeln!(writer, "{meta_line}").map_err(io_err)?;
             }
+            // `--ax-tree` is a first-class facet even in the token-lean
+            // digest: mirror the JSONL dedicated line so AX capture is not
+            // silently discarded when the flag was explicitly requested.
+            emit_ax_tree_line(writer, outcome.ax_tree.as_ref())?;
             for node in nodes {
                 let mut obj = Map::new();
                 obj.insert("id".into(), Value::from(node.id));
@@ -1630,6 +1634,78 @@ mod tests {
             .expect("__ax_tree line");
         assert_eq!(ax_line["__ax_tree"][0]["role"], "group");
         assert_eq!(ax_line["__ax_tree"][0]["children"][0]["role"], "button");
+    }
+
+    #[test]
+    fn summary_emits_ax_tree_line_when_captured() {
+        let outcome = SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ax_tree: Some(serde_json::json!([
+                {"role": "group", "children": [{"role": "button", "name": "OK"}]}
+            ])),
+            ..Default::default()
+        };
+        let cfg = OutputConfig {
+            format: OutputFormat::Summary,
+            ..OutputConfig::default()
+        };
+        let mut buf = Vec::new();
+        write_output(&mut buf, &outcome, &cfg).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        let ax_line: Value = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .find(|value: &Value| value.get("__ax_tree").is_some())
+            .expect("summary must expose the captured __ax_tree");
+        assert_eq!(ax_line["__ax_tree"][0]["children"][0]["name"], "OK");
+        assert!(
+            text.lines().any(|line| {
+                serde_json::from_str::<Value>(line)
+                    .unwrap()
+                    .get("tag")
+                    .is_some()
+            }),
+            "summary node lines must remain present"
+        );
+    }
+
+    #[test]
+    fn summary_differs_only_by_ax_tree_line() {
+        let outcome = SniffOutcome {
+            snapshots: vec![sample_snapshot()],
+            global_css_variables: None,
+            ..Default::default()
+        };
+        let cfg = OutputConfig {
+            format: OutputFormat::Summary,
+            ..OutputConfig::default()
+        };
+        let mut without_flag = Vec::new();
+        write_output(&mut without_flag, &outcome, &cfg).unwrap();
+        assert!(
+            !String::from_utf8_lossy(&without_flag).contains("\"__ax_tree\""),
+            "no AX capture must not emit a phantom facet"
+        );
+
+        let mut with_tree = outcome.clone();
+        with_tree.ax_tree = Some(serde_json::json!([{"role": "main"}]));
+        let mut with_flag = Vec::new();
+        write_output(&mut with_flag, &with_tree, &cfg).unwrap();
+        let ax_line = format!(
+            "{}\n",
+            serde_json::to_string(&serde_json::json!({
+                "__ax_tree": [{"role": "main"}]
+            }))
+            .unwrap()
+        );
+        let with_text = String::from_utf8(with_flag).unwrap();
+        let without_text = String::from_utf8(without_flag).unwrap();
+        assert_eq!(
+            with_text.replacen(&ax_line, "", 1),
+            without_text,
+            "AX line must be the only byte difference in summary output"
+        );
     }
 
     #[test]

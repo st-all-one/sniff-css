@@ -50,10 +50,15 @@ quebraria a documentação; a solução é o dicionário de exceções.
   zip, 6 checksums e `sha256sums.txt`) e runner `macos-15`. O job `release`
   e `check` passaram; `supply-chain`, `miri` e `fuzz` falharam naquela
   execução (typos em pt-BR sem config, setup do toolchain nightly).
-- **`v0.6.2` (pendente)** — contém o summary enxuto, o protocolo v3, o
-  `_typos.toml`, os gates de versão e a documentação atualizada. Os gates
-  locais da §2 passaram; a publicação depende de `git tag -s v0.6.2` +
-  `git push origin v0.6.2`.
+- **`v0.6.2` (publicada)** — tag assinada em 2026-11-23 (`10a66df`): summary
+  enxuto, protocolo v3, `_typos.toml`, gates de versão e documentação
+  atualizada. A validação em páginas reais encontrou os defeitos corrigidos
+  na 0.6.3.
+- **`v0.6.3` (em andamento, sem tag)** — workspace, lockfile, README, SKILL e
+  CHANGELOG já apontam para esta versão; correções de `--ax-tree`/`--minimal`,
+  rejeição de `summary` em `check`/`diff`, curadoria de regras e contagem de
+  40 props. O job `check` do CI agora executa `fmt`/`clippy`/`test` de fato.
+  Publicar após os gates da §2 com `git tag -s v0.6.3` + `git push origin v0.6.3`.
 
 ## 4. Publicar
 

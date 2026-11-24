@@ -14,11 +14,11 @@
 //!   (`accessibility_grade == NONE`).
 //! - `empty-alt-image`: non-decorative image with an empty `alt`.
 //! - `occluded`: an element's rect is substantially covered by another
-//!   (non-ancestor, non-descendant) element painted above it — the element
-//!   is visually *behind* an overlapping element. Paint order is a
-//!   deterministic heuristic over the captured tree: higher `z-index`
-//!   (from `metrics`) wins, then later DOM order. Approximates the CSS
-//!   stacking order within the captured subtree; an element outside the
+//!   (non-ancestor, non-descendant) element that actually paints above it
+//!   (positioned/z-index/stacking context or explicit overlay semantics) —
+//!   the element is visually *behind* an overlapping element. Ordinary flow
+//!   siblings that merely share a rect are not reported. Paint order is a
+//!   deterministic heuristic over the captured tree; an element outside the
 //!   capture depth can still occlude unseen.
 
 use serde_json::Value;
@@ -250,9 +250,11 @@ struct Flat<'a> {
 ///
 /// Coverage semantics: `Fail` when a single other node covers ≥ 75% of the
 /// element's area, `Warn` when ≥ 50%. Ancestor/descendant pairs are ignored
-/// (a child inside its parent is "contained by design"). Paint order is a
-/// heuristic: numeric `z-index` (from `metrics`, falling back to
-/// `styles.layout.z-index`) wins, then later document order.
+/// (a child inside its parent is "contained by design"). Only a coverer with
+/// explicit paint-above semantics counts (positioned with z-index, stacking
+/// context, negative z-index on the target, translucent scrim or overlay
+/// role). Later DOM order alone is not enough: in normal flow, later siblings
+/// paint their backgrounds behind earlier in-flow content.
 pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
     let mut flat = Vec::new();
     flatten(nodes, &mut flat, &mut 0);
@@ -312,11 +314,21 @@ pub fn check_occlusion(nodes: &[DiffNode]) -> Vec<CheckLine> {
             let inter = (ix1 - ix0) * (iy1 - iy0);
             let cov_i_by_j = inter / area_i;
             let cov_j_by_i = inter / (wj * hj);
-            // Only the one painted *below* can be reported as covered.
-            if cov_i_by_j >= 0.5 && paints_above(&flat, fj, fi) {
+            // Only a coverer with explicit paint-above semantics can hide
+            // the target. In normal flow, later siblings paint their
+            // backgrounds *behind* earlier inline content: a rect-only
+            // overlap (e.g. a Wikipedia logo under a sibling <nav>) is not
+            // occlusion.
+            if cov_i_by_j >= 0.5
+                && coverer_paints_above(&flat, fj, fi)
+                && paints_above(&flat, fj, fi)
+            {
                 record_cover(&mut covered, fi.idx, fj.idx, cov_i_by_j);
             }
-            if cov_j_by_i >= 0.5 && paints_above(&flat, fi, fj) {
+            if cov_j_by_i >= 0.5
+                && coverer_paints_above(&flat, fi, fj)
+                && paints_above(&flat, fi, fj)
+            {
                 record_cover(&mut covered, fj.idx, fi.idx, cov_j_by_i);
             }
         }
@@ -664,6 +676,37 @@ fn paints_above(flat: &[Flat<'_>], a: &Flat<'_>, b: &Flat<'_>) -> bool {
         (None, Some(_)) => false,
         _ => a.idx > b.idx,
     }
+}
+
+/// True when a coverer has real paint-above semantics over `target`.
+///
+/// A rect overlap alone is not enough: ordinary in-flow siblings paint their
+/// backgrounds *behind* earlier content. Accepted signals: explicit
+/// z-index/stacking context, positioned overlays, overlay roles, or a
+/// translucent scrim.
+fn coverer_paints_above(flat: &[Flat<'_>], coverer: &Flat<'_>, target: &Flat<'_>) -> bool {
+    let node = coverer.node;
+    if creates_stacking_context(node) || node_z_index(node).is_some() {
+        return paints_above(flat, coverer, target);
+    }
+    let position = style_val(node, "layout", "position").unwrap_or("static");
+    if matches!(position, "fixed" | "absolute" | "sticky") {
+        return true;
+    }
+    let role = node
+        .aria
+        .as_ref()
+        .and_then(|a| a.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if matches!(
+        role.to_ascii_lowercase().as_str(),
+        "dialog" | "alertdialog" | "tooltip" | "menu" | "listbox"
+    ) {
+        return true;
+    }
+    let background = style_val(node, "visual", "background-color").unwrap_or("");
+    is_translucent_dark_bg(background)
 }
 
 /// Read a node's rect as `(x, y, width, height)`, if present and non-empty.
@@ -1845,6 +1888,54 @@ mod tests {
     }
 
     #[test]
+    fn occluded_skips_in_flow_sibling_overlap() {
+        // Wikipedia logo vs. sibling <nav> in normal flow: both have no
+        // positioning/z-index/overlay semantics, so a rect overlap is not
+        // evidence that the logo actually paints behind the nav.
+        let mut logo = occ_node("a.logo img", "IMG", (0.0, 45.0, 57.0, 52.0), None, true);
+        logo.metrics = None;
+        let mut nav = occ_node(
+            "nav.personal-tools",
+            "NAV",
+            (0.0, 0.0, 360.0, 80.0),
+            None,
+            true,
+        );
+        nav.metrics = None;
+        nav.styles = Some(
+            serde_json::json!({"layout": {"position": "static"}})
+                .as_object()
+                .cloned()
+                .expect("styles object"),
+        );
+        let lines = check_occlusion(&[logo, nav]);
+        assert!(
+            !lines.iter().any(|l| l.check == "occluded"),
+            "normal-flow overlap must not be flagged: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn occluded_still_flags_absolutely_positioned_overlay() {
+        let target = occ_node("img.logo", "IMG", (10.0, 10.0, 100.0, 40.0), None, true);
+        let mut overlay = occ_node("div.overlay", "DIV", (10.0, 10.0, 100.0, 40.0), None, true);
+        overlay.metrics = None;
+        overlay.styles = Some(
+            serde_json::json!({"layout": {"position": "absolute"}})
+                .as_object()
+                .cloned()
+                .expect("styles object"),
+        );
+        let lines = check_occlusion(&[target, overlay]);
+        let occ = lines
+            .iter()
+            .find(|l| l.check == "occluded")
+            .expect("absolute overlay must still occlude");
+        assert_eq!(occ.status, RuleStatus::Fail);
+        assert_eq!(occ.selector, "img.logo");
+    }
+
+    #[test]
     fn lower_z_index_is_occluded_but_not_above() {
         let below = occ_node("div.footer", "DIV", (0.0, 0.0, 100.0, 100.0), Some(1), true);
         let above = occ_node("div.popup", "DIV", (0.0, 0.0, 100.0, 100.0), Some(2), true);
@@ -1875,7 +1966,16 @@ mod tests {
             None,
             true,
         );
-        let later = occ_node("div.dropdown", "DIV", (0.0, 0.0, 120.0, 40.0), None, true);
+        let mut later = occ_node("div.dropdown", "DIV", (0.0, 0.0, 120.0, 40.0), None, true);
+        // Explicit positioned overlay semantics: normal flow alone would not
+        // justify reporting a rect overlap as occlusion.
+        later.metrics = None;
+        later.styles = Some(
+            serde_json::json!({"layout": {"position": "absolute"}})
+                .as_object()
+                .cloned()
+                .expect("styles object"),
+        );
         let lines = check_occlusion(&[earlier, later]);
         let occ = lines
             .iter()

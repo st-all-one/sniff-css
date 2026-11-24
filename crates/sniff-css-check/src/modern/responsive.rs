@@ -16,12 +16,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Largest rect shift treated as ordinary reflow between two states.
 const JUMP_PX: f64 = 24.0;
+/// Relative size change explained by a viewport resize (fluid reflow).
+const PROPORTIONAL_REFLOW_RATIO: f64 = 1.4;
+/// Largest residual movement still explained by proportional reflow.
+const PROPORTIONAL_RESIDUAL_PX: f64 = 144.0;
 /// Sub-pixel tolerance for geometry comparisons.
 const TOLERANCE_PX: f64 = 1.0;
 /// WCAG 2.2 SC 2.5.8 minimum target size (used as the regression floor).
 const MIN_TARGET_PX: f64 = 24.0;
 /// Bound on ancestor walks, so malformed parent links cannot loop forever.
 const MAX_ANCESTOR_DEPTH: u8 = 32;
+/// Bound on lines emitted by one comparative check per matrix run.
+const MAX_LINES_PER_CHECK: usize = 12;
 
 /// Stable pairing key: node path (or selector) plus its ordinal in the state.
 type NodeKey = (String, usize);
@@ -30,7 +36,7 @@ const BREAKPOINT_JUMP: CheckSpec = CheckSpec::new(
     "breakpoint-jump",
     &["responsive-design"],
     &[Facet::Matrix, Facet::Rect],
-    "keepWhen a paired rect moves by at most JUMP_PX in every axis between adjacent states, or either state has no rect.",
+    "keepWhen a paired rect moves by at most JUMP_PX of residual movement in every axis between states with equal emulation and different viewports, either state is outside its viewport, or both width and height scale proportionally with the viewport (ordinary reflow).",
 );
 
 const OVERFLOW_ONLY_AT_WIDTH: CheckSpec = CheckSpec::new(
@@ -419,7 +425,7 @@ fn log_emit(check: &str, selector: &str) {
     tracing::debug!(id = check, selector = selector, "responsive check emitted");
 }
 
-/// Viewport size change between two adjacent states (zero when unknown).
+/// Viewport size change between two states (zero when unknown).
 fn viewport_delta(first: &State<'_>, second: &State<'_>) -> (f64, f64) {
     match (first.tag.viewport, second.tag.viewport) {
         (Some(before), Some(after)) => (
@@ -430,67 +436,190 @@ fn viewport_delta(first: &State<'_>, second: &State<'_>) -> (f64, f64) {
     }
 }
 
-/// Detects abrupt rect shifts between adjacent matrix states.
+/// A rect fully outside its own viewport is off-screen content (e.g. a far
+/// footer), whose document coordinates move legitimately as the page reflows.
+fn outside_viewport(node: &DiffNode, viewport_w: f64, viewport_h: f64) -> bool {
+    let (Some(x), Some(y), Some(width), Some(height)) = (
+        rect_number(node, "x"),
+        rect_number(node, "y"),
+        rect_number(node, "width"),
+        rect_number(node, "height"),
+    ) else {
+        return true;
+    };
+    if width <= 0.0 || height <= 0.0 {
+        return true;
+    }
+    x >= viewport_w || y >= viewport_h || x + width <= 0.0 || y + height <= 0.0
+}
+
+/// Whether a size change is explained by the viewport change (fluid reflow).
+fn size_scales_with_viewport(from: f64, to: f64, viewport_from: f64, viewport_to: f64) -> bool {
+    if from <= 0.0 || to <= 0.0 || viewport_from <= 0.0 || viewport_to <= 0.0 {
+        return false;
+    }
+    // Tolerates non-linear but still proportional layouts such as logos with
+    // max-width caps (the observed ratio may differ from the viewport ratio).
+    let scale = viewport_to / viewport_from;
+    let ratio = to / from;
+    (ratio / scale).max(scale / ratio) <= PROPORTIONAL_REFLOW_RATIO
+}
+
+fn jump_residual(
+    before: &DiffNode,
+    after: &DiffNode,
+    viewport_dx: f64,
+    viewport_dy: f64,
+    before_viewport: (f64, f64),
+    after_viewport: (f64, f64),
+) -> Option<(f64, String)> {
+    let (Some(lx), Some(ly), Some(lw), Some(lh)) = (
+        rect_number(before, "x"),
+        rect_number(before, "y"),
+        rect_number(before, "width"),
+        rect_number(before, "height"),
+    ) else {
+        return None;
+    };
+    let (Some(rx), Some(ry), Some(rw), Some(rh)) = (
+        rect_number(after, "x"),
+        rect_number(after, "y"),
+        rect_number(after, "width"),
+        rect_number(after, "height"),
+    ) else {
+        return None;
+    };
+    // Residual movement = raw displacement minus the component explained by
+    // the viewport change. Height is excluded: narrowing a page legitimately
+    // makes it taller.
+    let (viewport_dx, viewport_dy) = (viewport_dx.abs(), viewport_dy.abs());
+    let dx = ((rx - lx).abs() - viewport_dx).max(0.0);
+    let dy = ((ry - ly).abs() - viewport_dy).max(0.0);
+    let excess_width = ((rw - lw).abs() - viewport_dx).max(0.0);
+    let largest = dx.max(dy).max(excess_width);
+    // Width is the responsive axis; height scales with the element's own
+    // aspect ratio, rarely with the viewport height. Accept both dims scaling
+    // with the width ratio, with a residual cap for layout margins.
+    if size_scales_with_viewport(lw, rw, before_viewport.0, after_viewport.0)
+        && size_scales_with_viewport(lh, rh, before_viewport.0, after_viewport.0)
+        && (ry - ly).abs() <= PROPORTIONAL_RESIDUAL_PX + viewport_dy + TOLERANCE_PX
+    {
+        return None;
+    }
+    (largest > JUMP_PX).then(|| {
+        (
+            largest,
+            format!(
+                "rect moved from ({lx:.0},{ly:.0}) {lw:.0}x{lh:.0} to ({rx:.0},{ry:.0}) {rw:.0}x{rh:.0} between viewport states; residual shift {largest:.0}px exceeds {JUMP_PX:.0}px"
+            ),
+        )
+    })
+}
+
+/// One emission candidate: worst residual for a paired node.
+struct JumpRecord<'a> {
+    /// Node whose selector and tag anchor the emitted line.
+    node: &'a DiffNode,
+    residual: f64,
+    text: String,
+}
+
+/// Detects abrupt, unexplained rect shifts between viewport states.
 fn check_breakpoint_jump(ctx: &ModernCtx<'_>, states: &[State<'_>], out: &mut Vec<CheckLine>) {
     if !ctx.enabled(&BREAKPOINT_JUMP) {
         return;
     }
+    // Worst residual per paired node, so the same node is never reported
+    // twice for a matrix of several states.
+    let mut worst: BTreeMap<NodeKey, JumpRecord<'_>> = BTreeMap::new();
     for (index, before) in states.iter().enumerate() {
         for after in states.iter().skip(index.saturating_add(1)) {
-            // Emulation-only transitions are not breakpoints; coarse mode also
-            // changes device metrics without changing the tagged viewport.
+            // Compare only same-emulation, different-viewport states.
             if before.tag.emulation != after.tag.emulation
                 || before.tag.viewport == after.tag.viewport
             {
                 continue;
             }
+            let (Some(before_vp), Some(after_vp)) = (before.tag.viewport, after.tag.viewport)
+            else {
+                continue;
+            };
             let (viewport_dx, viewport_dy) = viewport_delta(before, after);
             for (key, left) in &before.nodes {
                 let Some(right) = after.nodes.get(key) else {
                     continue;
                 };
-                let (Some(lx), Some(ly), Some(lw), Some(lh)) = (
-                    rect_number(left, "x"),
-                    rect_number(left, "y"),
-                    rect_number(left, "width"),
-                    rect_number(left, "height"),
-                ) else {
-                    continue;
-                };
-                let (Some(rx), Some(ry), Some(rw), Some(rh)) = (
-                    rect_number(right, "x"),
-                    rect_number(right, "y"),
-                    rect_number(right, "width"),
-                    rect_number(right, "height"),
-                ) else {
-                    continue;
-                };
-                // A shift proportional to the viewport is ordinary responsive
-                // reflow, not a jump; only the unexplained excess is evidence.
-                // Height is excluded: narrowing a viewport legitimately makes
-                // the document taller, which says nothing about an abrupt jump.
-                let dx = ((rx - lx).abs() - viewport_dx.abs()).max(0.0);
-                let dy = ((ry - ly).abs() - viewport_dy.abs()).max(0.0);
-                let excess_width = ((rw - lw).abs() - viewport_dx.abs()).max(0.0);
-                let largest = dx.max(dy).max(excess_width);
-                if largest <= JUMP_PX {
+                if outside_viewport(
+                    left,
+                    f64::from(before_vp.width),
+                    f64::from(before_vp.height),
+                ) || outside_viewport(
+                    right,
+                    f64::from(after_vp.width),
+                    f64::from(after_vp.height),
+                ) {
                     continue;
                 }
-                let evidence = Evidence::numeric(
-                    format!(
-                        "rect moved from ({lx:.0},{ly:.0}) {lw:.0}x{lh:.0} to ({rx:.0},{ry:.0}) {rw:.0}x{rh:.0} between matrix states {} and {}",
-                        before.tag.index, after.tag.index
-                    ),
-                    "__meta.matrix/rect",
-                    "max_rect_delta_px",
-                    largest,
-                    JUMP_PX,
-                    ">",
-                );
-                ctx.emit(out, &BREAKPOINT_JUMP, right, evidence);
-                log_emit(BREAKPOINT_JUMP.id, &right.selector);
+                let Some((residual, text)) = jump_residual(
+                    left,
+                    right,
+                    viewport_dx,
+                    viewport_dy,
+                    (f64::from(before_vp.width), f64::from(before_vp.height)),
+                    (f64::from(after_vp.width), f64::from(after_vp.height)),
+                ) else {
+                    continue;
+                };
+                let entry = worst.entry(key.clone()).or_insert(JumpRecord {
+                    node: right,
+                    residual: 0.0,
+                    text: String::new(),
+                });
+                if residual > entry.residual {
+                    *entry = JumpRecord {
+                        node: right,
+                        residual,
+                        text: format!(
+                            "{text} (matrix states {} → {})",
+                            before.tag.index, after.tag.index
+                        ),
+                    };
+                }
             }
         }
+    }
+    let mut capped = false;
+    for (emitted, record) in worst.into_values().enumerate() {
+        if emitted >= MAX_LINES_PER_CHECK {
+            capped = true;
+            break;
+        }
+        let JumpRecord {
+            node,
+            residual,
+            text,
+        } = record;
+        let evidence = Evidence::numeric(
+            text,
+            "__meta.matrix/rect",
+            "max_rect_delta_px",
+            residual,
+            JUMP_PX,
+            ">",
+        );
+        ctx.emit(out, &BREAKPOINT_JUMP, node, evidence);
+        log_emit(BREAKPOINT_JUMP.id, &node.selector);
+    }
+    if capped {
+        let note = format!(
+            "breakpoint-jump: additional paired nodes suppressed by the {MAX_LINES_PER_CHECK}-line cap; inspect __meta.matrix/rect for the full matrix"
+        );
+        ctx.emit_global(
+            out,
+            &BREAKPOINT_JUMP,
+            "__check_summary",
+            Evidence::new(note, "__meta.matrix/rect"),
+        );
     }
 }
 
@@ -995,6 +1124,194 @@ mod tests {
             !check_ids(&out).contains(&"breakpoint-jump"),
             "fluid width/height changes explained by the viewport are not jumps: {out:?}"
         );
+    }
+
+    #[test]
+    fn breakpoint_jump_keeps_offscreen_nodes_in_both_states() {
+        // W3C quickref footer at y=18806: its document coordinates move as
+        // the page reflows, but it is never inside the captured viewport.
+        let narrow = node(
+            1,
+            "footer.deep",
+            "FOOTER",
+            Some((0.0, 18806.0, 360.0, 400.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let wide = node(
+            2,
+            "footer.deep",
+            "FOOTER",
+            Some((0.0, 16000.0, 768.0, 400.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let document = doc(
+            vec![
+                tag(0, 2, Some((360, 800)), &[]),
+                tag(1, 2, Some((1366, 768)), &[]),
+            ],
+            vec![vec![narrow], vec![wide]],
+        );
+        let opts = ModernOptions::default();
+        let ctx = ModernCtx::new(&document, &opts);
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        assert!(
+            !check_ids(&out).contains(&"breakpoint-jump"),
+            "offscreen content must not produce jumps: {out:?}"
+        );
+    }
+
+    #[test]
+    fn breakpoint_jump_keeps_proportional_logo_reflow() {
+        // Wikipedia logo: 200x183 at y=198 on desktop → 57x52 at y=45 on
+        // mobile. Size and position scale with the viewport ratio.
+        let wide = node(
+            1,
+            "img.logo",
+            "IMG",
+            Some((12.0, 198.0, 200.0, 183.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let narrow = node(
+            2,
+            "img.logo",
+            "IMG",
+            Some((3.0, 45.0, 57.0, 52.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let document = doc(
+            vec![
+                tag(0, 2, Some((1366, 768)), &[]),
+                tag(1, 2, Some((360, 800)), &[]),
+            ],
+            vec![vec![wide], vec![narrow]],
+        );
+        let opts = ModernOptions::default();
+        let ctx = ModernCtx::new(&document, &opts);
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        assert!(
+            !check_ids(&out).contains(&"breakpoint-jump"),
+            "proportional reflow must not produce jumps: {out:?}"
+        );
+    }
+
+    #[test]
+    fn breakpoint_jump_keeps_emulation_changes_and_deduplicates_worst_node() {
+        let first = node(
+            1,
+            ".card",
+            "DIV",
+            Some((10.0, 20.0, 200.0, 100.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let second = node(
+            2,
+            ".card",
+            "DIV",
+            Some((10.0, 120.0, 200.0, 100.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let third = node(
+            3,
+            ".card",
+            "DIV",
+            Some((10.0, 300.0, 200.0, 100.0)),
+            serde_json::json!({}),
+            None,
+        );
+        let document = doc(
+            vec![
+                tag(0, 3, Some((360, 800)), &[]),
+                tag(1, 3, Some((768, 800)), &[]),
+                tag(2, 3, Some((1366, 800)), &[]),
+            ],
+            vec![vec![first.clone()], vec![second], vec![third.clone()]],
+        );
+        let opts = ModernOptions::default();
+        let ctx = ModernCtx::new(&document, &opts);
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        let jumps: Vec<_> = out
+            .iter()
+            .filter(|line| line.check == "breakpoint-jump")
+            .collect();
+        assert_eq!(jumps.len(), 1, "same node emitted once: {out:?}");
+        assert_eq!(
+            jumps[0].evidence.observed.clone(),
+            Some(serde_json::json!(280.0)),
+            "the worst residual must win"
+        );
+
+        let emulation_doc = doc(
+            vec![
+                tag(0, 2, Some((360, 800)), &[("scheme", "light")]),
+                tag(1, 2, Some((1366, 800)), &[("scheme", "dark")]),
+            ],
+            vec![vec![first], vec![third]],
+        );
+        let ctx = ModernCtx::new(&emulation_doc, &opts);
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        assert!(
+            out.is_empty(),
+            "different emulation must not be compared: {out:?}"
+        );
+    }
+
+    #[test]
+    fn breakpoint_jump_caps_lines_and_notes_aggregate() {
+        let mut states = Vec::new();
+        for state_index in 0..3 {
+            let mut nodes = Vec::new();
+            for node_index in 0..(MAX_LINES_PER_CHECK + 2) {
+                let selector = format!(".node-{node_index}");
+                nodes.push(node(
+                    u64::try_from(state_index * 100 + node_index).unwrap_or_default(),
+                    &selector,
+                    "DIV",
+                    Some((
+                        10.0,
+                        if state_index == 0 { 20.0 } else { 320.0 },
+                        200.0,
+                        100.0,
+                    )),
+                    serde_json::json!({}),
+                    None,
+                ));
+            }
+            states.push(nodes);
+        }
+        let document = doc(
+            vec![
+                tag(0, 3, Some((360, 800)), &[]),
+                tag(1, 3, Some((768, 800)), &[]),
+                tag(2, 3, Some((1366, 800)), &[]),
+            ],
+            states,
+        );
+        let opts = ModernOptions::default();
+        let ctx = ModernCtx::new(&document, &opts);
+        let mut out = Vec::new();
+        run(&ctx, &mut out);
+        let jump_count = out
+            .iter()
+            .filter(|line| line.check == "breakpoint-jump")
+            .count();
+        // One note line shares the check id; the remaining lines are capped.
+        assert_eq!(jump_count, MAX_LINES_PER_CHECK + 1);
+        let notes: Vec<_> = out
+            .iter()
+            .filter(|line| line.selector == "__check_summary")
+            .collect();
+        assert_eq!(notes.len(), 1, "one aggregate note when capped: {out:?}");
+        assert!(notes[0].evidence.text.contains("suppressed"));
     }
 
     #[test]

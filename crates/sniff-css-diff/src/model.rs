@@ -15,6 +15,11 @@
 //! snapshot (schema absent or `1`) is promoted in memory to schema `2` with
 //! empty facets — it is never rejected, so `diff` keeps working across the
 //! v1/v2 boundary.
+//!
+//! Token-lean `summary` digests are *not* diff/check input: node lines carry
+//! `css` instead of full `styles` and `__meta` has no `schema`. The loaders
+//! reject them with [`DiffError::SummaryDigest`] rather than returning an
+//! empty or misleading tree.
 
 use serde_json::{Map, Value};
 use sniff_core::modern::{DeclaredFacet, DocumentFacet, EnvFacet, MatrixTag};
@@ -405,6 +410,36 @@ fn normalize_at_rules(value: &Value) -> Value {
     Value::Object(declared)
 }
 
+/// Whether a JSON object is a summary node: it carries the curated `css`
+/// object but not the full `styles` object, or the summary-only compact
+/// `visible`/`grade` facet. Children are checked recursively because tree
+/// mode nests them inside the root line.
+fn is_summary_node(value: &Value) -> bool {
+    if !value.is_object() {
+        return false;
+    }
+    if value.get("styles").is_none()
+        && (value.get("css").is_some_and(Value::is_object)
+            || (value.get("visible").is_some()
+                && value.get("grade").is_some()
+                && value.get("is_user_noticeable").is_none()))
+    {
+        return true;
+    }
+    value
+        .get("children")
+        .and_then(Value::as_array)
+        .is_some_and(|children| children.iter().any(is_summary_node))
+}
+
+/// Whether a `__meta` line declares a snapshot schema (v1/v2 full snapshot).
+fn meta_declares_schema(value: &Value) -> bool {
+    value
+        .get("__meta")
+        .and_then(Value::as_object)
+        .is_some_and(|meta| meta.contains_key("schema"))
+}
+
 /// Load a snapshot JSONL file, returning one root node per matched element.
 ///
 /// Both `jsonl` (tree) and `jsonl-flat` inputs are supported; `__meta`,
@@ -417,11 +452,19 @@ pub fn load_file(path: &Path) -> DiffResult<Vec<DiffNode>> {
 
 /// Parse snapshot JSONL from an in-memory string (same rules as
 /// [`load_file`], without touching disk).
+///
+/// Full v1 snapshots (no `__meta.schema`, node `styles`) load and are
+/// promoted in memory by [`load_str_doc`]. Token-lean summary digests are
+/// rejected with [`DiffError::SummaryDigest`] because their `css` facet is
+/// not a substitute for full computed styles.
 pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
     let mut roots: Vec<DiffNode> = Vec::new();
     let mut flat: Vec<FlatEntry> = Vec::new();
     let mut mode: Option<bool> = None;
+    let mut mixed_layout = false;
     let mut style_defaults: Map<String, Value> = Map::new();
+    let mut schema_declared = false;
+    let mut summary_node = false;
 
     for line in content.lines() {
         let line = line.trim();
@@ -429,6 +472,7 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
             continue;
         }
         let v: Value = serde_json::from_str(line)?;
+        schema_declared |= meta_declares_schema(&v);
         if v.get("__meta").is_some() {
             if let Some(meta) = v.get("__meta")
                 && let Some(d) = meta.get("style_defaults").and_then(Value::as_object)
@@ -445,12 +489,11 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
         {
             continue;
         }
+        summary_node |= is_summary_node(&v);
         let tree = v.get("children").is_some();
         match mode {
             None => mode = Some(tree),
-            Some(m) if m != tree => {
-                return Err(DiffError::MixedLayout);
-            }
+            Some(m) if m != tree => mixed_layout = true,
             _ => {}
         }
         let node = DiffNode::from_value(&v);
@@ -463,6 +506,12 @@ pub fn load_str(content: &str) -> DiffResult<Vec<DiffNode>> {
         }
     }
 
+    if summary_node && !schema_declared {
+        return Err(DiffError::SummaryDigest);
+    }
+    if mixed_layout {
+        return Err(DiffError::MixedLayout);
+    }
     if mode == Some(false) {
         let mut forest = build_forest(&flat);
         for root in &mut forest {
@@ -692,6 +741,127 @@ mod tests {
         let doc = load_str_doc(&content).unwrap();
         assert_eq!(doc.viewport, Some((1280.0, 720.0)));
         assert_eq!(doc.nodes.len(), 1);
+    }
+
+    // Shape emitted by `sniff capture --output summary` (the CLI default):
+    // `__meta` without `schema`, nodes with curated `css` and no `styles`.
+    const SUMMARY_DIGEST: &str = concat!(
+        r##"{"__meta":{"style_defaults":{"visual":{"color":"#212529"}},"viewport":{"width":1366,"height":768}}}"##,
+        "\n",
+        r##"{"id":1,"tag":"DIV","selector":"div.card","depth":0,"visible":true,"grade":"AAA","css":{"width":"300px","color":"#212529"}}"##,
+        "\n",
+        r##"{"id":2,"parent_id":1,"tag":"SPAN","selector":"div.card > span","depth":1,"css":{"font-size":"16px"}}"##,
+        "\n",
+    );
+
+    #[test]
+    fn summary_digest_is_rejected_by_all_loaders() {
+        assert!(matches!(
+            load_str(SUMMARY_DIGEST),
+            Err(DiffError::SummaryDigest)
+        ));
+        assert!(matches!(
+            load_str_doc(SUMMARY_DIGEST),
+            Err(DiffError::SummaryDigest)
+        ));
+        let path = std::env::temp_dir().join("sniff_diff_summary_digest_test.jsonl");
+        std::fs::write(&path, SUMMARY_DIGEST).unwrap();
+        assert!(matches!(load_file(&path), Err(DiffError::SummaryDigest)));
+        assert!(matches!(
+            load_file_doc(&path),
+            Err(DiffError::SummaryDigest)
+        ));
+        drop(std::fs::remove_file(&path));
+        assert_eq!(
+            DiffError::SummaryDigest.to_string(),
+            "summary snapshot is not valid input for check/diff; recapture with --output jsonl"
+        );
+    }
+
+    #[test]
+    fn summary_digest_nested_in_tree_root_is_rejected() {
+        let content = concat!(
+            r##"{"__meta":{"viewport":{"width":800,"height":600}}}"##,
+            "\n",
+            r##"{"id":1,"tag":"DIV","selector":"div","depth":0,"children":[{"id":2,"parent_id":1,"tag":"SPAN","selector":"span","depth":1,"css":{"color":"#fff"},"children":[]}]}"##,
+            "\n",
+        );
+        assert!(matches!(
+            load_str_doc(content),
+            Err(DiffError::SummaryDigest)
+        ));
+    }
+
+    #[test]
+    fn summary_digest_without_css_facet_is_rejected() {
+        // Every curated value was hoisted to `__meta.style_defaults`, leaving
+        // node lines without `css`: the summary-only `visible`/`grade` facet
+        // still identifies the digest.
+        let content = concat!(
+            r##"{"__meta":{"style_defaults":{"visual":{"color":"#212529"}},"viewport":{"width":800,"height":600}}}"##,
+            "\n",
+            r##"{"id":1,"tag":"DIV","selector":"div","depth":0,"visible":true,"grade":"AAA"}"##,
+            "\n",
+        );
+        assert!(matches!(
+            load_str_doc(content),
+            Err(DiffError::SummaryDigest)
+        ));
+    }
+
+    #[test]
+    fn full_v1_snapshot_loads_and_is_promoted() {
+        // No `__meta.schema`, but full node `styles`: a valid v1 snapshot.
+        let content = concat!(
+            r##"{"__meta":{"viewport":{"width":1366,"height":768}}}"##,
+            "\n",
+            r##"{"id":1,"tag":"DIV","selector":"div.card","depth":0,"styles":{"visual":{"color":"#212529"}},"children":[]}"##,
+            "\n",
+        );
+        let doc = load_str_doc(content).unwrap();
+        assert_eq!(doc.schema, 2, "v1 must be promoted in memory");
+        assert_eq!(doc.nodes.len(), 1);
+        assert!(doc.nodes[0].styles.is_some());
+    }
+
+    #[test]
+    fn full_v2_snapshot_with_css_facet_loads() {
+        // A full v2 line may carry an extra `css` diagnostic facet; the
+        // explicit schema marker must keep it out of the summary path.
+        let content = concat!(
+            r##"{"__meta":{"schema":2,"viewport":{"width":1366,"height":768}}}"##,
+            "\n",
+            r##"{"id":1,"tag":"DIV","selector":"div.card","depth":0,"css":{"color":"#212529"},"styles":{"visual":{"color":"#212529"}},"children":[]}"##,
+            "\n",
+        );
+        let doc = load_str_doc(content).unwrap();
+        assert_eq!(doc.schema, 2);
+        assert_eq!(doc.nodes.len(), 1);
+        assert_eq!(doc.viewport, Some((1366.0, 768.0)));
+    }
+
+    #[test]
+    fn empty_and_global_only_documents_are_not_summaries() {
+        assert!(load_str_doc("").unwrap().nodes.is_empty());
+        let meta_only = r#"{"__meta":{"viewport":{"width":800,"height":600}}}"#;
+        let doc = load_str_doc(meta_only).unwrap();
+        assert!(doc.nodes.is_empty());
+        assert_eq!(doc.viewport, Some((800.0, 600.0)));
+    }
+
+    #[test]
+    fn summary_rejection_precedes_mixed_layout_error() {
+        // Both tree and flat summary lines: the digest error is the actionable
+        // one regardless of layout consistency.
+        let content = concat!(
+            r##"{"__meta":{"style_defaults":{"visual":{"color":"#212529"}}}}"##,
+            "\n",
+            r##"{"id":1,"tag":"DIV","selector":"div","depth":0,"css":{"color":"#212529"},"children":[]}"##,
+            "\n",
+            r##"{"id":2,"parent_id":1,"tag":"SPAN","selector":"span","depth":1,"css":{"color":"#fff"}}"##,
+            "\n",
+        );
+        assert!(matches!(load_str(content), Err(DiffError::SummaryDigest)));
     }
 
     #[test]

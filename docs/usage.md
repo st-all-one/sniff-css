@@ -113,7 +113,7 @@ sniff check - < snap.jsonl
 | `--min-width px`, `--min-height px` | Filtro por tamanho | — |
 | `--exclude sel` | Excluir seletores (repetível) | — |
 | `--output jsonl\|jsonl-flat\|json\|summary` | Formato de saída. `summary` (default) = digest de **1 estado**, sem facets v2; `jsonl`/`json` = snapshot completo com matriz e facets | **`summary`** |
-| `--summary` | Atalho deprecado para `--output summary` (o padrão): digest de 1 linha por nó (estrutura + 42 props `css` curadas + `contrast` + `aria`) | `off` |
+| `--summary` | Atalho deprecado para `--output summary` (o padrão): digest de 1 linha por nó (estrutura + 40 props `css` curadas + `contrast` + `aria`) | `off` |
 | `--no-summary` | Atalho deprecado para `--output jsonl`: snapshot completo não-sumarizado (com matriz/facets), não o digest | `off` |
 | `--screenshot PATH` | Salvar PNG da página no estado final (pós-stabilize, pós-interação) | — |
 | `--fullpage-screenshot` | Com `--screenshot`: capturar o documento inteiro em vez da viewport | `off` |
@@ -503,13 +503,13 @@ O controle fino individual (`--no-*`) é **opcional** e sempre sobrepõe o defau
 - `--output json`: array único (com `__meta` + `elements` no compact+custom-props).
 - `--output summary` / `--summary` (alias `slim`): **formato padrão**. Digest
   de **1 estado** e 1 linha por nó: esqueleto estrutural
-  (`tag/selector/path/depth/rect/visible`/`grade`), `css` (42 props curadas),
+  (`tag/selector/path/depth/rect/visible`/`grade`), `css` (40 props curadas),
   `contrast` (`ratio`/`aa`/`aaa`) e `aria` (`role`/`name`/`focusable`).
   **Não contém** `__meta.schema`, matriz, `__document`/`__env`/`__declared`,
   AX, pseudo, variáveis, attrs ou `__actions` — esses facets são cortados na
   captura, não apenas omitidos no serializer. Use `--output jsonl` para tê-los.
 - `--output jsonl` (ou o alias deprecado `--no-summary`): snapshot v2 completo
-  (`schema:2`, `__meta.matrix`, linhas `__*`, 42→~370 props), usado como
+  (`schema:2`, `__meta.matrix`, linhas `__*`, 40→~370 props), usado como
   entrada de `sniff diff`/`sniff check`/jq.
 - Com `--stable-key data-testid`, os seletores saem como `button[data-testid="submit"]`
   em vez de dependerem de `id` gerados (`react-aria-123`), mantendo o output

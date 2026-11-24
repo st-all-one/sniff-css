@@ -232,11 +232,16 @@ async fn run_flutter(args: &CaptureArgs) -> Result<Captured, AppError> {
         EmulatorProcess, FlutterDriver, FlutterInspector, FlutterMachine, ViewportGuard,
     };
 
-    let config = args
+    let mut config = args
         .clone()
         .into_config()
         .context("invalid configuration")
         .map_err(AppError::from)?;
+
+    // The Flutter extractor only consumes `depth`, so `trim_for_summary`
+    // cannot save work here; call it anyway to keep the summary profile
+    // identical to the web path (`--ax-tree` override included).
+    sniff_engine::trim_for_summary(&mut config);
 
     // Resolve the target device: an AVD to launch, an attached serial, or the
     // one implied by the `flutter://<device>` URL.
